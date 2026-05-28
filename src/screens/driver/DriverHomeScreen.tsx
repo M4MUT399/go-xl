@@ -7,6 +7,7 @@ import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useDriverRide } from '../../hooks/useRide';
+import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
@@ -116,7 +117,7 @@ export function DriverHomeScreen({ navigation }: Props) {
 
           <View style={styles.requestMeta}>
             <View style={styles.metaItem}>
-              <Text style={styles.metaValue}>{Number(pendingRide.distance_km).toFixed(1)} km</Text>
+              <Text style={styles.metaValue}>{formatDistance(pendingRide.distance_km)}</Text>
               <Text style={styles.metaLabel}>Distância</Text>
             </View>
             <View style={styles.metaDivider} />
@@ -126,7 +127,7 @@ export function DriverHomeScreen({ navigation }: Props) {
             </View>
             <View style={styles.metaDivider} />
             <View style={styles.metaItem}>
-              <Text style={[styles.metaValue, styles.priceValue]}>R$ {Number(pendingRide.price).toFixed(2)}</Text>
+              <Text style={[styles.metaValue, styles.priceValue]}>{formatCurrency(pendingRide.price)}</Text>
               <Text style={styles.metaLabel}>Valor</Text>
             </View>
           </View>

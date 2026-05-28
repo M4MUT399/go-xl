@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
+import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import type { Ride, RideStatus, Location } from '../types';
 
 async function notifyOnlineDrivers(destination: string, price: number) {
@@ -25,7 +26,7 @@ async function notifyOnlineDrivers(destination: string, price: number) {
     tokens.map((to) => ({
       to,
       title: '🚗 Nova corrida Executive XL',
-      body: `Destino: ${destination} • R$ ${price.toFixed(2)}`,
+      body: `Destino: ${destination} • ${formatCurrency(price)}`,
       data: { type: 'new_ride' },
     }))
   );
@@ -51,17 +52,20 @@ async function notifyPassenger(passengerId: string) {
   }
 }
 
-const PRICE_PER_KM = 4.5;
-const BASE_PRICE = 12.0;
-const MIN_PRICE = 18.0;
+const PRICE_PER_MILE = 2.5;
+const BASE_PRICE = 8.0;
+const MIN_PRICE = 15.0;
+const AVG_SPEED_MPH = 30;
 
 export function estimatePrice(distanceKm: number) {
-  const price = BASE_PRICE + distanceKm * PRICE_PER_KM;
+  const miles = distanceKm * KM_TO_MILES;
+  const price = BASE_PRICE + miles * PRICE_PER_MILE;
   return Math.max(price, MIN_PRICE);
 }
 
 export function estimateDuration(distanceKm: number) {
-  return Math.ceil((distanceKm / 40) * 60);
+  const miles = distanceKm * KM_TO_MILES;
+  return Math.ceil((miles / AVG_SPEED_MPH) * 60);
 }
 
 export function usePassengerRide(passengerId: string | undefined) {

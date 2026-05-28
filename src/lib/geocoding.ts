@@ -3,7 +3,7 @@ import type { Location } from '../types';
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const HEADERS = {
   'User-Agent': 'GoXL/1.0 (ride-hailing app)',
-  'Accept-Language': 'pt-BR',
+  'Accept-Language': 'en-US',
 };
 
 export interface GeocodeResult extends Location {
@@ -25,7 +25,7 @@ export async function searchAddresses(
     format: 'json',
     addressdetails: '1',
     limit: '6',
-    countrycodes: 'br',
+    countrycodes: 'us',
   });
 
   if (near) {

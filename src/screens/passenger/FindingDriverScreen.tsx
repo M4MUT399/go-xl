@@ -10,6 +10,7 @@ import { Colors } from '../../constants/colors';
 import { Button } from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide } from '../../hooks/useRide';
+import { formatCurrency } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
 
 type Props = {
@@ -129,7 +130,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Valor estimado</Text>
-            <Text style={styles.price}>R$ {Number(initialRide.price).toFixed(2)}</Text>
+            <Text style={styles.price}>{formatCurrency(initialRide.price)}</Text>
           </View>
         </View>
       </View>

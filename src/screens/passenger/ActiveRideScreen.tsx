@@ -9,6 +9,7 @@ import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
 import { useDriverVehicle } from '../../hooks/useVehicle';
+import { formatCurrency } from '../../lib/format';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'ActiveRide'>;
@@ -61,8 +62,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [ride.id]);
 
-  const origin = ride.origin ?? { lat: -27.5969, lng: -48.5495 };
-  const dest = ride.destination ?? { lat: -27.6697, lng: -48.5487 };
+  const origin = ride.origin ?? { lat: 28.5383, lng: -81.3792 };
+  const dest = ride.destination ?? { lat: 28.4312, lng: -81.3081 };
 
   return (
     <View style={styles.container}>
@@ -134,7 +135,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           <View style={styles.detailDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailIcon}>💰</Text>
-            <Text style={styles.detailText}>R$ {Number(ride.price).toFixed(2)}</Text>
+            <Text style={styles.detailText}>{formatCurrency(ride.price)}</Text>
           </View>
         </View>
       </View>

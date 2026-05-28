@@ -12,6 +12,7 @@ import { Button } from '../../components/common/Button';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide, estimatePrice, estimateDuration } from '../../hooks/useRide';
+import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
 
@@ -183,10 +184,10 @@ export function RequestRideScreen({ navigation }: Props) {
             <View style={styles.categoryInfo}>
               <Text style={styles.categoryName}>Executive XL</Text>
               <Text style={styles.categoryDesc}>
-                {distanceKm?.toFixed(1)} km • {estimatedMin} min
+                {formatDistance(distanceKm)} • {estimatedMin} min
               </Text>
             </View>
-            <Text style={styles.price}>R$ {estimatedPrice.toFixed(2)}</Text>
+            <Text style={styles.price}>{formatCurrency(estimatedPrice)}</Text>
           </View>
 
           <Button

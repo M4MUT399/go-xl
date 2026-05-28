@@ -7,6 +7,7 @@ import { Colors } from '../../constants/colors';
 import { Button } from '../../components/common/Button';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { formatCurrency, formatDistance } from '../../lib/format';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
@@ -75,11 +76,11 @@ export function RateRideScreen({ navigation, route }: Props) {
         <View style={styles.tripSummary}>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Distância</Text>
-            <Text style={styles.summaryValue}>{Number(ride.distance_km).toFixed(1)} km</Text>
+            <Text style={styles.summaryValue}>{formatDistance(ride.distance_km)}</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Valor</Text>
-            <Text style={styles.summaryValue}>R$ {Number(ride.price).toFixed(2)}</Text>
+            <Text style={styles.summaryValue}>{formatCurrency(ride.price)}</Text>
           </View>
         </View>
       </View>

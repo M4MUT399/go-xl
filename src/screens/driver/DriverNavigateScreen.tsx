@@ -9,6 +9,7 @@ import { Button } from '../../components/common/Button';
 import { useDriverRide } from '../../hooks/useRide';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
+import { formatCurrency } from '../../lib/format';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverNavigate'>;
@@ -25,8 +26,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const [phase, setPhase] = useState<Phase>('pickup');
   const [loading, setLoading] = useState(false);
 
-  const origin = ride.origin ?? { lat: -27.5969, lng: -48.5495, address: 'Origem' };
-  const dest = ride.destination ?? { lat: -27.6697, lng: -48.5487, address: 'Destino' };
+  const origin = ride.origin ?? { lat: 28.5383, lng: -81.3792, address: 'Origem' };
+  const dest = ride.destination ?? { lat: 28.4312, lng: -81.3081, address: 'Destino' };
   const target = phase === 'pickup' ? origin : dest;
 
   async function handleNextPhase() {
@@ -36,7 +37,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       setPhase('dropoff');
     } else {
       await updateRideStatus(ride.id, 'completed' as RideStatus);
-      Alert.alert('Corrida concluída!', `Valor: R$ ${Number(ride.price).toFixed(2)}`, [
+      Alert.alert('Corrida concluída!', `Valor: ${formatCurrency(ride.price)}`, [
         { text: 'OK', onPress: () => navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] }) },
       ]);
     }

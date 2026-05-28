@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, ScrollView, RefreshControl, FlatL
 import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverEarnings, useRideHistory } from '../../hooks/useRideHistory';
+import { formatCurrency, formatDistance } from '../../lib/format';
 import type { RideRecord } from '../../types';
 
 export function EarningsScreen() {
@@ -27,7 +28,7 @@ export function EarningsScreen() {
 
         <View style={styles.heroCard}>
           <Text style={styles.heroLabel}>HOJE</Text>
-          <Text style={styles.heroValue}>R$ {earnings.todayEarnings.toFixed(2)}</Text>
+          <Text style={styles.heroValue}>{formatCurrency(earnings.todayEarnings)}</Text>
           <Text style={styles.heroSub}>
             {earnings.todayRides} {earnings.todayRides === 1 ? 'corrida' : 'corridas'} hoje
           </Text>
@@ -35,7 +36,7 @@ export function EarningsScreen() {
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>R$ {earnings.totalEarnings.toFixed(2)}</Text>
+            <Text style={styles.statValue}>{formatCurrency(earnings.totalEarnings)}</Text>
             <Text style={styles.statLabel}>Total acumulado</Text>
           </View>
           <View style={styles.statCard}>
@@ -45,7 +46,7 @@ export function EarningsScreen() {
         </View>
 
         <View style={styles.statCardWide}>
-          <Text style={styles.statValueAccent}>R$ {earnings.avgPerRide.toFixed(2)}</Text>
+          <Text style={styles.statValueAccent}>{formatCurrency(earnings.avgPerRide)}</Text>
           <Text style={styles.statLabel}>Média por corrida</Text>
         </View>
 
@@ -78,12 +79,12 @@ function EarningRow({ ride }: { ride: RideRecord }) {
       <View style={styles.rowInfo}>
         <Text style={styles.rowAddr} numberOfLines={1}>{ride.destination_address}</Text>
         <Text style={styles.rowDate}>
-          {date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+          {date.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })}
           {' • '}
-          {Number(ride.distance_km).toFixed(1)} km
+          {formatDistance(ride.distance_km)}
         </Text>
       </View>
-      <Text style={styles.rowPrice}>+ R$ {Number(ride.price).toFixed(2)}</Text>
+      <Text style={styles.rowPrice}>+ {formatCurrency(ride.price)}</Text>
     </View>
   );
 }

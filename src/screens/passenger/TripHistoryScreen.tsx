@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, FlatList, RefreshControl, Activit
 import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useRideHistory } from '../../hooks/useRideHistory';
+import { formatCurrency, formatDistance } from '../../lib/format';
 import type { RideRecord } from '../../types';
 
 export function TripHistoryScreen() {
@@ -46,9 +47,9 @@ function TripCard({ ride }: { ride: RideRecord }) {
     <View style={styles.card}>
       <View style={styles.cardTop}>
         <Text style={styles.cardDate}>
-          {date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}
+          {date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
           {' • '}
-          {date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+          {date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
         </Text>
         <View style={[styles.statusBadge, cancelled ? styles.statusCancelled : styles.statusCompleted]}>
           <Text style={[styles.statusText, cancelled ? styles.statusTextCancelled : styles.statusTextCompleted]}>
@@ -71,8 +72,8 @@ function TripCard({ ride }: { ride: RideRecord }) {
 
       {!cancelled && (
         <View style={styles.cardFooter}>
-          <Text style={styles.distance}>{Number(ride.distance_km).toFixed(1)} km</Text>
-          <Text style={styles.price}>R$ {Number(ride.price).toFixed(2)}</Text>
+          <Text style={styles.distance}>{formatDistance(ride.distance_km)}</Text>
+          <Text style={styles.price}>{formatCurrency(ride.price)}</Text>
         </View>
       )}
     </View>
