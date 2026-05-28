@@ -27,7 +27,8 @@
         {
           "color": "#C9A84C"
         }
-      ]
+      ],
+      "expo-web-browser"
     ]
   }
 }
