@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  TextInput, ScrollView, Alert,
+  TextInput, ScrollView, Alert, ActivityIndicator,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -12,19 +12,13 @@ import { Button } from '../../components/common/Button';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide, estimatePrice, estimateDuration } from '../../hooks/useRide';
+import { useDebounce } from '../../hooks/useDebounce';
+import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RequestRide'>;
   route: RouteProp<RootStackParamList, 'RequestRide'>;
 };
-
-const MOCK_DESTINATIONS: Location[] = [
-  { address: 'Aeroporto Internacional de Florianópolis', lat: -27.6697, lng: -48.5487 },
-  { address: 'Shopping Iguatemi Florianópolis', lat: -27.5791, lng: -48.5145 },
-  { address: 'Centro de Florianópolis', lat: -27.5969, lng: -48.5495 },
-  { address: 'Costão do Santinho Resort', lat: -27.4611, lng: -48.3847 },
-  { address: 'Jurerê Internacional', lat: -27.4333, lng: -48.5167 },
-];
 
 export function RequestRideScreen({ navigation }: Props) {
   const { profile } = useAuth();
@@ -33,13 +27,36 @@ export function RequestRideScreen({ navigation }: Props) {
 
   const [destinationText, setDestinationText] = useState('');
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
+  const [results, setResults] = useState<GeocodeResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [originAddress, setOriginAddress] = useState('Sua localização atual');
   const [loading, setLoading] = useState(false);
 
-  const filtered = destinationText.length > 1
-    ? MOCK_DESTINATIONS.filter(d =>
-        d.address.toLowerCase().includes(destinationText.toLowerCase())
-      )
-    : MOCK_DESTINATIONS;
+  const debouncedQuery = useDebounce(destinationText, 450);
+
+  useEffect(() => {
+    if (location) {
+      reverseGeocode(location.lat, location.lng).then((addr) => {
+        if (addr) setOriginAddress(addr);
+      });
+    }
+  }, [location]);
+
+  useEffect(() => {
+    if (selectedDest || debouncedQuery.trim().length < 3) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    searchAddresses(debouncedQuery, location ?? undefined).then((res) => {
+      if (!cancelled) {
+        setResults(res);
+        setSearching(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [debouncedQuery, selectedDest, location]);
 
   const distanceKm = selectedDest && location
     ? haversine(location, { lat: selectedDest.lat, lng: selectedDest.lng })
@@ -57,7 +74,7 @@ export function RequestRideScreen({ navigation }: Props) {
     const origin: Location = {
       lat: location.lat,
       lng: location.lng,
-      address: 'Sua localização atual',
+      address: originAddress,
     };
     const ride = await requestRide(origin, selectedDest);
     setLoading(false);
@@ -115,7 +132,7 @@ export function RequestRideScreen({ navigation }: Props) {
           </View>
           <View style={styles.routeInputs}>
             <View style={styles.originBox}>
-              <Text style={styles.originLabel}>Sua localização</Text>
+              <Text style={styles.originLabel} numberOfLines={1}>{originAddress}</Text>
             </View>
             <TextInput
               style={styles.destInput}
@@ -129,16 +146,31 @@ export function RequestRideScreen({ navigation }: Props) {
         </View>
 
         <ScrollView style={styles.suggestionList} keyboardShouldPersistTaps="handled">
-          {!selectedDest && filtered.map((d, i) => (
+          {searching && (
+            <View style={styles.searchingRow}>
+              <ActivityIndicator color={Colors.accent} size="small" />
+              <Text style={styles.searchingText}>Buscando endereços...</Text>
+            </View>
+          )}
+          {!selectedDest && !searching && results.map((d, i) => (
             <TouchableOpacity
-              key={i}
+              key={`${d.lat}-${d.lng}-${i}`}
               style={styles.suggestionItem}
-              onPress={() => { setSelectedDest(d); setDestinationText(d.address); }}
+              onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); }}
             >
               <Text style={styles.suggestionIcon}>📍</Text>
-              <Text style={styles.suggestionText}>{d.address}</Text>
+              <View style={styles.suggestionTextWrap}>
+                <Text style={styles.suggestionText} numberOfLines={1}>{d.shortName}</Text>
+                <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
+              </View>
             </TouchableOpacity>
           ))}
+          {!selectedDest && !searching && debouncedQuery.trim().length >= 3 && results.length === 0 && (
+            <Text style={styles.noResults}>Nenhum endereço encontrado</Text>
+          )}
+          {!selectedDest && !searching && destinationText.trim().length < 3 && (
+            <Text style={styles.hint}>Digite ao menos 3 letras para buscar o destino</Text>
+          )}
         </ScrollView>
       </View>
 
@@ -220,7 +252,13 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.gray[100],
   },
   suggestionIcon: { fontSize: 18, marginRight: 12 },
-  suggestionText: { flex: 1, fontSize: 14, color: Colors.gray[800] },
+  suggestionTextWrap: { flex: 1 },
+  suggestionText: { fontSize: 14, color: Colors.gray[800], fontWeight: '500' },
+  suggestionSub: { fontSize: 12, color: Colors.gray[400], marginTop: 2 },
+  searchingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, gap: 10 },
+  searchingText: { fontSize: 14, color: Colors.gray[500] },
+  noResults: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingVertical: 24 },
+  hint: { fontSize: 13, color: Colors.gray[400], textAlign: 'center', paddingVertical: 24 },
   estimateCard: {
     padding: 20,
     borderTopWidth: 1,
