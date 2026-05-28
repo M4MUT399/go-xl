@@ -1,7 +1,6 @@
 import React, { useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  TextInput, Platform, Dimensions,
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -9,14 +8,14 @@ import { RootStackParamList, Location } from '../../types';
 import { Colors } from '../../constants/colors';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
-
-const { height } = Dimensions.get('window');
+import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'PassengerTabs'> };
 
 export function HomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { location } = useLocation();
+  const { drivers } = useNearbyDrivers(true);
   const mapRef = useRef<MapView>(null);
   const [destination, setDestination] = useState('');
 
@@ -26,6 +25,17 @@ export function HomeScreen({ navigation }: Props) {
     navigation.navigate('RequestRide', {
       destination: { lat: 0, lng: 0, address: destination },
     });
+  }
+
+  function recenter() {
+    if (location && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: location.lat,
+        longitude: location.lng,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      });
+    }
   }
 
   return (
@@ -53,6 +63,20 @@ export function HomeScreen({ navigation }: Props) {
               <View style={styles.userMarkerDot} />
             </View>
           </Marker>
+
+          {drivers.map((d) => (
+            <Marker
+              key={d.driver_id}
+              coordinate={{ latitude: d.lat, longitude: d.lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              rotation={d.heading ?? 0}
+              flat
+            >
+              <View style={styles.carMarker}>
+                <Text style={styles.carMarkerText}>🚗</Text>
+              </View>
+            </Marker>
+          ))}
         </MapView>
       ) : (
         <View style={[styles.map, styles.mapPlaceholder]}>
@@ -73,14 +97,30 @@ export function HomeScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.searchContainer}>
-          <TouchableOpacity style={styles.searchBox} onPress={handleSearchFocus} activeOpacity={0.9}>
-            <View style={styles.originDot} />
-            <Text style={styles.searchPlaceholder}>Para onde você vai?</Text>
-            <View style={styles.searchArrow}>
-              <Text style={styles.searchArrowText}>→</Text>
+        <View style={styles.bottomArea} pointerEvents="box-none">
+          <View style={styles.bottomRow} pointerEvents="box-none">
+            <View style={styles.driversStatus}>
+              <View style={[styles.statusDot, drivers.length > 0 ? styles.statusOnline : styles.statusOffline]} />
+              <Text style={styles.driversStatusText}>
+                {drivers.length > 0
+                  ? `${drivers.length} ${drivers.length === 1 ? 'motorista' : 'motoristas'} por perto`
+                  : 'Procurando motoristas...'}
+              </Text>
             </View>
-          </TouchableOpacity>
+            <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
+              <Text style={styles.recenterIcon}>◎</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.searchContainer}>
+            <TouchableOpacity style={styles.searchBox} onPress={handleSearchFocus} activeOpacity={0.9}>
+              <View style={styles.originDot} />
+              <Text style={styles.searchPlaceholder}>Para onde você vai?</Text>
+              <View style={styles.searchArrow}>
+                <Text style={styles.searchArrowText}>→</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
         </View>
       </SafeAreaView>
     </View>
@@ -141,6 +181,47 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: { color: Colors.primary, fontSize: 18, fontWeight: '800' },
+  bottomArea: {},
+  bottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  driversStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15,15,30,0.85)',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  statusOnline: { backgroundColor: '#22C55E' },
+  statusOffline: { backgroundColor: Colors.gray[400] },
+  driversStatusText: { color: Colors.white, fontSize: 13, fontWeight: '600' },
+  recenterBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  recenterIcon: { fontSize: 22, color: Colors.primary },
+  carMarker: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carMarkerText: { fontSize: 22 },
   searchContainer: {
     paddingHorizontal: 16,
     paddingBottom: 32,
