@@ -1,6 +1,55 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { sendPushAsync } from '../lib/notifications';
 import type { Ride, RideStatus, Location } from '../types';
+
+async function notifyOnlineDrivers(destination: string, price: number) {
+  const { data: online } = await supabase
+    .from('driver_locations')
+    .select('driver_id')
+    .eq('is_online', true);
+
+  const driverIds = ((online as { driver_id: string }[]) ?? []).map((d) => d.driver_id);
+  if (driverIds.length === 0) return;
+
+  const { data: drivers } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .in('id', driverIds);
+
+  const tokens = ((drivers as { push_token: string | null }[]) ?? [])
+    .map((d) => d.push_token)
+    .filter((t): t is string => !!t);
+
+  await sendPushAsync(
+    tokens.map((to) => ({
+      to,
+      title: '🚗 Nova corrida Executive XL',
+      body: `Destino: ${destination} • R$ ${price.toFixed(2)}`,
+      data: { type: 'new_ride' },
+    }))
+  );
+}
+
+async function notifyPassenger(passengerId: string) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', passengerId)
+    .single();
+
+  const token = (data as { push_token: string | null })?.push_token;
+  if (token) {
+    await sendPushAsync([
+      {
+        to: token,
+        title: '✅ Motorista a caminho!',
+        body: 'Seu Executive XL foi confirmado e está indo até você.',
+        data: { type: 'ride_accepted' },
+      },
+    ]);
+  }
+}
 
 const PRICE_PER_KM = 4.5;
 const BASE_PRICE = 12.0;
@@ -75,6 +124,7 @@ export function usePassengerRide(passengerId: string | undefined) {
 
     if (error) return null;
     setActiveRide(data as Ride);
+    notifyOnlineDrivers(destination.address, price);
     return data as Ride;
   }, [passengerId]);
 
@@ -143,6 +193,7 @@ export function useDriverRide(driverId: string | undefined) {
     if (error) return null;
     setActiveRide(data as Ride);
     setPendingRide(null);
+    notifyPassenger((data as Ride).passenger_id);
     return data as Ride;
   }, [driverId]);
 

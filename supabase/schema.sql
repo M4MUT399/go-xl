@@ -12,6 +12,7 @@ create table public.profiles (
   avatar_url text,
   rating numeric(2,1) default 5.0,
   total_rides integer default 0,
+  push_token text,
   created_at timestamptz default now()
 );
 

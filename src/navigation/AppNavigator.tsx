@@ -6,6 +6,7 @@ import { Text, View, ActivityIndicator, StyleSheet } from 'react-native';
 
 import { RootStackParamList } from '../types';
 import { useAuth } from '../hooks/useAuth';
+import { useNotifications } from '../hooks/useNotifications';
 import { Colors } from '../constants/colors';
 
 import { WelcomeScreen } from '../screens/auth/WelcomeScreen';
@@ -97,6 +98,7 @@ function LoadingScreen() {
 
 export function AppNavigator() {
   const { session, profile, loading } = useAuth();
+  useNotifications(session?.user.id);
 
   if (loading) return <LoadingScreen />;
 

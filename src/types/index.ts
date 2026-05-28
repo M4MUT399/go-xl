@@ -17,6 +17,7 @@ export interface Profile {
   avatar_url?: string;
   rating?: number;
   total_rides?: number;
+  push_token?: string;
   created_at: string;
 }
 
