@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const base = `${url.origin}${url.pathname}`;
+    const base = `${Deno.env.get('SUPABASE_URL')}/functions/v1/create-checkout`;
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: [
