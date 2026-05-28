@@ -8,6 +8,7 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
+import { useDriverVehicle } from '../../hooks/useVehicle';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'ActiveRide'>;
@@ -26,6 +27,7 @@ const STATUS_LABELS: Record<RideStatus, string> = {
 export function ActiveRideScreen({ navigation, route }: Props) {
   const [ride, setRide] = useState<Ride>(route.params.ride);
   const [driverName, setDriverName] = useState('Motorista');
+  const vehicle = useDriverVehicle(ride.driver_id);
 
   useEffect(() => {
     if (ride.driver_id) {
@@ -98,20 +100,30 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{driverName}</Text>
-            <Text style={styles.driverCategory}>Executive XL</Text>
+            <Text style={styles.driverCategory}>
+              {vehicle ? `${vehicle.model} • ${vehicle.color}` : 'Executive XL'}
+            </Text>
             <View style={styles.ratingRow}>
               <Text style={styles.star}>★</Text>
               <Text style={styles.ratingText}>4.9</Text>
             </View>
           </View>
-          <View style={styles.driverActions}>
-            <TouchableOpacity style={styles.actionBtn}>
-              <Text style={styles.actionIcon}>📞</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn}>
-              <Text style={styles.actionIcon}>💬</Text>
-            </TouchableOpacity>
-          </View>
+          {vehicle && (
+            <View style={styles.plateBox}>
+              <Text style={styles.plateText}>{vehicle.plate}</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.driverActions}>
+          <TouchableOpacity style={styles.actionBtnWide}>
+            <Text style={styles.actionIcon}>📞</Text>
+            <Text style={styles.actionLabel}>Ligar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtnWide}>
+            <Text style={styles.actionIcon}>💬</Text>
+            <Text style={styles.actionLabel}>Mensagem</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.tripDetails}>
@@ -178,15 +190,25 @@ const styles = StyleSheet.create({
   ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   star: { color: Colors.accent, fontSize: 14, marginRight: 3 },
   ratingText: { fontSize: 13, fontWeight: '600', color: Colors.gray[600] },
-  driverActions: { flexDirection: 'row', gap: 8 },
-  actionBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: Colors.gray[100],
+  plateBox: {
+    backgroundColor: Colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  plateText: { color: Colors.white, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
+  driverActions: { flexDirection: 'row', gap: 12, paddingHorizontal: 20, marginBottom: 20 },
+  actionBtnWide: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: Colors.gray[100],
   },
+  actionLabel: { fontSize: 14, fontWeight: '600', color: Colors.gray[700] },
   actionIcon: { fontSize: 18 },
   tripDetails: {
     marginHorizontal: 20,

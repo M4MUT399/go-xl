@@ -105,4 +105,5 @@ export type RootStackParamList = {
   RateRide: { ride: Ride };
   DriverRequest: { ride: Ride };
   DriverNavigate: { ride: Ride };
+  VehicleForm: undefined;
 };

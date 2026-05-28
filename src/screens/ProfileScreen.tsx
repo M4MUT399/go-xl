@@ -1,8 +1,12 @@
 import React from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Colors } from '../constants/colors';
 import { Button } from '../components/common/Button';
 import { useAuth } from '../hooks/useAuth';
+import { useVehicle } from '../hooks/useVehicle';
+import type { RootStackParamList } from '../types';
 
 const MENU_ITEMS = [
   { icon: '👤', label: 'Dados pessoais' },
@@ -14,9 +18,17 @@ const MENU_ITEMS = [
 
 export function ProfileScreen() {
   const { profile, signOut } = useAuth();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const isDriver = profile?.type === 'driver';
+  const { vehicle, refresh } = useVehicle(isDriver ? profile?.id : undefined);
   const initial = profile?.full_name?.[0]?.toUpperCase() ?? '?';
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (isDriver) refresh();
+    }, [isDriver, refresh])
+  );
 
   function handleSignOut() {
     Alert.alert('Sair', 'Deseja realmente sair da conta?', [
@@ -61,6 +73,37 @@ export function ProfileScreen() {
             <Text style={styles.contactText}>{profile?.phone}</Text>
           </View>
         </View>
+
+        {isDriver && (
+          <View style={styles.vehicleCard}>
+            <View style={styles.vehicleHeader}>
+              <Text style={styles.vehicleTitle}>Meu veículo</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('VehicleForm')}>
+                <Text style={styles.vehicleAction}>{vehicle ? 'Editar' : 'Cadastrar'}</Text>
+              </TouchableOpacity>
+            </View>
+            {vehicle ? (
+              <View style={styles.vehicleBody}>
+                <Text style={styles.vehicleEmoji}>🚗</Text>
+                <View style={styles.vehicleInfo}>
+                  <Text style={styles.vehicleModel}>{vehicle.model}</Text>
+                  <Text style={styles.vehicleMeta}>
+                    {vehicle.color} • {vehicle.year}
+                  </Text>
+                </View>
+                <View style={styles.plateBox}>
+                  <Text style={styles.plateText}>{vehicle.plate}</Text>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.vehicleEmpty} onPress={() => navigation.navigate('VehicleForm')}>
+                <Text style={styles.vehicleEmptyText}>
+                  Cadastre seu carro para começar a receber corridas
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         <View style={styles.menu}>
           {MENU_ITEMS.map((item, i) => (
@@ -119,6 +162,31 @@ const styles = StyleSheet.create({
   contactIcon: { fontSize: 16, marginRight: 12 },
   contactText: { fontSize: 14, color: Colors.gray[700] },
   contactDivider: { height: 1, backgroundColor: Colors.gray[100], marginVertical: 6, marginLeft: 28 },
+  vehicleCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 16 },
+  vehicleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  vehicleTitle: { fontSize: 15, fontWeight: '700', color: Colors.primary },
+  vehicleAction: { fontSize: 14, fontWeight: '700', color: Colors.accent },
+  vehicleBody: { flexDirection: 'row', alignItems: 'center' },
+  vehicleEmoji: { fontSize: 28, marginRight: 12 },
+  vehicleInfo: { flex: 1 },
+  vehicleModel: { fontSize: 16, fontWeight: '700', color: Colors.gray[800] },
+  vehicleMeta: { fontSize: 13, color: Colors.gray[500], marginTop: 2 },
+  plateBox: {
+    backgroundColor: Colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  plateText: { color: Colors.white, fontSize: 14, fontWeight: '800', letterSpacing: 1 },
+  vehicleEmpty: {
+    backgroundColor: Colors.gray[100],
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.gray[200],
+    borderStyle: 'dashed',
+  },
+  vehicleEmptyText: { fontSize: 13, color: Colors.gray[500], textAlign: 'center' },
   menu: { backgroundColor: Colors.white, borderRadius: 16, marginBottom: 24, overflow: 'hidden' },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 16 },
   menuItemBorder: { borderBottomWidth: 1, borderBottomColor: Colors.gray[100] },

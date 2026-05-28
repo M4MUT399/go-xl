@@ -20,6 +20,7 @@ import { TripHistoryScreen } from '../screens/passenger/TripHistoryScreen';
 import { DriverHomeScreen } from '../screens/driver/DriverHomeScreen';
 import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
 import { EarningsScreen } from '../screens/driver/EarningsScreen';
+import { VehicleFormScreen } from '../screens/driver/VehicleFormScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -115,6 +116,7 @@ export function AppNavigator() {
           <>
             <Stack.Screen name="DriverTabs" component={DriverTabs} />
             <Stack.Screen name="DriverNavigate" component={DriverNavigateScreen} />
+            <Stack.Screen name="VehicleForm" component={VehicleFormScreen} />
           </>
         ) : (
           <>
