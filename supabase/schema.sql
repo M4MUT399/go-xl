@@ -24,6 +24,9 @@ create policy "Usuário vê o próprio perfil" on public.profiles
 create policy "Usuário atualiza o próprio perfil" on public.profiles
   for update using (auth.uid() = id);
 
+create policy "Usuário cria o próprio perfil" on public.profiles
+  for insert with check (auth.uid() = id);
+
 create policy "Perfis públicos para leitura" on public.profiles
   for select using (true);
 
