@@ -23,6 +23,11 @@ import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
 import { EarningsScreen } from '../screens/driver/EarningsScreen';
 import { VehicleFormScreen } from '../screens/driver/VehicleFormScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
+import { EditProfileScreen } from '../screens/profile/EditProfileScreen';
+import { NotificationSettingsScreen } from '../screens/profile/NotificationSettingsScreen';
+import { SupportScreen } from '../screens/profile/SupportScreen';
+import { TermsScreen } from '../screens/profile/TermsScreen';
+import { PaymentScreen } from '../screens/profile/PaymentScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -119,6 +124,11 @@ export function AppNavigator() {
             <Stack.Screen name="DriverTabs" component={DriverTabs} />
             <Stack.Screen name="DriverNavigate" component={DriverNavigateScreen} />
             <Stack.Screen name="VehicleForm" component={VehicleFormScreen} />
+            <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+            <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
+            <Stack.Screen name="Support" component={SupportScreen} />
+            <Stack.Screen name="Terms" component={TermsScreen} />
+            <Stack.Screen name="Payment" component={PaymentScreen} />
           </>
         ) : (
           <>
@@ -127,6 +137,11 @@ export function AppNavigator() {
             <Stack.Screen name="FindingDriver" component={FindingDriverScreen} />
             <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
             <Stack.Screen name="RateRide" component={RateRideScreen} />
+            <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+            <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
+            <Stack.Screen name="Support" component={SupportScreen} />
+            <Stack.Screen name="Terms" component={TermsScreen} />
+            <Stack.Screen name="Payment" component={PaymentScreen} />
           </>
         )}
       </Stack.Navigator>

@@ -8,16 +8,18 @@ import { useAuth } from '../hooks/useAuth';
 import { useVehicle } from '../hooks/useVehicle';
 import type { RootStackParamList } from '../types';
 
-const MENU_ITEMS = [
-  { icon: '👤', label: 'Dados pessoais' },
-  { icon: '💳', label: 'Pagamento' },
-  { icon: '🔔', label: 'Notificações' },
-  { icon: '🛟', label: 'Ajuda e suporte' },
-  { icon: '📄', label: 'Termos e privacidade' },
+type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'Support' | 'Terms';
+
+const MENU_ITEMS: { icon: string; label: string; route: ProfileRoute }[] = [
+  { icon: '👤', label: 'Dados pessoais', route: 'EditProfile' },
+  { icon: '💳', label: 'Pagamento', route: 'Payment' },
+  { icon: '🔔', label: 'Notificações', route: 'NotificationSettings' },
+  { icon: '🛟', label: 'Ajuda e suporte', route: 'Support' },
+  { icon: '📄', label: 'Termos e privacidade', route: 'Terms' },
 ];
 
 export function ProfileScreen() {
-  const { profile, signOut } = useAuth();
+  const { profile, signOut, refreshProfile } = useAuth();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const isDriver = profile?.type === 'driver';
@@ -26,8 +28,9 @@ export function ProfileScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
+      refreshProfile?.();
       if (isDriver) refresh();
-    }, [isDriver, refresh])
+    }, [isDriver, refresh, refreshProfile])
   );
 
   function handleSignOut() {
@@ -107,7 +110,11 @@ export function ProfileScreen() {
 
         <View style={styles.menu}>
           {MENU_ITEMS.map((item, i) => (
-            <TouchableOpacity key={i} style={[styles.menuItem, i < MENU_ITEMS.length - 1 && styles.menuItemBorder]}>
+            <TouchableOpacity
+              key={i}
+              style={[styles.menuItem, i < MENU_ITEMS.length - 1 && styles.menuItemBorder]}
+              onPress={() => navigation.navigate(item.route)}
+            >
               <Text style={styles.menuIcon}>{item.icon}</Text>
               <Text style={styles.menuLabel}>{item.label}</Text>
               <Text style={styles.menuArrow}>›</Text>

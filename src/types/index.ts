@@ -107,4 +107,9 @@ export type RootStackParamList = {
   DriverRequest: { ride: Ride };
   DriverNavigate: { ride: Ride };
   VehicleForm: undefined;
+  EditProfile: undefined;
+  NotificationSettings: undefined;
+  Support: undefined;
+  Terms: undefined;
+  Payment: undefined;
 };
