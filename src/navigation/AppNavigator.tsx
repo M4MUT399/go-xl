@@ -16,8 +16,11 @@ import { RequestRideScreen } from '../screens/passenger/RequestRideScreen';
 import { FindingDriverScreen } from '../screens/passenger/FindingDriverScreen';
 import { ActiveRideScreen } from '../screens/passenger/ActiveRideScreen';
 import { RateRideScreen } from '../screens/passenger/RateRideScreen';
+import { TripHistoryScreen } from '../screens/passenger/TripHistoryScreen';
 import { DriverHomeScreen } from '../screens/driver/DriverHomeScreen';
 import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
+import { EarningsScreen } from '../screens/driver/EarningsScreen';
+import { ProfileScreen } from '../screens/ProfileScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -40,12 +43,12 @@ function PassengerTabs() {
       />
       <Tab.Screen
         name="Viagens"
-        component={HomeScreen}
+        component={TripHistoryScreen}
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📋</Text> }}
       />
       <Tab.Screen
         name="Perfil"
-        component={HomeScreen}
+        component={ProfileScreen}
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
       />
     </Tab.Navigator>
@@ -70,12 +73,12 @@ function DriverTabs() {
       />
       <Tab.Screen
         name="Ganhos"
-        component={DriverHomeScreen}
+        component={EarningsScreen}
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>💰</Text> }}
       />
       <Tab.Screen
         name="Perfil"
-        component={DriverHomeScreen}
+        component={ProfileScreen}
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
       />
     </Tab.Navigator>

@@ -66,6 +66,25 @@ export interface Ride {
   vehicle?: Vehicle;
 }
 
+export interface RideRecord {
+  id: string;
+  passenger_id: string;
+  driver_id?: string;
+  origin_lat: number;
+  origin_lng: number;
+  origin_address: string;
+  destination_lat: number;
+  destination_lng: number;
+  destination_address: string;
+  status: RideStatus;
+  price?: number;
+  distance_km?: number;
+  duration_min?: number;
+  created_at: string;
+  accepted_at?: string;
+  completed_at?: string;
+}
+
 export interface RideRequest {
   origin: Location;
   destination: Location;
