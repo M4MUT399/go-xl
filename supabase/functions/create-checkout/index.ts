@@ -13,19 +13,12 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
 };
 
-function html(title: string, message: string): Response {
-  return new Response(
-    `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title>
-<style>body{font-family:-apple-system,system-ui,sans-serif;background:#0f0f1e;color:#fff;
-display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}
-.card{padding:32px}.emoji{font-size:56px}h1{font-size:22px;margin:16px 0 8px}
-p{color:#9aa;font-size:15px}</style></head>
-<body><div class="card"><div class="emoji">${title.includes('conclu') ? '✅' : '↩️'}</div>
-<h1>${title}</h1><p>${message}</p></div></body></html>`,
-    { headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } }
-  );
+// O Supabase força text/plain nas respostas das Edge Functions (não serve HTML),
+// então as paginas de retorno usam texto puro, sem acentos (a prova de charset).
+function text(message: string): Response {
+  return new Response(message, {
+    headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' },
+  });
 }
 
 Deno.serve(async (req) => {
@@ -44,9 +37,9 @@ Deno.serve(async (req) => {
     }
     const status = url.searchParams.get('status');
     if (status === 'success') {
-      return html('Pagamento concluído!', 'Você já pode voltar ao app Go XL.');
+      return text('Pagamento concluido com sucesso! Voce ja pode fechar esta janela e voltar ao app Go XL.');
     }
-    return html('Pagamento cancelado', 'Nenhuma cobrança foi feita. Volte ao app para tentar novamente.');
+    return text('Pagamento cancelado. Nenhuma cobranca foi feita. Volte ao app para tentar novamente.');
   }
 
   if (req.method !== 'POST') {
