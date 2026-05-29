@@ -34,7 +34,14 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
 
   // Páginas de retorno do Checkout (success_url / cancel_url)
+  const base = `${Deno.env.get('SUPABASE_URL')}/functions/v1/create-checkout`;
+
   if (req.method === 'GET') {
+    if (url.searchParams.get('debug')) {
+      return new Response(JSON.stringify({ base, supabaseUrl: Deno.env.get('SUPABASE_URL') }), {
+        headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
+    }
     const status = url.searchParams.get('status');
     if (status === 'success') {
       return html('Pagamento concluído!', 'Você já pode voltar ao app Go XL.');
@@ -56,7 +63,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    const base = `${Deno.env.get('SUPABASE_URL')}/functions/v1/create-checkout`;
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: [
