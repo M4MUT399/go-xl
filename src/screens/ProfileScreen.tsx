@@ -6,6 +6,7 @@ import { Colors } from '../constants/colors';
 import { Button } from '../components/common/Button';
 import { useAuth } from '../hooks/useAuth';
 import { useVehicle } from '../hooks/useVehicle';
+import { useUserStats } from '../hooks/useUserStats';
 import type { RootStackParamList } from '../types';
 
 type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'Support' | 'Terms';
@@ -24,13 +25,15 @@ export function ProfileScreen() {
 
   const isDriver = profile?.type === 'driver';
   const { vehicle, refresh } = useVehicle(isDriver ? profile?.id : undefined);
+  const { stats, refresh: refreshStats } = useUserStats(profile?.id, profile?.type ?? 'passenger');
   const initial = profile?.full_name?.[0]?.toUpperCase() ?? '?';
 
   useFocusEffect(
     React.useCallback(() => {
       refreshProfile?.();
+      refreshStats();
       if (isDriver) refresh();
-    }, [isDriver, refresh, refreshProfile])
+    }, [isDriver, refresh, refreshProfile, refreshStats])
   );
 
   function handleSignOut() {
@@ -54,12 +57,14 @@ export function ProfileScreen() {
 
           <View style={styles.stats}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>★ {Number(profile?.rating ?? 5).toFixed(1)}</Text>
-              <Text style={styles.statLabel}>Avaliação</Text>
+              <Text style={styles.statValue}>★ {stats.rating.toFixed(1)}</Text>
+              <Text style={styles.statLabel}>
+                {stats.ratingCount > 0 ? `${stats.ratingCount} ${stats.ratingCount === 1 ? 'avaliação' : 'avaliações'}` : 'Avaliação'}
+              </Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{profile?.total_rides ?? 0}</Text>
+              <Text style={styles.statValue}>{stats.totalRides}</Text>
               <Text style={styles.statLabel}>Corridas</Text>
             </View>
           </View>
