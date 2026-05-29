@@ -35,6 +35,38 @@ export interface DriverEarnings {
   avgPerRide: number;
 }
 
+export interface CompletedRide {
+  id: string;
+  price: number;
+  distance_km: number;
+  completed_at: string;
+  destination_address: string;
+}
+
+export function useDriverStats(driverId: string | undefined) {
+  const [rides, setRides] = useState<CompletedRide[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!driverId) return;
+    setLoading(true);
+    const { data } = await supabase
+      .from('rides')
+      .select('id, price, distance_km, completed_at, destination_address')
+      .eq('driver_id', driverId)
+      .eq('status', 'completed')
+      .order('completed_at', { ascending: false });
+    setRides((data as CompletedRide[]) ?? []);
+    setLoading(false);
+  }, [driverId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { rides, loading, refresh };
+}
+
 export function useDriverEarnings(driverId: string | undefined) {
   const [earnings, setEarnings] = useState<DriverEarnings>({
     totalEarnings: 0,
