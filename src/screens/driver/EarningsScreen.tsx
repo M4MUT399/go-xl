@@ -1,9 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, RefreshControl, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverStats, CompletedRide } from '../../hooks/useRideHistory';
+import { usePayouts } from '../../hooks/usePayouts';
 import { formatCurrency, formatDistance, kmToMiles } from '../../lib/format';
+import { DRIVER_SHARE } from '../../lib/split';
 
 type Period = 'today' | 'week' | 'month' | 'all';
 
@@ -32,7 +34,9 @@ function startOf(period: Period): number {
 export function EarningsScreen() {
   const { profile } = useAuth();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
+  const { payouts, pendingBalance, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
   const [period, setPeriod] = useState<Period>('week');
+  const [requestingPayout, setRequestingPayout] = useState(false);
 
   const filtered = useMemo(() => {
     const from = startOf(period);
@@ -40,17 +44,47 @@ export function EarningsScreen() {
   }, [rides, period]);
 
   const stats = useMemo(() => {
-    const earnings = filtered.reduce((s, r) => s + (Number(r.price) || 0), 0);
+    const gross = filtered.reduce((s, r) => s + (Number(r.price) || 0), 0);
+    // Usa driver_amount se disponível, fallback para gross * DRIVER_SHARE
+    const net = filtered.reduce((s, r) => {
+      const da = (r as CompletedRide & { driver_amount?: number }).driver_amount;
+      return s + (da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE);
+    }, 0);
     const distance = filtered.reduce((s, r) => s + (Number(r.distance_km) || 0), 0);
     return {
-      earnings,
+      gross: Math.round(gross * 100) / 100,
+      net: Math.round(net * 100) / 100,
+      platformFee: Math.round((gross - net) * 100) / 100,
       rides: filtered.length,
-      avg: filtered.length ? earnings / filtered.length : 0,
+      avg: filtered.length ? Math.round((net / filtered.length) * 100) / 100 : 0,
       miles: kmToMiles(distance),
     };
   }, [filtered]);
 
-  // Série dos últimos 7 dias para o gráfico
+  async function handleRequestPayout() {
+    Alert.alert(
+      'Solicitar repasse',
+      `Solicitar repasse de ${formatCurrency(pendingBalance)} referente a ${pendingRidesCount} corrida(s)?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Solicitar',
+          onPress: async () => {
+            setRequestingPayout(true);
+            const result = await requestPayout();
+            setRequestingPayout(false);
+            if (result.ok) {
+              Alert.alert('Solicitação enviada!', 'Entraremos em contato para processar o pagamento.');
+            } else {
+              Alert.alert('Erro', result.error ?? 'Tente novamente.');
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  // Série dos últimos 7 dias para o gráfico (ganho líquido)
   const chart = useMemo(() => {
     const days: { label: string; value: number }[] = [];
     for (let i = 6; i >= 0; i--) {
@@ -63,7 +97,10 @@ export function EarningsScreen() {
           const t = new Date(r.completed_at).getTime();
           return t >= d.getTime() && t < next;
         })
-        .reduce((s, r) => s + (Number(r.price) || 0), 0);
+        .reduce((s, r) => {
+          const da = (r as CompletedRide & { driver_amount?: number }).driver_amount;
+          return s + (da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE);
+        }, 0);
       days.push({ label: d.toLocaleDateString('en-US', { weekday: 'short' })[0], value });
     }
     return days;
@@ -92,17 +129,50 @@ export function EarningsScreen() {
         </View>
 
         <View style={styles.heroCard}>
-          <Text style={styles.heroLabel}>{PERIODS.find((p) => p.key === period)?.label.toUpperCase()}</Text>
-          <Text style={styles.heroValue}>{formatCurrency(stats.earnings)}</Text>
+          <Text style={styles.heroLabel}>{PERIODS.find((p) => p.key === period)?.label.toUpperCase()} — SEU GANHO LÍQUIDO</Text>
+          <Text style={styles.heroValue}>{formatCurrency(stats.net)}</Text>
           <Text style={styles.heroSub}>
             {stats.rides} {stats.rides === 1 ? 'corrida' : 'corridas'} • {stats.miles.toFixed(1)} mi
           </Text>
+          <View style={styles.heroDivider} />
+          <View style={styles.heroBreakdown}>
+            <View style={styles.heroBreakdownItem}>
+              <Text style={styles.heroBreakdownLabel}>Bruto</Text>
+              <Text style={styles.heroBreakdownValue}>{formatCurrency(stats.gross)}</Text>
+            </View>
+            <View style={styles.heroBreakdownSep} />
+            <View style={styles.heroBreakdownItem}>
+              <Text style={styles.heroBreakdownLabel}>Taxa Go XL (20%)</Text>
+              <Text style={styles.heroBreakdownValue}>- {formatCurrency(stats.platformFee)}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Card de saldo disponível para repasse */}
+        <View style={styles.balanceCard}>
+          <View style={styles.balanceInfo}>
+            <Text style={styles.balanceLabel}>Saldo a receber</Text>
+            <Text style={styles.balanceValue}>{formatCurrency(pendingBalance)}</Text>
+            {pendingRidesCount > 0 && (
+              <Text style={styles.balanceSub}>{pendingRidesCount} corrida(s) pagas aguardando repasse</Text>
+            )}
+          </View>
+          <TouchableOpacity
+            style={[styles.payoutBtn, (pendingBalance <= 0 || requestingPayout) && styles.payoutBtnDisabled]}
+            onPress={handleRequestPayout}
+            disabled={pendingBalance <= 0 || requestingPayout}
+          >
+            {requestingPayout
+              ? <ActivityIndicator size="small" color={Colors.white} />
+              : <Text style={styles.payoutBtnText}>Solicitar{'\n'}repasse</Text>
+            }
+          </TouchableOpacity>
         </View>
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{formatCurrency(stats.avg)}</Text>
-            <Text style={styles.statLabel}>Média por corrida</Text>
+            <Text style={styles.statLabel}>Média líquida/corrida</Text>
           </View>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{rides.length}</Text>
@@ -123,6 +193,33 @@ export function EarningsScreen() {
             ))}
           </View>
         </View>
+
+        {payouts.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>Histórico de repasses</Text>
+            <View style={[styles.historyList, { marginBottom: 24 }]}>
+              {payouts.slice(0, 5).map((p) => (
+                <View key={p.id} style={styles.row}>
+                  <View style={styles.rowIcon}>
+                    <Text style={{ fontSize: 16 }}>💸</Text>
+                  </View>
+                  <View style={styles.rowInfo}>
+                    <Text style={styles.rowAddr}>{p.rides_count} corrida(s)</Text>
+                    <Text style={styles.rowDate}>
+                      {new Date(p.requested_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </Text>
+                  </View>
+                  <View style={styles.payoutStatusWrap}>
+                    <Text style={styles.rowPrice}>{formatCurrency(p.amount)}</Text>
+                    <Text style={[styles.payoutStatus, p.status === 'completed' && styles.payoutDone]}>
+                      {p.status === 'pending' ? 'Pendente' : p.status === 'processing' ? 'Processando' : p.status === 'completed' ? '✓ Pago' : 'Falhou'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
 
         <Text style={styles.sectionTitle}>Corridas no período</Text>
         {filtered.length === 0 ? (
@@ -170,9 +267,42 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 13, fontWeight: '600', color: Colors.gray[500] },
   tabTextActive: { color: Colors.white },
   heroCard: { backgroundColor: Colors.primary, borderRadius: 20, padding: 24, alignItems: 'center', marginBottom: 12 },
-  heroLabel: { fontSize: 12, color: Colors.accent, letterSpacing: 1.5, fontWeight: '700' },
+  heroLabel: { fontSize: 11, color: Colors.accent, letterSpacing: 1.2, fontWeight: '700', textAlign: 'center' },
   heroValue: { fontSize: 44, fontWeight: '900', color: Colors.white, marginVertical: 6, letterSpacing: -1 },
   heroSub: { fontSize: 14, color: Colors.gray[400] },
+  heroDivider: { width: '100%', height: 1, backgroundColor: 'rgba(255,255,255,0.15)', marginVertical: 14 },
+  heroBreakdown: { flexDirection: 'row', width: '100%', justifyContent: 'space-around' },
+  heroBreakdownItem: { alignItems: 'center' },
+  heroBreakdownLabel: { fontSize: 11, color: Colors.gray[400], marginBottom: 2 },
+  heroBreakdownValue: { fontSize: 14, fontWeight: '700', color: Colors.white },
+  heroBreakdownSep: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
+  balanceCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.accent,
+  },
+  balanceInfo: { flex: 1 },
+  balanceLabel: { fontSize: 12, color: Colors.gray[500], fontWeight: '600', marginBottom: 4 },
+  balanceValue: { fontSize: 26, fontWeight: '900', color: Colors.primary },
+  balanceSub: { fontSize: 11, color: Colors.gray[400], marginTop: 2 },
+  payoutBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    minWidth: 80,
+  },
+  payoutBtnDisabled: { backgroundColor: Colors.gray[300] },
+  payoutBtnText: { color: Colors.primary, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  payoutStatusWrap: { alignItems: 'flex-end' },
+  payoutStatus: { fontSize: 11, color: Colors.gray[500], fontWeight: '600', marginTop: 2 },
+  payoutDone: { color: Colors.success },
   statsRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
   statCard: { flex: 1, backgroundColor: Colors.white, borderRadius: 16, padding: 18, alignItems: 'center' },
   statValue: { fontSize: 20, fontWeight: '800', color: Colors.primary },

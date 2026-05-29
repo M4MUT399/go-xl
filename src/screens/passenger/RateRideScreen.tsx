@@ -9,6 +9,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { startCheckout } from '../../lib/payments';
+import { calculateSplit, DRIVER_SHARE } from '../../lib/split';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
@@ -27,6 +28,7 @@ export function RateRideScreen({ navigation, route }: Props) {
   const autoCharged = useRef(false);
 
   const fare = Number(ride.price) || 0;
+  const split = calculateSplit(fare);
 
   async function charge() {
     setPayment('processing');
@@ -117,8 +119,16 @@ export function RateRideScreen({ navigation, route }: Props) {
             <Text style={styles.summaryValue}>{formatDistance(ride.distance_km)}</Text>
           </View>
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Valor</Text>
+            <Text style={styles.summaryLabel}>Total da corrida</Text>
             <Text style={styles.summaryValue}>{formatCurrency(ride.price)}</Text>
+          </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>  Motorista ({Math.round(DRIVER_SHARE * 100)}%)</Text>
+            <Text style={styles.splitDriver}>{formatCurrency(split.driverAmount)}</Text>
+          </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>  Taxa Go XL ({Math.round((1 - DRIVER_SHARE) * 100)}%)</Text>
+            <Text style={styles.splitPlatform}>{formatCurrency(split.platformFee)}</Text>
           </View>
           <View style={[styles.summaryRow, styles.payRow]}>
             <Text style={styles.summaryLabel}>Pagamento</Text>
@@ -200,6 +210,8 @@ const styles = StyleSheet.create({
   summaryLabel: { color: Colors.gray[500], fontSize: 14 },
   summaryValue: { color: Colors.primary, fontSize: 14, fontWeight: '700' },
   payRow: { borderTopWidth: 1, borderTopColor: Colors.gray[200], paddingTop: 10, marginTop: 2 },
+  splitDriver: { color: Colors.success, fontSize: 13, fontWeight: '700' },
+  splitPlatform: { color: Colors.gray[500], fontSize: 13, fontWeight: '600' },
   paidText: { color: Colors.success, fontSize: 14, fontWeight: '800' },
   pendingText: { color: Colors.error, fontSize: 14, fontWeight: '700' },
   processingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },

@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
+import { calculateSplit } from '../lib/split';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
 
@@ -114,6 +115,7 @@ export function usePassengerRide(passengerId: string | undefined) {
     const { multiplier } = await getSurgeInfo();
     const price = estimatePrice(distanceKm, multiplier);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
+    const { driverAmount, platformFee } = calculateSplit(price);
 
     const { data, error } = await supabase
       .from('rides')
@@ -129,6 +131,8 @@ export function usePassengerRide(passengerId: string | undefined) {
         price,
         distance_km: distanceKm,
         duration_min: duration,
+        driver_amount: driverAmount,
+        platform_fee: platformFee,
       })
       .select()
       .single();
@@ -153,6 +157,7 @@ export function usePassengerRide(passengerId: string | undefined) {
     );
     const price = estimatePrice(distanceKm);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
+    const { driverAmount, platformFee } = calculateSplit(price);
 
     const { data, error } = await supabase
       .from('rides')
@@ -169,6 +174,8 @@ export function usePassengerRide(passengerId: string | undefined) {
         distance_km: distanceKm,
         duration_min: duration,
         scheduled_for: scheduledFor.toISOString(),
+        driver_amount: driverAmount,
+        platform_fee: platformFee,
       })
       .select()
       .single();
