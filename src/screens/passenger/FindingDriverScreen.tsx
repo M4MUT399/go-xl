@@ -11,6 +11,7 @@ import { Button } from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide } from '../../hooks/useRide';
 import { formatCurrency } from '../../lib/format';
+import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
 
 type Props = {
@@ -121,12 +122,12 @@ export function FindingDriverScreen({ navigation, route }: Props) {
         <View style={styles.tripInfo}>
           <View style={styles.infoRow}>
             <Text style={styles.infoIcon}>📍</Text>
-            <Text style={styles.infoText} numberOfLines={1}>{initialRide.origin?.address ?? 'Sua localização'}</Text>
+            <Text style={styles.infoText} numberOfLines={1}>{rideOrigin(initialRide).address}</Text>
           </View>
           <View style={styles.infoSeparator} />
           <View style={styles.infoRow}>
             <Text style={styles.infoIcon}>🏁</Text>
-            <Text style={styles.infoText} numberOfLines={1}>{initialRide.destination?.address ?? 'Destino'}</Text>
+            <Text style={styles.infoText} numberOfLines={1}>{rideDestination(initialRide).address}</Text>
           </View>
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Valor estimado</Text>

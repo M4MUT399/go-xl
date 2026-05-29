@@ -54,8 +54,16 @@ export interface Ride {
   id: string;
   passenger_id: string;
   driver_id?: string;
-  origin: Location;
-  destination: Location;
+  // Objetos aninhados (vêm da view rides_with_locations)
+  origin?: Location;
+  destination?: Location;
+  // Campos planos (vêm da tabela rides via realtime/insert/update)
+  origin_lat?: number;
+  origin_lng?: number;
+  origin_address?: string;
+  destination_lat?: number;
+  destination_lng?: number;
+  destination_address?: string;
   status: RideStatus;
   price?: number;
   distance_km?: number;

@@ -13,6 +13,7 @@ import { usePassengerRide } from '../../hooks/useRide';
 import { useDriverVehicle } from '../../hooks/useVehicle';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { formatCurrency } from '../../lib/format';
+import { rideOrigin, rideDestination } from '../../lib/ride';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'ActiveRide'>;
@@ -87,8 +88,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [ride.id]);
 
-  const origin = ride.origin ?? { lat: 28.5383, lng: -81.3792 };
-  const dest = ride.destination ?? { lat: 28.4312, lng: -81.3081 };
+  const origin = rideOrigin(ride);
+  const dest = rideDestination(ride);
 
   const { route: path } = useRideRoute(
     { lat: origin.lat, lng: origin.lng },

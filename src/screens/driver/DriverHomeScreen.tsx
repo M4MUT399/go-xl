@@ -8,6 +8,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useDriverRide } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
+import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
@@ -102,7 +103,7 @@ export function DriverHomeScreen({ navigation }: Props) {
               <Text style={styles.requestIcon}>📍</Text>
               <View>
                 <Text style={styles.requestLabel}>Origem</Text>
-                <Text style={styles.requestAddr} numberOfLines={1}>{pendingRide.origin?.address ?? '—'}</Text>
+                <Text style={styles.requestAddr} numberOfLines={1}>{rideOrigin(pendingRide).address}</Text>
               </View>
             </View>
             <View style={styles.requestDivider} />
@@ -110,7 +111,7 @@ export function DriverHomeScreen({ navigation }: Props) {
               <Text style={styles.requestIcon}>🏁</Text>
               <View>
                 <Text style={styles.requestLabel}>Destino</Text>
-                <Text style={styles.requestAddr} numberOfLines={1}>{pendingRide.destination?.address ?? '—'}</Text>
+                <Text style={styles.requestAddr} numberOfLines={1}>{rideDestination(pendingRide).address}</Text>
               </View>
             </View>
           </View>
