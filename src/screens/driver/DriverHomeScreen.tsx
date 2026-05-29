@@ -291,6 +291,10 @@ const styles = StyleSheet.create({
   },
   scheduledBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
   rideRequestSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
