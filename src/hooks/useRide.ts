@@ -268,6 +268,7 @@ export function useScheduledRides(passengerId: string | undefined) {
 
 export function useDriverRide(driverId: string | undefined) {
   const [pendingRide, setPendingRide] = useState<Ride | null>(null);
+  const [pendingScheduledRide, setPendingScheduledRide] = useState<Ride | null>(null);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
 
@@ -286,6 +287,20 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => setPendingRide(payload.new as Ride)
       )
+      // Nova corrida agendada — aparece como card de pedido para o motorista aceitar
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'rides',
+          filter: `status=eq.scheduled`,
+        },
+        (payload) => {
+          const ride = payload.new as Ride;
+          if (!ride.driver_id) setPendingScheduledRide(ride);
+        }
+      )
       // Corridas agendadas ativadas chegam como UPDATE (scheduled→requesting)
       .on(
         'postgres_changes',
@@ -297,7 +312,6 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          // Ignora se já tem motorista (não é uma nova solicitação)
           if (!ride.driver_id) setPendingRide(ride);
         }
       )
@@ -340,6 +354,23 @@ export function useDriverRide(driverId: string | undefined) {
     return data as Ride;
   }, [driverId]);
 
+  const confirmScheduledRide = useCallback(async (rideId: string): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from('rides')
+      .update({ driver_id: driverId })
+      .eq('id', rideId)
+      .is('driver_id', null)
+      .eq('status', 'scheduled')
+      .select()
+      .single();
+
+    if (error || !data) return false;
+    setPendingScheduledRide(null);
+    // Notifica o passageiro que seu motorista foi confirmado
+    notifyPassenger((data as Ride).passenger_id);
+    return true;
+  }, [driverId]);
+
   const updateRideStatus = useCallback(async (rideId: string, status: RideStatus) => {
     await supabase
       .from('rides')
@@ -347,7 +378,11 @@ export function useDriverRide(driverId: string | undefined) {
       .eq('id', rideId);
   }, []);
 
-  return { pendingRide, activeRide, acceptRide, updateRideStatus, setPendingRide };
+  return {
+    pendingRide, pendingScheduledRide,
+    activeRide, acceptRide, confirmScheduledRide,
+    updateRideStatus, setPendingRide, setPendingScheduledRide,
+  };
 }
 
 function haversineDistance(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {

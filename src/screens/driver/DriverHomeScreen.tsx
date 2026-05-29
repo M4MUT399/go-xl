@@ -16,9 +16,10 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Driver
 export function DriverHomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { location } = useLocation();
-  const { pendingRide, setPendingRide, acceptRide } = useDriverRide(profile?.id);
+  const { pendingRide, pendingScheduledRide, setPendingRide, setPendingScheduledRide, acceptRide, confirmScheduledRide } = useDriverRide(profile?.id);
   const [isOnline, setIsOnline] = useState(false);
   const [accepting, setAccepting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     if (!location || !profile?.id) return;
@@ -41,6 +42,19 @@ export function DriverHomeScreen({ navigation }: Props) {
     } else {
       Alert.alert('Ops', 'Corrida já foi aceita por outro motorista.');
       setPendingRide(null);
+    }
+  }
+
+  async function handleConfirmScheduled() {
+    if (!pendingScheduledRide) return;
+    setConfirming(true);
+    const ok = await confirmScheduledRide(pendingScheduledRide.id);
+    setConfirming(false);
+    if (ok) {
+      Alert.alert('✅ Corrida confirmada!', 'O passageiro foi notificado que você irá buscá-lo.');
+    } else {
+      Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
+      setPendingScheduledRide(null);
     }
   }
 
@@ -99,6 +113,77 @@ export function DriverHomeScreen({ navigation }: Props) {
           <Text style={styles.scheduledBtnText}>🗓️  Ver corridas agendadas</Text>
         </TouchableOpacity>
       </SafeAreaView>
+
+      {pendingScheduledRide && isOnline && !pendingRide && (
+        <View style={styles.rideRequestSheet}>
+          <View style={styles.requestHandle} />
+
+          <View style={styles.scheduledHeader}>
+            <Text style={styles.scheduledIcon}>🗓️</Text>
+            <View>
+              <Text style={styles.requestTitle}>Corrida agendada!</Text>
+              {pendingScheduledRide.scheduled_for && (
+                <Text style={styles.scheduledWhen}>
+                  {new Date(pendingScheduledRide.scheduled_for).toLocaleDateString('en-US', { day: '2-digit', month: 'short' })}
+                  {' às '}
+                  {new Date(pendingScheduledRide.scheduled_for).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.requestDetails}>
+            <View style={styles.requestRow}>
+              <Text style={styles.requestIcon}>📍</Text>
+              <View>
+                <Text style={styles.requestLabel}>Origem</Text>
+                <Text style={styles.requestAddr} numberOfLines={1}>{rideOrigin(pendingScheduledRide).address}</Text>
+              </View>
+            </View>
+            <View style={styles.requestDivider} />
+            <View style={styles.requestRow}>
+              <Text style={styles.requestIcon}>🏁</Text>
+              <View>
+                <Text style={styles.requestLabel}>Destino</Text>
+                <Text style={styles.requestAddr} numberOfLines={1}>{rideDestination(pendingScheduledRide).address}</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.requestMeta}>
+            <View style={styles.metaItem}>
+              <Text style={styles.metaValue}>{formatDistance(pendingScheduledRide.distance_km)}</Text>
+              <Text style={styles.metaLabel}>Distância</Text>
+            </View>
+            <View style={styles.metaDivider} />
+            <View style={styles.metaItem}>
+              <Text style={styles.metaValue}>{pendingScheduledRide.duration_min} min</Text>
+              <Text style={styles.metaLabel}>Duração est.</Text>
+            </View>
+            <View style={styles.metaDivider} />
+            <View style={styles.metaItem}>
+              <Text style={[styles.metaValue, styles.priceValue]}>{formatCurrency(pendingScheduledRide.price)}</Text>
+              <Text style={styles.metaLabel}>Valor</Text>
+            </View>
+          </View>
+
+          <View style={styles.requestActions}>
+            <TouchableOpacity
+              style={styles.declineBtn}
+              onPress={() => setPendingScheduledRide(null)}
+            >
+              <Text style={styles.declineText}>Recusar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.acceptBtn, confirming && { opacity: 0.7 }]}
+              onPress={handleConfirmScheduled}
+              disabled={confirming}
+            >
+              <Text style={styles.acceptText}>{confirming ? 'Confirmando...' : 'Confirmar'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {pendingRide && isOnline && (
         <View style={styles.rideRequestSheet}>
@@ -218,7 +303,10 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   requestHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.gray[300], alignSelf: 'center', marginBottom: 16 },
-  requestTitle: { fontSize: 22, fontWeight: '800', color: Colors.primary, marginBottom: 16 },
+  scheduledHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  scheduledIcon: { fontSize: 32 },
+  scheduledWhen: { fontSize: 14, color: Colors.accent, fontWeight: '700', marginTop: 2 },
+  requestTitle: { fontSize: 22, fontWeight: '800', color: Colors.primary },
   requestDetails: { backgroundColor: Colors.gray[100], borderRadius: 14, padding: 14, marginBottom: 16 },
   requestRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   requestIcon: { fontSize: 18, marginRight: 12 },
