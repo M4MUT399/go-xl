@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RouteProp } from '@react-navigation/native';
+import { RouteProp, useIsFocused } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
@@ -12,6 +12,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide } from '../../hooks/useRide';
 import { useDriverVehicle } from '../../hooks/useVehicle';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
+import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 
@@ -33,7 +34,10 @@ const STATUS_LABELS: Record<RideStatus, string> = {
 export function ActiveRideScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { cancelRide } = usePassengerRide(profile?.id);
+  const isFocused = useIsFocused();
   const [ride, setRide] = useState<Ride>(route.params.ride);
+
+  useChatAlert(ride.id, profile?.id, isFocused);
   const [driverName, setDriverName] = useState('Motorista');
   const vehicle = useDriverVehicle(ride.driver_id);
 

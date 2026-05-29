@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Alert } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RouteProp } from '@react-navigation/native';
+import { RouteProp, useIsFocused } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { Button } from '../../components/common/Button';
@@ -10,6 +10,7 @@ import { useDriverRide } from '../../hooks/useRide';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
+import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
@@ -26,8 +27,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { location } = useLocation();
   const { updateRideStatus } = useDriverRide(profile?.id);
+  const isFocused = useIsFocused();
   const [phase, setPhase] = useState<Phase>('pickup');
   const [loading, setLoading] = useState(false);
+
+  useChatAlert(ride.id, profile?.id, isFocused);
 
   const origin = rideOrigin(ride);
   const dest = rideDestination(ride);

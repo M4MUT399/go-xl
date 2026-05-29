@@ -45,6 +45,18 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
 }
 
+/** Dispara uma notificação local imediata (banner na tela + som). Funciona no Expo Go. */
+export async function showLocalNotification(title: string, body: string, data?: Record<string, unknown>) {
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: { title, body, sound: 'default', data: data ?? {} },
+      trigger: null,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
 export interface PushMessage {
   to: string;
   title: string;
