@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform,
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Alert,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,6 +8,8 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
+import { usePassengerRide } from '../../hooks/useRide';
 import { useDriverVehicle } from '../../hooks/useVehicle';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { formatCurrency } from '../../lib/format';
@@ -27,9 +29,27 @@ const STATUS_LABELS: Record<RideStatus, string> = {
 };
 
 export function ActiveRideScreen({ navigation, route }: Props) {
+  const { profile } = useAuth();
+  const { cancelRide } = usePassengerRide(profile?.id);
   const [ride, setRide] = useState<Ride>(route.params.ride);
   const [driverName, setDriverName] = useState('Motorista');
   const vehicle = useDriverVehicle(ride.driver_id);
+
+  const canCancel = ride.status === 'accepted' || ride.status === 'driver_en_route';
+
+  function handleCancel() {
+    Alert.alert('Cancelar corrida', 'Tem certeza que deseja cancelar? O motorista será avisado.', [
+      { text: 'Não', style: 'cancel' },
+      {
+        text: 'Sim, cancelar',
+        style: 'destructive',
+        onPress: async () => {
+          await cancelRide(ride.id);
+          navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
+        },
+      },
+    ]);
+  }
 
   useEffect(() => {
     if (ride.driver_id) {
@@ -55,6 +75,9 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           setRide(updated);
           if (updated.status === 'completed') {
             navigation.replace('RateRide', { ride: updated });
+          } else if (updated.status === 'cancelled') {
+            Alert.alert('Corrida cancelada', 'O motorista cancelou a corrida.');
+            navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
           }
         }
       )
@@ -150,6 +173,12 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             <Text style={styles.detailText}>{formatCurrency(ride.price)}</Text>
           </View>
         </View>
+
+        {canCancel && (
+          <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
+            <Text style={styles.cancelBtnText}>Cancelar corrida</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -175,6 +204,8 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success, marginRight: 10 },
   statusText: { color: Colors.white, fontSize: 15, fontWeight: '600' },
   etaText: { color: Colors.accent, fontSize: 15, fontWeight: '700', marginLeft: 6 },
+  cancelBtn: { marginTop: 14, alignItems: 'center', paddingVertical: 12 },
+  cancelBtnText: { color: Colors.error, fontSize: 15, fontWeight: '700' },
   bottomSheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,

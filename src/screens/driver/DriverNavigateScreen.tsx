@@ -1,15 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Alert } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
-import { RootStackParamList, RideStatus } from '../../types';
+import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { Button } from '../../components/common/Button';
 import { useDriverRide } from '../../hooks/useRide';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { formatCurrency } from '../../lib/format';
+import { supabase } from '../../lib/supabase';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverNavigate'>;
@@ -29,6 +30,38 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const origin = ride.origin ?? { lat: 28.5383, lng: -81.3792, address: 'Origem' };
   const dest = ride.destination ?? { lat: 28.4312, lng: -81.3081, address: 'Destino' };
   const target = phase === 'pickup' ? origin : dest;
+
+  // Detecta cancelamento pelo passageiro
+  useEffect(() => {
+    const channel = supabase
+      .channel(`driver-ride-${ride.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${ride.id}` },
+        (payload) => {
+          if ((payload.new as Ride).status === 'cancelled') {
+            Alert.alert('Corrida cancelada', 'O passageiro cancelou a corrida.');
+            navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
+          }
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [ride.id]);
+
+  function handleCancel() {
+    Alert.alert('Cancelar corrida', 'Tem certeza? O passageiro será avisado.', [
+      { text: 'Não', style: 'cancel' },
+      {
+        text: 'Sim, cancelar',
+        style: 'destructive',
+        onPress: async () => {
+          await updateRideStatus(ride.id, 'cancelled' as RideStatus);
+          navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
+        },
+      },
+    ]);
+  }
 
   async function handleNextPhase() {
     setLoading(true);
@@ -125,6 +158,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           loading={loading}
           style={styles.btn}
         />
+        {phase === 'pickup' && (
+          <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
+            <Text style={styles.cancelBtnText}>Cancelar corrida</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -177,6 +215,8 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 8 },
   actionBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.gray[100], alignItems: 'center', justifyContent: 'center' },
   btn: {},
+  cancelBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 10 },
+  cancelBtnText: { color: Colors.error, fontSize: 15, fontWeight: '700' },
   driverMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   markerPickup: { width: 14, height: 14, borderRadius: 7, backgroundColor: Colors.accent, borderWidth: 2, borderColor: Colors.white },
   markerDropoff: { width: 14, height: 14, borderRadius: 3, backgroundColor: Colors.primary, borderWidth: 2, borderColor: Colors.white },
