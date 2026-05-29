@@ -9,6 +9,7 @@ import { Button } from '../../components/common/Button';
 import { useDriverRide } from '../../hooks/useRide';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
+import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { formatCurrency } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
 
@@ -30,6 +31,12 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const origin = ride.origin ?? { lat: 28.5383, lng: -81.3792, address: 'Origem' };
   const dest = ride.destination ?? { lat: 28.4312, lng: -81.3081, address: 'Destino' };
   const target = phase === 'pickup' ? origin : dest;
+
+  // Rota real (ruas) do motorista até o alvo (embarque ou destino)
+  const { route: path } = useRideRoute(
+    location ? { lat: location.lat, lng: location.lng } : null,
+    { lat: target.lat, lng: target.lng }
+  );
 
   // Detecta cancelamento pelo passageiro
   useEffect(() => {
@@ -103,13 +110,15 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         </Marker>
         {location && (
           <Polyline
-            coordinates={[
-              { latitude: location.lat, longitude: location.lng },
-              { latitude: target.lat, longitude: target.lng },
-            ]}
+            coordinates={
+              path?.coordinates ?? [
+                { latitude: location.lat, longitude: location.lng },
+                { latitude: target.lat, longitude: target.lng },
+              ]
+            }
             strokeColor={Colors.accent}
-            strokeWidth={3}
-            lineDashPattern={[6, 3]}
+            strokeWidth={path ? 4 : 3}
+            lineDashPattern={path ? undefined : [6, 3]}
           />
         )}
       </MapView>

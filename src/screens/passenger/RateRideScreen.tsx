@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, Keyboard } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../types';
@@ -70,7 +70,15 @@ export function RateRideScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.successIcon}>
           <Text style={styles.successEmoji}>✓</Text>
         </View>
@@ -126,31 +134,32 @@ export function RateRideScreen({ navigation, route }: Props) {
             )}
           </View>
         </View>
-      </View>
 
-      <View style={styles.footer}>
-        {payment !== 'paid' && (
+        <View style={styles.footer}>
+          {payment !== 'paid' && (
+            <Button
+              title={`Pagar ${formatCurrency(fare)}`}
+              onPress={charge}
+              loading={payment === 'processing'}
+            />
+          )}
           <Button
-            title={`Pagar ${formatCurrency(fare)}`}
-            onPress={charge}
-            loading={payment === 'processing'}
+            title="Enviar avaliação"
+            onPress={() => { Keyboard.dismiss(); handleSubmit(); }}
+            loading={loading}
+            variant={payment === 'paid' ? 'primary' : 'outline'}
           />
-        )}
-        <Button
-          title="Enviar avaliação"
-          onPress={handleSubmit}
-          loading={loading}
-          variant={payment === 'paid' ? 'primary' : 'outline'}
-        />
-        <Button title="Pular" onPress={handleSkip} variant="ghost" />
-      </View>
+          <Button title="Pular" onPress={handleSkip} variant="ghost" />
+        </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.white },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  content: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, paddingVertical: 24 },
   successIcon: {
     width: 80,
     height: 80,
@@ -195,5 +204,5 @@ const styles = StyleSheet.create({
   pendingText: { color: Colors.error, fontSize: 14, fontWeight: '700' },
   processingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   processingText: { color: Colors.gray[600], fontSize: 13, fontWeight: '600' },
-  footer: { paddingHorizontal: 24, paddingBottom: 32, gap: 8 },
+  footer: { width: '100%', paddingTop: 24, paddingBottom: 8, gap: 8 },
 });
