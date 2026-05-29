@@ -29,6 +29,7 @@ import { NotificationSettingsScreen } from '../screens/profile/NotificationSetti
 import { SupportScreen } from '../screens/profile/SupportScreen';
 import { TermsScreen } from '../screens/profile/TermsScreen';
 import { PaymentScreen } from '../screens/profile/PaymentScreen';
+import { ChatScreen } from '../screens/ChatScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -125,6 +126,7 @@ export function AppNavigator() {
             <Stack.Screen name="DriverTabs" component={DriverTabs} />
             <Stack.Screen name="DriverNavigate" component={DriverNavigateScreen} />
             <Stack.Screen name="VehicleForm" component={VehicleFormScreen} />
+            <Stack.Screen name="Chat" component={ChatScreen} />
             <Stack.Screen name="EditProfile" component={EditProfileScreen} />
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
             <Stack.Screen name="Support" component={SupportScreen} />
@@ -139,6 +141,7 @@ export function AppNavigator() {
             <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
             <Stack.Screen name="RateRide" component={RateRideScreen} />
             <Stack.Screen name="ScheduledRides" component={ScheduledRidesScreen} />
+            <Stack.Screen name="Chat" component={ChatScreen} />
             <Stack.Screen name="EditProfile" component={EditProfileScreen} />
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
             <Stack.Screen name="Support" component={SupportScreen} />

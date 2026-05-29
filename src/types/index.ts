@@ -116,4 +116,13 @@ export type RootStackParamList = {
   Terms: undefined;
   Payment: undefined;
   ScheduledRides: undefined;
+  Chat: { rideId: string; title: string };
 };
+
+export interface Message {
+  id: string;
+  ride_id: string;
+  sender_id: string;
+  text: string;
+  created_at: string;
+}

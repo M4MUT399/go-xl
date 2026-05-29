@@ -146,7 +146,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             <TouchableOpacity style={styles.actionBtn}>
               <Text>📞</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn}>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: 'Passageiro' })}
+            >
               <Text>💬</Text>
             </TouchableOpacity>
           </View>

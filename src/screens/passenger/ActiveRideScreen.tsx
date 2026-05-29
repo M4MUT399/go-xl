@@ -157,7 +157,10 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             <Text style={styles.actionIcon}>📞</Text>
             <Text style={styles.actionLabel}>Ligar</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionBtnWide}>
+          <TouchableOpacity
+            style={styles.actionBtnWide}
+            onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: driverName })}
+          >
             <Text style={styles.actionIcon}>💬</Text>
             <Text style={styles.actionLabel}>Mensagem</Text>
           </TouchableOpacity>

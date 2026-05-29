@@ -134,9 +134,37 @@ create policy "Usuário cria avaliação" on public.ratings
 create policy "Usuário vê suas avaliações" on public.ratings
   for select using (auth.uid() = from_user or auth.uid() = to_user);
 
+-- Chat entre passageiro e motorista
+create table public.messages (
+  id uuid default gen_random_uuid() primary key,
+  ride_id uuid references public.rides(id) on delete cascade not null,
+  sender_id uuid references public.profiles(id) not null,
+  text text not null,
+  created_at timestamptz default now()
+);
+
+alter table public.messages enable row level security;
+
+create policy "Participantes leem mensagens" on public.messages
+  for select using (
+    exists (
+      select 1 from public.rides r
+      where r.id = ride_id and (r.passenger_id = auth.uid() or r.driver_id = auth.uid())
+    )
+  );
+
+create policy "Participantes enviam mensagens" on public.messages
+  for insert with check (
+    sender_id = auth.uid() and exists (
+      select 1 from public.rides r
+      where r.id = ride_id and (r.passenger_id = auth.uid() or r.driver_id = auth.uid())
+    )
+  );
+
 -- Habilitar realtime nas tabelas principais
 alter publication supabase_realtime add table public.rides;
 alter publication supabase_realtime add table public.driver_locations;
+alter publication supabase_realtime add table public.messages;
 
 -- View: corrida com coordenadas como JSON (para facilitar leitura no app)
 create or replace view public.rides_with_locations as
