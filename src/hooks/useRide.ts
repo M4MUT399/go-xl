@@ -224,6 +224,11 @@ export function useScheduledRides(passengerId: string | undefined) {
       .select()
       .single();
     await refresh();
+    if (data) {
+      const ride = data as Ride;
+      const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
+      notifyOnlineDrivers(dest, Number(ride.price) || 0);
+    }
     return (data as Ride) ?? null;
   }, [refresh]);
 
@@ -254,6 +259,21 @@ export function useDriverRide(driverId: string | undefined) {
           filter: `status=eq.requesting`,
         },
         (payload) => setPendingRide(payload.new as Ride)
+      )
+      // Corridas agendadas ativadas chegam como UPDATE (scheduled→requesting)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'rides',
+          filter: `status=eq.requesting`,
+        },
+        (payload) => {
+          const ride = payload.new as Ride;
+          // Ignora se já tem motorista (não é uma nova solicitação)
+          if (!ride.driver_id) setPendingRide(ride);
+        }
       )
       .on(
         'postgres_changes',
