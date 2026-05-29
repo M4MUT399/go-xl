@@ -85,6 +85,7 @@ create table public.rides (
   price numeric(8,2),
   distance_km numeric(6,2),
   duration_min integer,
+  paid boolean default false,
   created_at timestamptz default now(),
   accepted_at timestamptz,
   completed_at timestamptz

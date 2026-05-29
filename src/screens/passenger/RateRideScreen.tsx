@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../types';
@@ -8,11 +8,14 @@ import { Button } from '../../components/common/Button';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { formatCurrency, formatDistance } from '../../lib/format';
+import { startCheckout } from '../../lib/payments';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
   route: RouteProp<RootStackParamList, 'RateRide'>;
 };
+
+type PaymentStatus = 'pending' | 'processing' | 'paid';
 
 export function RateRideScreen({ navigation, route }: Props) {
   const { ride } = route.params;
@@ -20,6 +23,33 @@ export function RateRideScreen({ navigation, route }: Props) {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [loading, setLoading] = useState(false);
+  const [payment, setPayment] = useState<PaymentStatus>('pending');
+  const autoCharged = useRef(false);
+
+  const fare = Number(ride.price) || 0;
+
+  async function charge() {
+    setPayment('processing');
+    const result = await startCheckout(fare, 'Corrida Go XL — Executive XL', ride.id);
+    if (result.status === 'completed') {
+      setPayment('paid');
+      // marca a corrida como paga (best-effort; ignora se a coluna não existir)
+      supabase.from('rides').update({ paid: true }).eq('id', ride.id).then(() => {});
+    } else {
+      setPayment('pending');
+      if (result.status === 'error') {
+        Alert.alert('Erro no pagamento', result.error ?? 'Tente novamente.');
+      }
+    }
+  }
+
+  // Cobra automaticamente ao concluir a corrida
+  useEffect(() => {
+    if (!autoCharged.current && fare > 0) {
+      autoCharged.current = true;
+      charge();
+    }
+  }, []);
 
   async function handleSubmit() {
     setLoading(true);
@@ -82,11 +112,36 @@ export function RateRideScreen({ navigation, route }: Props) {
             <Text style={styles.summaryLabel}>Valor</Text>
             <Text style={styles.summaryValue}>{formatCurrency(ride.price)}</Text>
           </View>
+          <View style={[styles.summaryRow, styles.payRow]}>
+            <Text style={styles.summaryLabel}>Pagamento</Text>
+            {payment === 'paid' ? (
+              <Text style={styles.paidText}>✓ Pago</Text>
+            ) : payment === 'processing' ? (
+              <View style={styles.processingRow}>
+                <ActivityIndicator size="small" color={Colors.accent} />
+                <Text style={styles.processingText}>Processando...</Text>
+              </View>
+            ) : (
+              <Text style={styles.pendingText}>Pendente</Text>
+            )}
+          </View>
         </View>
       </View>
 
       <View style={styles.footer}>
-        <Button title="Enviar avaliação" onPress={handleSubmit} loading={loading} />
+        {payment !== 'paid' && (
+          <Button
+            title={`Pagar ${formatCurrency(fare)}`}
+            onPress={charge}
+            loading={payment === 'processing'}
+          />
+        )}
+        <Button
+          title="Enviar avaliação"
+          onPress={handleSubmit}
+          loading={loading}
+          variant={payment === 'paid' ? 'primary' : 'outline'}
+        />
         <Button title="Pular" onPress={handleSkip} variant="ghost" />
       </View>
     </SafeAreaView>
@@ -132,8 +187,13 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summaryLabel: { color: Colors.gray[500], fontSize: 14 },
   summaryValue: { color: Colors.primary, fontSize: 14, fontWeight: '700' },
+  payRow: { borderTopWidth: 1, borderTopColor: Colors.gray[200], paddingTop: 10, marginTop: 2 },
+  paidText: { color: Colors.success, fontSize: 14, fontWeight: '800' },
+  pendingText: { color: Colors.error, fontSize: 14, fontWeight: '700' },
+  processingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  processingText: { color: Colors.gray[600], fontSize: 13, fontWeight: '600' },
   footer: { paddingHorizontal: 24, paddingBottom: 32, gap: 8 },
 });
