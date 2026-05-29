@@ -18,6 +18,7 @@ import { FindingDriverScreen } from '../screens/passenger/FindingDriverScreen';
 import { ActiveRideScreen } from '../screens/passenger/ActiveRideScreen';
 import { RateRideScreen } from '../screens/passenger/RateRideScreen';
 import { TripHistoryScreen } from '../screens/passenger/TripHistoryScreen';
+import { ScheduledRidesScreen } from '../screens/passenger/ScheduledRidesScreen';
 import { DriverHomeScreen } from '../screens/driver/DriverHomeScreen';
 import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
 import { EarningsScreen } from '../screens/driver/EarningsScreen';
@@ -137,6 +138,7 @@ export function AppNavigator() {
             <Stack.Screen name="FindingDriver" component={FindingDriverScreen} />
             <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
             <Stack.Screen name="RateRide" component={RateRideScreen} />
+            <Stack.Screen name="ScheduledRides" component={ScheduledRidesScreen} />
             <Stack.Screen name="EditProfile" component={EditProfileScreen} />
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
             <Stack.Screen name="Support" component={SupportScreen} />

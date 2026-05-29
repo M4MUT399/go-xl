@@ -20,6 +20,7 @@ type Props = {
 };
 
 const STATUS_LABELS: Record<RideStatus, string> = {
+  scheduled: 'Corrida agendada',
   requesting: 'Procurando motorista...',
   accepted: 'Motorista confirmado!',
   driver_en_route: 'Motorista a caminho',

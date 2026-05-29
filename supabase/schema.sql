@@ -80,11 +80,12 @@ create table public.rides (
   destination_lng double precision not null,
   destination_address text not null,
   status text not null default 'requesting' check (
-    status in ('requesting','accepted','driver_en_route','in_progress','completed','cancelled')
+    status in ('scheduled','requesting','accepted','driver_en_route','in_progress','completed','cancelled')
   ),
   price numeric(8,2),
   distance_km numeric(6,2),
   duration_min integer,
+  scheduled_for timestamptz,
   paid boolean default false,
   created_at timestamptz default now(),
   accepted_at timestamptz,

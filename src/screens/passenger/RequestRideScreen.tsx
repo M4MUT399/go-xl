@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  TextInput, ScrollView, Alert, ActivityIndicator,
+  TextInput, ScrollView, Alert, ActivityIndicator, Modal, Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -25,7 +26,7 @@ type Props = {
 export function RequestRideScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { location } = useLocation();
-  const { requestRide } = usePassengerRide(profile?.id);
+  const { requestRide, scheduleRide } = usePassengerRide(profile?.id);
 
   const [destinationText, setDestinationText] = useState('');
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
@@ -33,6 +34,8 @@ export function RequestRideScreen({ navigation }: Props) {
   const [searching, setSearching] = useState(false);
   const [originAddress, setOriginAddress] = useState('Sua localização atual');
   const [loading, setLoading] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState<Date>(() => new Date(Date.now() + 30 * 60 * 1000));
 
   const debouncedQuery = useDebounce(destinationText, 450);
 
@@ -92,6 +95,38 @@ export function RequestRideScreen({ navigation }: Props) {
       navigation.replace('FindingDriver', { ride });
     } else {
       Alert.alert('Erro', 'Não foi possível solicitar a corrida. Tente novamente.');
+    }
+  }
+
+  function openScheduler() {
+    setScheduledDate(new Date(Date.now() + 30 * 60 * 1000));
+    setShowPicker(true);
+  }
+
+  async function confirmSchedule() {
+    if (!selectedDest || !location) return;
+    if (scheduledDate.getTime() < Date.now() + 5 * 60 * 1000) {
+      Alert.alert('Atenção', 'Escolha um horário pelo menos 5 minutos no futuro.');
+      return;
+    }
+    setLoading(true);
+    const origin: Location = { lat: location.lat, lng: location.lng, address: originAddress };
+    const ride = await scheduleRide(
+      origin,
+      selectedDest,
+      scheduledDate,
+      route ? { distanceKm: route.distanceKm, durationMin: route.durationMin } : undefined
+    );
+    setLoading(false);
+    setShowPicker(false);
+    if (ride) {
+      Alert.alert(
+        'Corrida agendada!',
+        `Agendada para ${scheduledDate.toLocaleString('en-US', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}.`,
+        [{ text: 'Ver agendadas', onPress: () => navigation.replace('ScheduledRides') }]
+      );
+    } else {
+      Alert.alert('Erro', 'Não foi possível agendar. Tente novamente.');
     }
   }
 
@@ -206,8 +241,36 @@ export function RequestRideScreen({ navigation }: Props) {
             onPress={handleRequest}
             loading={loading}
           />
+          <TouchableOpacity style={styles.scheduleBtn} onPress={openScheduler}>
+            <Text style={styles.scheduleBtnText}>🗓️  Agendar para depois</Text>
+          </TouchableOpacity>
         </View>
       )}
+
+      <Modal visible={showPicker} transparent animationType="slide" onRequestClose={() => setShowPicker(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>Agendar corrida</Text>
+            <Text style={styles.modalSub}>Escolha data e hora</Text>
+
+            <View style={styles.pickerWrap}>
+              <DateTimePicker
+                value={scheduledDate}
+                mode={Platform.OS === 'ios' ? 'datetime' : 'date'}
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                minimumDate={new Date()}
+                onChange={(_e, d) => d && setScheduledDate(d)}
+                themeVariant="light"
+              />
+            </View>
+
+            <Button title="Confirmar agendamento" onPress={confirmSchedule} loading={loading} />
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowPicker(false)}>
+              <Text style={styles.modalCancelText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -263,6 +326,21 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.gray[100],
   },
+  scheduleBtn: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
+  scheduleBtnText: { color: Colors.primary, fontSize: 15, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  modalSheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 36,
+  },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: Colors.primary, textAlign: 'center' },
+  modalSub: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', marginTop: 4, marginBottom: 8 },
+  pickerWrap: { alignItems: 'center', marginBottom: 12 },
+  modalCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
+  modalCancelText: { color: Colors.gray[500], fontSize: 15, fontWeight: '600' },
   suggestionIcon: { fontSize: 18, marginRight: 12 },
   suggestionTextWrap: { flex: 1 },
   suggestionText: { fontSize: 14, color: Colors.gray[800], fontWeight: '500' },

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
-import type { Ride, RideStatus, Location } from '../types';
+import type { Ride, RideStatus, Location, RideRecord } from '../types';
 
 async function notifyOnlineDrivers(destination: string, price: number) {
   const { data: online } = await supabase
@@ -136,6 +136,44 @@ export function usePassengerRide(passengerId: string | undefined) {
     return data as Ride;
   }, [passengerId]);
 
+  const scheduleRide = useCallback(async (
+    origin: Location,
+    destination: Location,
+    scheduledFor: Date,
+    routeInfo?: { distanceKm: number; durationMin: number }
+  ): Promise<Ride | null> => {
+    if (!passengerId) return null;
+
+    const distanceKm = routeInfo?.distanceKm ?? haversineDistance(
+      { lat: origin.lat, lng: origin.lng },
+      { lat: destination.lat, lng: destination.lng }
+    );
+    const price = estimatePrice(distanceKm);
+    const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
+
+    const { data, error } = await supabase
+      .from('rides')
+      .insert({
+        passenger_id: passengerId,
+        origin_lat: origin.lat,
+        origin_lng: origin.lng,
+        origin_address: origin.address,
+        destination_lat: destination.lat,
+        destination_lng: destination.lng,
+        destination_address: destination.address,
+        status: 'scheduled' as RideStatus,
+        price,
+        distance_km: distanceKm,
+        duration_min: duration,
+        scheduled_for: scheduledFor.toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) return null;
+    return data as Ride;
+  }, [passengerId]);
+
   const cancelRide = useCallback(async (rideId: string) => {
     await supabase
       .from('rides')
@@ -144,7 +182,47 @@ export function usePassengerRide(passengerId: string | undefined) {
     setActiveRide(null);
   }, []);
 
-  return { activeRide, requestRide, cancelRide };
+  return { activeRide, requestRide, scheduleRide, cancelRide };
+}
+
+export function useScheduledRides(passengerId: string | undefined) {
+  const [rides, setRides] = useState<RideRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!passengerId) return;
+    setLoading(true);
+    const { data } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('passenger_id', passengerId)
+      .eq('status', 'scheduled')
+      .order('scheduled_for', { ascending: true });
+    setRides((data as RideRecord[]) ?? []);
+    setLoading(false);
+  }, [passengerId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const activate = useCallback(async (rideId: string): Promise<Ride | null> => {
+    const { data } = await supabase
+      .from('rides')
+      .update({ status: 'requesting' as RideStatus })
+      .eq('id', rideId)
+      .select()
+      .single();
+    await refresh();
+    return (data as Ride) ?? null;
+  }, [refresh]);
+
+  const cancel = useCallback(async (rideId: string) => {
+    await supabase.from('rides').update({ status: 'cancelled' as RideStatus }).eq('id', rideId);
+    await refresh();
+  }, [refresh]);
+
+  return { rides, loading, refresh, activate, cancel };
 }
 
 export function useDriverRide(driverId: string | undefined) {

@@ -1,6 +1,7 @@
 export type UserType = 'passenger' | 'driver';
 
 export type RideStatus =
+  | 'scheduled'
   | 'requesting'
   | 'accepted'
   | 'driver_en_route'
@@ -59,6 +60,7 @@ export interface Ride {
   price?: number;
   distance_km?: number;
   duration_min?: number;
+  scheduled_for?: string;
   created_at: string;
   accepted_at?: string;
   completed_at?: string;
@@ -81,6 +83,7 @@ export interface RideRecord {
   price?: number;
   distance_km?: number;
   duration_min?: number;
+  scheduled_for?: string;
   created_at: string;
   accepted_at?: string;
   completed_at?: string;
@@ -112,4 +115,5 @@ export type RootStackParamList = {
   Support: undefined;
   Terms: undefined;
   Payment: undefined;
+  ScheduledRides: undefined;
 };

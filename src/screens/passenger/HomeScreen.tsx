@@ -114,9 +114,14 @@ export function HomeScreen({ navigation }: Props) {
               <Text style={styles.categoryText}>✦ Executive XL</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.avatar}>
-            <Text style={styles.avatarText}>{firstName[0]}</Text>
-          </TouchableOpacity>
+          <View style={styles.topActions}>
+            <TouchableOpacity style={styles.scheduleIcon} onPress={() => navigation.navigate('ScheduledRides')}>
+              <Text style={styles.scheduleIconText}>🗓️</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.avatar}>
+              <Text style={styles.avatarText}>{firstName[0]}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.bottomArea} pointerEvents="box-none">
@@ -205,6 +210,16 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   categoryText: { color: Colors.accent, fontSize: 11, fontWeight: '600' },
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  scheduleIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scheduleIconText: { fontSize: 18 },
   avatar: {
     width: 42,
     height: 42,
