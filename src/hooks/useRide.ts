@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
@@ -228,12 +228,13 @@ export function useScheduledRides(passengerId: string | undefined) {
 export function useDriverRide(driverId: string | undefined) {
   const [pendingRide, setPendingRide] = useState<Ride | null>(null);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
+  const channelId = useRef(Math.random().toString(36).slice(2)).current;
 
   useEffect(() => {
     if (!driverId) return;
 
     const channel = supabase
-      .channel('driver-ride')
+      .channel(`driver-ride-${driverId}-${channelId}`)
       .on(
         'postgres_changes',
         {
