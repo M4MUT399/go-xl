@@ -91,6 +91,13 @@ export function DriverHomeScreen({ navigation }: Props) {
             </Text>
           </View>
         )}
+
+        <TouchableOpacity
+          style={styles.scheduledBtn}
+          onPress={() => navigation.navigate('DriverScheduledRides')}
+        >
+          <Text style={styles.scheduledBtnText}>🗓️  Ver corridas agendadas</Text>
+        </TouchableOpacity>
       </SafeAreaView>
 
       {pendingRide && isOnline && (
@@ -187,6 +194,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   offlineBannerText: { color: Colors.gray[300], fontSize: 13, textAlign: 'center' },
+  scheduledBtn: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    backgroundColor: 'rgba(201,168,76,0.15)',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(201,168,76,0.4)',
+  },
+  scheduledBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
   rideRequestSheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,

@@ -181,6 +181,8 @@ export function usePassengerRide(passengerId: string | undefined) {
       .single();
 
     if (error) return null;
+    // Notifica motoristas online imediatamente — igual ao requestRide
+    notifyOnlineDrivers(destination.address, price);
     return data as Ride;
   }, [passengerId]);
 
@@ -217,27 +219,51 @@ export function useScheduledRides(passengerId: string | undefined) {
   }, [refresh]);
 
   const activate = useCallback(async (rideId: string): Promise<Ride | null> => {
+    // Verifica se já tem motorista pré-confirmado
+    const { data: current } = await supabase
+      .from('rides').select('driver_id,destination_address,price').eq('id', rideId).single();
+    const preAssigned = !!(current as { driver_id?: string })?.driver_id;
+
+    const nextStatus: RideStatus = preAssigned ? 'accepted' : 'requesting';
+    const extra = preAssigned ? { accepted_at: new Date().toISOString() } : {};
+
     const { data } = await supabase
       .from('rides')
-      .update({ status: 'requesting' as RideStatus })
+      .update({ status: nextStatus, ...extra })
       .eq('id', rideId)
       .select()
       .single();
     await refresh();
+
     if (data) {
       const ride = data as Ride;
-      const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
-      notifyOnlineDrivers(dest, Number(ride.price) || 0);
+      if (preAssigned) {
+        // Notifica o motorista pré-confirmado
+        notifyPassenger(ride.passenger_id); // reutiliza lógica de push
+      } else {
+        const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
+        notifyOnlineDrivers(dest, Number(ride.price) || 0);
+      }
     }
     return (data as Ride) ?? null;
   }, [refresh]);
+
+  const claimScheduledRide = useCallback(async (rideId: string, driverId: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('rides')
+      .update({ driver_id: driverId })
+      .eq('id', rideId)
+      .is('driver_id', null) // apenas se ainda sem motorista (evita dupla confirmação)
+      .eq('status', 'scheduled');
+    return !error;
+  }, []);
 
   const cancel = useCallback(async (rideId: string) => {
     await supabase.from('rides').update({ status: 'cancelled' as RideStatus }).eq('id', rideId);
     await refresh();
   }, [refresh]);
 
-  return { rides, loading, refresh, activate, cancel };
+  return { rides, loading, refresh, activate, cancel, claimScheduledRide };
 }
 
 export function useDriverRide(driverId: string | undefined) {

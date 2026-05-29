@@ -125,6 +125,7 @@ export type RootStackParamList = {
   Terms: undefined;
   Payment: undefined;
   ScheduledRides: undefined;
+  DriverScheduledRides: undefined;
   Chat: { rideId: string; title: string };
 };
 

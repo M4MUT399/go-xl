@@ -21,6 +21,7 @@ import { TripHistoryScreen } from '../screens/passenger/TripHistoryScreen';
 import { ScheduledRidesScreen } from '../screens/passenger/ScheduledRidesScreen';
 import { DriverHomeScreen } from '../screens/driver/DriverHomeScreen';
 import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
+import { DriverScheduledRidesScreen } from '../screens/driver/DriverScheduledRidesScreen';
 import { EarningsScreen } from '../screens/driver/EarningsScreen';
 import { VehicleFormScreen } from '../screens/driver/VehicleFormScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
@@ -125,6 +126,7 @@ export function AppNavigator() {
           <>
             <Stack.Screen name="DriverTabs" component={DriverTabs} />
             <Stack.Screen name="DriverNavigate" component={DriverNavigateScreen} />
+            <Stack.Screen name="DriverScheduledRides" component={DriverScheduledRidesScreen} />
             <Stack.Screen name="VehicleForm" component={VehicleFormScreen} />
             <Stack.Screen name="Chat" component={ChatScreen} />
             <Stack.Screen name="EditProfile" component={EditProfileScreen} />
