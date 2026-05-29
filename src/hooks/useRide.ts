@@ -272,6 +272,22 @@ export function useDriverRide(driverId: string | undefined) {
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
 
+  // Fetch inicial: pega a corrida agendada mais próxima ainda sem motorista
+  useEffect(() => {
+    if (!driverId) return;
+    supabase
+      .from('rides')
+      .select('*')
+      .eq('status', 'scheduled')
+      .is('driver_id', null)
+      .order('scheduled_for', { ascending: true })
+      .limit(1)
+      .single()
+      .then(({ data }) => {
+        if (data) setPendingScheduledRide(data as Ride);
+      });
+  }, [driverId]);
+
   useEffect(() => {
     if (!driverId) return;
 

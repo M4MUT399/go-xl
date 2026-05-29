@@ -114,7 +114,7 @@ export function DriverHomeScreen({ navigation }: Props) {
         </TouchableOpacity>
       </SafeAreaView>
 
-      {pendingScheduledRide && isOnline && !pendingRide && (
+      {pendingScheduledRide && !pendingRide && (
         <View style={styles.rideRequestSheet}>
           <View style={styles.requestHandle} />
 
