@@ -14,7 +14,7 @@ export function useRideHistory(userId: string | undefined, userType: UserType) {
       .from('rides')
       .select('*')
       .eq(column, userId)
-      .in('status', ['completed', 'cancelled'])
+      .in('status', ['completed', 'cancelled', 'scheduled'])
       .order('created_at', { ascending: false });
     setRides((data as RideRecord[]) ?? []);
     setLoading(false);

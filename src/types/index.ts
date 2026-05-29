@@ -92,6 +92,7 @@ export interface RideRecord {
   distance_km?: number;
   duration_min?: number;
   scheduled_for?: string;
+  paid?: boolean;
   created_at: string;
   accepted_at?: string;
   completed_at?: string;

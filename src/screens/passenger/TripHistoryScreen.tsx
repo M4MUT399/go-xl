@@ -1,34 +1,68 @@
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, RefreshControl, ActivityIndicator } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useRideHistory } from '../../hooks/useRideHistory';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import type { RideRecord } from '../../types';
 
+type Filter = 'all' | 'completed' | 'scheduled' | 'cancelled';
+
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: 'Todas' },
+  { key: 'completed', label: 'Concluídas' },
+  { key: 'scheduled', label: 'Agendadas' },
+  { key: 'cancelled', label: 'Canceladas' },
+];
+
 export function TripHistoryScreen() {
   const { profile } = useAuth();
   const { rides, loading, refresh } = useRideHistory(profile?.id, 'passenger');
+  const [filter, setFilter] = useState<Filter>('all');
+
+  useFocusEffect(
+    React.useCallback(() => {
+      refresh();
+    }, [refresh])
+  );
+
+  const filtered = useMemo(
+    () => (filter === 'all' ? rides : rides.filter((r) => r.status === filter)),
+    [rides, filter]
+  );
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Suas viagens</Text>
-        <Text style={styles.subtitle}>{rides.length} {rides.length === 1 ? 'corrida' : 'corridas'}</Text>
+        <Text style={styles.subtitle}>{filtered.length} {filtered.length === 1 ? 'corrida' : 'corridas'}</Text>
+      </View>
+
+      <View style={styles.tabsWrap}>
+        {FILTERS.map((f) => (
+          <TouchableOpacity
+            key={f.key}
+            style={[styles.tab, filter === f.key && styles.tabActive]}
+            onPress={() => setFilter(f.key)}
+          >
+            <Text style={[styles.tabText, filter === f.key && styles.tabTextActive]}>{f.label}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {loading && rides.length === 0 ? (
         <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
-          data={rides}
+          data={filtered}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={Colors.accent} />}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🚗</Text>
-              <Text style={styles.emptyTitle}>Nenhuma viagem ainda</Text>
+              <Text style={styles.emptyTitle}>Nenhuma viagem</Text>
               <Text style={styles.emptyText}>Suas corridas Executive XL aparecerão aqui</Text>
             </View>
           }
@@ -39,22 +73,35 @@ export function TripHistoryScreen() {
   );
 }
 
+function statusInfo(ride: RideRecord) {
+  switch (ride.status) {
+    case 'completed':
+      return { label: 'Concluída', style: 'completed' as const };
+    case 'cancelled':
+      return { label: 'Cancelada', style: 'cancelled' as const };
+    case 'scheduled':
+      return { label: 'Agendada', style: 'scheduled' as const };
+    default:
+      return { label: 'Em andamento', style: 'scheduled' as const };
+  }
+}
+
 function TripCard({ ride }: { ride: RideRecord }) {
-  const date = new Date(ride.created_at);
-  const cancelled = ride.status === 'cancelled';
+  const info = statusInfo(ride);
+  const isScheduled = ride.status === 'scheduled';
+  const refDate = isScheduled && ride.scheduled_for ? new Date(ride.scheduled_for) : new Date(ride.created_at);
 
   return (
     <View style={styles.card}>
       <View style={styles.cardTop}>
         <Text style={styles.cardDate}>
-          {date.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
+          {isScheduled ? '🗓️ ' : ''}
+          {refDate.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
           {' • '}
-          {date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+          {refDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
         </Text>
-        <View style={[styles.statusBadge, cancelled ? styles.statusCancelled : styles.statusCompleted]}>
-          <Text style={[styles.statusText, cancelled ? styles.statusTextCancelled : styles.statusTextCompleted]}>
-            {cancelled ? 'Cancelada' : 'Concluída'}
-          </Text>
+        <View style={[styles.badge, styles[`badge_${info.style}`]]}>
+          <Text style={[styles.badgeText, styles[`badgeText_${info.style}`]]}>{info.label}</Text>
         </View>
       </View>
 
@@ -70,10 +117,17 @@ function TripCard({ ride }: { ride: RideRecord }) {
         </View>
       </View>
 
-      {!cancelled && (
+      {ride.status !== 'cancelled' && (
         <View style={styles.cardFooter}>
           <Text style={styles.distance}>{formatDistance(ride.distance_km)}</Text>
-          <Text style={styles.price}>{formatCurrency(ride.price)}</Text>
+          <View style={styles.footerRight}>
+            {ride.status === 'completed' && (
+              <Text style={[styles.payTag, ride.paid ? styles.payTagPaid : styles.payTagUnpaid]}>
+                {ride.paid ? '✓ Pago' : 'Não pago'}
+              </Text>
+            )}
+            <Text style={styles.price}>{formatCurrency(ride.price)}</Text>
+          </View>
         </View>
       )}
     </View>
@@ -82,9 +136,14 @@ function TripCard({ ride }: { ride: RideRecord }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.offWhite },
-  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 },
+  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 },
   title: { fontSize: 28, fontWeight: '800', color: Colors.primary },
   subtitle: { fontSize: 14, color: Colors.gray[500], marginTop: 2 },
+  tabsWrap: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
+  tab: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: 'center', backgroundColor: Colors.white },
+  tabActive: { backgroundColor: Colors.primary },
+  tabText: { fontSize: 12, fontWeight: '600', color: Colors.gray[500] },
+  tabTextActive: { color: Colors.white },
   list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
   card: {
     backgroundColor: Colors.white,
@@ -99,12 +158,14 @@ const styles = StyleSheet.create({
   },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   cardDate: { fontSize: 12, color: Colors.gray[500] },
-  statusBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  statusCompleted: { backgroundColor: 'rgba(34,197,94,0.12)' },
-  statusCancelled: { backgroundColor: 'rgba(239,68,68,0.12)' },
-  statusText: { fontSize: 11, fontWeight: '700' },
-  statusTextCompleted: { color: Colors.success },
-  statusTextCancelled: { color: Colors.error },
+  badge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  badge_completed: { backgroundColor: 'rgba(34,197,94,0.12)' },
+  badge_cancelled: { backgroundColor: 'rgba(239,68,68,0.12)' },
+  badge_scheduled: { backgroundColor: 'rgba(201,168,76,0.15)' },
+  badgeText: { fontSize: 11, fontWeight: '700' },
+  badgeText_completed: { color: Colors.success },
+  badgeText_cancelled: { color: Colors.error },
+  badgeText_scheduled: { color: Colors.accent },
   route: { flexDirection: 'row' },
   routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
   dotOrigin: { width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.accent },
@@ -122,6 +183,10 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.gray[100],
   },
   distance: { fontSize: 13, color: Colors.gray[500] },
+  footerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  payTag: { fontSize: 11, fontWeight: '700', overflow: 'hidden', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  payTagPaid: { color: Colors.success, backgroundColor: 'rgba(34,197,94,0.12)' },
+  payTagUnpaid: { color: Colors.gray[500], backgroundColor: Colors.gray[100] },
   price: { fontSize: 17, fontWeight: '800', color: Colors.primary },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
   emptyEmoji: { fontSize: 48, marginBottom: 16 },
