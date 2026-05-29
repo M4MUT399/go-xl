@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
+import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
+export type { SurgeInfo } from '../lib/surge';
 
 async function notifyOnlineDrivers(destination: string, price: number) {
   const { data: online } = await supabase
@@ -57,10 +59,10 @@ const BASE_PRICE = 8.0;
 const MIN_PRICE = 15.0;
 const AVG_SPEED_MPH = 30;
 
-export function estimatePrice(distanceKm: number) {
+export function estimatePrice(distanceKm: number, surgeMultiplier = 1.0) {
   const miles = distanceKm * KM_TO_MILES;
-  const price = BASE_PRICE + miles * PRICE_PER_MILE;
-  return Math.max(price, MIN_PRICE);
+  const base = Math.max(BASE_PRICE + miles * PRICE_PER_MILE, MIN_PRICE);
+  return applyMultiplier(base, surgeMultiplier);
 }
 
 export function estimateDuration(distanceKm: number) {
@@ -109,7 +111,8 @@ export function usePassengerRide(passengerId: string | undefined) {
       { lat: origin.lat, lng: origin.lng },
       { lat: destination.lat, lng: destination.lng }
     );
-    const price = estimatePrice(distanceKm);
+    const { multiplier } = await getSurgeInfo();
+    const price = estimatePrice(distanceKm, multiplier);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
 
     const { data, error } = await supabase

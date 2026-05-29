@@ -12,7 +12,8 @@ import { Colors } from '../../constants/colors';
 import { Button } from '../../components/common/Button';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
-import { usePassengerRide, estimatePrice, estimateDuration } from '../../hooks/useRide';
+import { usePassengerRide, estimatePrice, estimateDuration, SurgeInfo } from '../../hooks/useRide';
+import { getSurgeInfo } from '../../lib/surge';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
@@ -36,6 +37,7 @@ export function RequestRideScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [scheduledDate, setScheduledDate] = useState<Date>(() => new Date(Date.now() + 30 * 60 * 1000));
+  const [surgeInfo, setSurgeInfo] = useState<SurgeInfo>({ multiplier: 1.0, label: null });
 
   const debouncedQuery = useDebounce(destinationText, 450);
 
@@ -71,8 +73,13 @@ export function RequestRideScreen({ navigation }: Props) {
   const distanceKm = route?.distanceKm
     ?? (selectedDest && location ? haversine(location, { lat: selectedDest.lat, lng: selectedDest.lng }) : null);
 
-  const estimatedPrice = distanceKm ? estimatePrice(distanceKm) : null;
+  const estimatedPrice = distanceKm ? estimatePrice(distanceKm, surgeInfo.multiplier) : null;
   const estimatedMin = route?.durationMin ?? (distanceKm ? estimateDuration(distanceKm) : null);
+
+  useEffect(() => {
+    if (!selectedDest) return;
+    getSurgeInfo().then(setSurgeInfo);
+  }, [selectedDest]);
 
   async function handleRequest() {
     if (!selectedDest || !location) {
@@ -236,6 +243,12 @@ export function RequestRideScreen({ navigation }: Props) {
             <Text style={styles.price}>{formatCurrency(estimatedPrice)}</Text>
           </View>
 
+          {surgeInfo.label && (
+            <View style={styles.surgeBadge}>
+              <Text style={styles.surgeText}>{surgeInfo.label}</Text>
+            </View>
+          )}
+
           <Button
             title="Solicitar Executive XL"
             onPress={handleRequest}
@@ -384,5 +397,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderWidth: 2,
     borderColor: Colors.white,
+  },
+  surgeBadge: {
+    backgroundColor: '#FFF3CD',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#FFCA2C',
+    alignItems: 'center',
+  },
+  surgeText: {
+    color: '#7B5800',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

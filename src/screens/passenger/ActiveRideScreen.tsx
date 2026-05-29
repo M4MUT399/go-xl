@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Alert,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
-import { RootStackParamList, Ride, RideStatus } from '../../types';
+import { RootStackParamList, Ride, RideStatus, DriverLocation } from '../../types';
 import { Colors } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
@@ -36,6 +36,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   const { cancelRide } = usePassengerRide(profile?.id);
   const isFocused = useIsFocused();
   const [ride, setRide] = useState<Ride>(route.params.ride);
+  const [driverLoc, setDriverLoc] = useState<{ lat: number; lng: number; heading?: number } | null>(null);
+  const mapRef = useRef<MapView>(null);
 
   useChatAlert(ride.id, profile?.id, isFocused);
   const [driverName, setDriverName] = useState('Motorista');
@@ -70,6 +72,40 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     }
   }, [ride.driver_id]);
 
+  // Rastrear motorista em tempo real
+  useEffect(() => {
+    if (!ride.driver_id) return;
+
+    // Busca posição inicial
+    supabase
+      .from('driver_locations')
+      .select('lat,lng,heading')
+      .eq('driver_id', ride.driver_id)
+      .single()
+      .then(({ data }) => {
+        if (data) setDriverLoc({ lat: data.lat, lng: data.lng, heading: data.heading ?? undefined });
+      });
+
+    const channel = supabase
+      .channel(`driver-loc-${ride.driver_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'driver_locations',
+          filter: `driver_id=eq.${ride.driver_id}`,
+        },
+        (payload) => {
+          const d = payload.new as DriverLocation;
+          setDriverLoc({ lat: d.lat, lng: d.lng, heading: d.heading });
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [ride.driver_id]);
+
   useEffect(() => {
     const channel = supabase
       .channel(`active-ride-${ride.id}`)
@@ -100,9 +136,24 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     { lat: dest.lat, lng: dest.lng }
   );
 
+  // Recentraliza o mapa para incluir motorista + origem + destino
+  useEffect(() => {
+    if (!driverLoc || !mapRef.current) return;
+    const coords = [
+      { latitude: driverLoc.lat, longitude: driverLoc.lng },
+      { latitude: origin.lat, longitude: origin.lng },
+      { latitude: dest.lat, longitude: dest.lng },
+    ];
+    mapRef.current.fitToCoordinates(coords, {
+      edgePadding: { top: 80, right: 60, bottom: 300, left: 60 },
+      animated: true,
+    });
+  }, [driverLoc]);
+
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         initialRegion={{
@@ -121,6 +172,18 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         <Marker coordinate={{ latitude: dest.lat, longitude: dest.lng }}>
           <View style={styles.markerDest} />
         </Marker>
+        {driverLoc && (
+          <Marker
+            coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            rotation={driverLoc.heading ?? 0}
+            tracksViewChanges={false}
+          >
+            <View style={styles.driverMarker}>
+              <Text style={styles.driverMarkerIcon}>🚗</Text>
+            </View>
+          </Marker>
+        )}
       </MapView>
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
@@ -276,4 +339,18 @@ const styles = StyleSheet.create({
   detailDivider: { height: 1, backgroundColor: Colors.gray[200], marginVertical: 10, marginLeft: 26 },
   markerOrigin: { width: 12, height: 12, borderRadius: 6, backgroundColor: Colors.accent, borderWidth: 2, borderColor: Colors.white },
   markerDest: { width: 12, height: 12, borderRadius: 2, backgroundColor: Colors.primary, borderWidth: 2, borderColor: Colors.white },
+  driverMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  driverMarkerIcon: { fontSize: 20 },
 });
