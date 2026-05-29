@@ -20,17 +20,21 @@ export function useLocation() {
         return;
       }
 
-      // 1) Posição em cache (rápida) para o mapa aparecer logo
+      // 1) Posição em cache SÓ se for recente (<60s) e precisa (<100m),
+      // para evitar mostrar um lugar antigo (ex.: onde o celular esteve antes)
       try {
-        const last = await ExpoLocation.getLastKnownPositionAsync();
+        const last = await ExpoLocation.getLastKnownPositionAsync({
+          maxAge: 60000,
+          requiredAccuracy: 100,
+        });
         if (last) setLocation({ lat: last.coords.latitude, lng: last.coords.longitude });
       } catch {
         // ignora — segue para a posição precisa
       }
 
-      // 2) Posição precisa
+      // 2) Posição precisa (alta precisão)
       const loc = await ExpoLocation.getCurrentPositionAsync({
-        accuracy: ExpoLocation.Accuracy.Balanced,
+        accuracy: ExpoLocation.Accuracy.High,
       });
       setLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
       setStatus('ready');
@@ -55,7 +59,7 @@ export function useLocation() {
   async function refreshLocation(): Promise<Coordinates | null> {
     try {
       const loc = await ExpoLocation.getCurrentPositionAsync({
-        accuracy: ExpoLocation.Accuracy.Balanced,
+        accuracy: ExpoLocation.Accuracy.High,
       });
       const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
       setLocation(coords);
