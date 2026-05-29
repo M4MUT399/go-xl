@@ -14,6 +14,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide, estimatePrice, estimateDuration } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
+import { useRoute } from '../../hooks/useRoute';
 import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
 
 type Props = {
@@ -59,12 +60,16 @@ export function RequestRideScreen({ navigation }: Props) {
     return () => { cancelled = true; };
   }, [debouncedQuery, selectedDest, location]);
 
-  const distanceKm = selectedDest && location
-    ? haversine(location, { lat: selectedDest.lat, lng: selectedDest.lng })
-    : null;
+  const { route } = useRoute(
+    location ? { lat: location.lat, lng: location.lng } : null,
+    selectedDest ? { lat: selectedDest.lat, lng: selectedDest.lng } : null
+  );
+
+  const distanceKm = route?.distanceKm
+    ?? (selectedDest && location ? haversine(location, { lat: selectedDest.lat, lng: selectedDest.lng }) : null);
 
   const estimatedPrice = distanceKm ? estimatePrice(distanceKm) : null;
-  const estimatedMin = distanceKm ? estimateDuration(distanceKm) : null;
+  const estimatedMin = route?.durationMin ?? (distanceKm ? estimateDuration(distanceKm) : null);
 
   async function handleRequest() {
     if (!selectedDest || !location) {
@@ -77,7 +82,11 @@ export function RequestRideScreen({ navigation }: Props) {
       lng: location.lng,
       address: originAddress,
     };
-    const ride = await requestRide(origin, selectedDest);
+    const ride = await requestRide(
+      origin,
+      selectedDest,
+      route ? { distanceKm: route.distanceKm, durationMin: route.durationMin } : undefined
+    );
     setLoading(false);
     if (ride) {
       navigation.replace('FindingDriver', { ride });
@@ -113,13 +122,15 @@ export function RequestRideScreen({ navigation }: Props) {
             <View style={styles.markerDest} />
           </Marker>
           <Polyline
-            coordinates={[
-              { latitude: location.lat, longitude: location.lng },
-              { latitude: selectedDest.lat, longitude: selectedDest.lng },
-            ]}
+            coordinates={
+              route?.coordinates ?? [
+                { latitude: location.lat, longitude: location.lng },
+                { latitude: selectedDest.lat, longitude: selectedDest.lng },
+              ]
+            }
             strokeColor={Colors.accent}
-            strokeWidth={2.5}
-            lineDashPattern={[8, 4]}
+            strokeWidth={route ? 4 : 2.5}
+            lineDashPattern={route ? undefined : [8, 4]}
           />
         </MapView>
       ) : null}

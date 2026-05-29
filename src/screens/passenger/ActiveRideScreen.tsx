@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
 import { Colors } from '../../constants/colors';
 import { supabase } from '../../lib/supabase';
 import { useDriverVehicle } from '../../hooks/useVehicle';
+import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { formatCurrency } from '../../lib/format';
 
 type Props = {
@@ -65,6 +66,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   const origin = ride.origin ?? { lat: 28.5383, lng: -81.3792 };
   const dest = ride.destination ?? { lat: 28.4312, lng: -81.3081 };
 
+  const { route: path } = useRideRoute(
+    { lat: origin.lat, lng: origin.lng },
+    { lat: dest.lat, lng: dest.lng }
+  );
+
   return (
     <View style={styles.container}>
       <MapView
@@ -77,6 +83,9 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           longitudeDelta: Math.abs(origin.lng - dest.lng) * 2 + 0.02,
         }}
       >
+        {path && (
+          <Polyline coordinates={path.coordinates} strokeColor={Colors.accent} strokeWidth={4} />
+        )}
         <Marker coordinate={{ latitude: origin.lat, longitude: origin.lng }}>
           <View style={styles.markerOrigin} />
         </Marker>
@@ -89,6 +98,9 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         <View style={styles.statusBanner}>
           <View style={styles.statusDot} />
           <Text style={styles.statusText}>{STATUS_LABELS[ride.status]}</Text>
+          {path && (ride.status === 'in_progress' || ride.status === 'driver_en_route') && (
+            <Text style={styles.etaText}>· {path.durationMin} min</Text>
+          )}
         </View>
       </SafeAreaView>
 
@@ -162,6 +174,7 @@ const styles = StyleSheet.create({
   },
   statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success, marginRight: 10 },
   statusText: { color: Colors.white, fontSize: 15, fontWeight: '600' },
+  etaText: { color: Colors.accent, fontSize: 15, fontWeight: '700', marginLeft: 6 },
   bottomSheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,

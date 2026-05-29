@@ -98,15 +98,19 @@ export function usePassengerRide(passengerId: string | undefined) {
     return () => { supabase.removeChannel(channel); };
   }, [passengerId]);
 
-  const requestRide = useCallback(async (origin: Location, destination: Location): Promise<Ride | null> => {
+  const requestRide = useCallback(async (
+    origin: Location,
+    destination: Location,
+    routeInfo?: { distanceKm: number; durationMin: number }
+  ): Promise<Ride | null> => {
     if (!passengerId) return null;
 
-    const distanceKm = haversineDistance(
+    const distanceKm = routeInfo?.distanceKm ?? haversineDistance(
       { lat: origin.lat, lng: origin.lng },
       { lat: destination.lat, lng: destination.lng }
     );
     const price = estimatePrice(distanceKm);
-    const duration = estimateDuration(distanceKm);
+    const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
 
     const { data, error } = await supabase
       .from('rides')
