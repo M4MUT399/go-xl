@@ -62,22 +62,18 @@ export function DriverHomeScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {location ? (
-        <MapView
-          style={styles.map}
-          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-          initialRegion={{
-            latitude: location.lat,
-            longitude: location.lng,
-            latitudeDelta: 0.015,
-            longitudeDelta: 0.015,
-          }}
-          showsUserLocation
-          customMapStyle={darkMapStyle}
-        />
-      ) : (
-        <View style={[styles.map, { backgroundColor: Colors.primaryLight }]} />
-      )}
+      <MapView
+        style={styles.map}
+        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+        initialRegion={{
+          latitude: location?.lat ?? 28.5383,
+          longitude: location?.lng ?? -81.3792,
+          latitudeDelta: 0.015,
+          longitudeDelta: 0.015,
+        }}
+        showsUserLocation
+        customMapStyle={darkMapStyle}
+      />
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.topBar}>
