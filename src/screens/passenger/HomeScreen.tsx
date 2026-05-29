@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform,
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Linking,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -14,7 +14,7 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Passen
 
 export function HomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
-  const { location } = useLocation();
+  const { location, status, retry } = useLocation();
   const { drivers } = useNearbyDrivers(true);
   const mapRef = useRef<MapView>(null);
   const [destination, setDestination] = useState('');
@@ -80,7 +80,29 @@ export function HomeScreen({ navigation }: Props) {
         </MapView>
       ) : (
         <View style={[styles.map, styles.mapPlaceholder]}>
-          <Text style={styles.mapPlaceholderText}>Carregando mapa...</Text>
+          {status === 'loading' ? (
+            <Text style={styles.mapPlaceholderText}>Carregando mapa...</Text>
+          ) : (
+            <View style={styles.mapError}>
+              <Text style={styles.mapErrorEmoji}>📍</Text>
+              <Text style={styles.mapErrorTitle}>
+                {status === 'denied' ? 'Localização desativada' : 'Sem localização'}
+              </Text>
+              <Text style={styles.mapErrorText}>
+                {status === 'denied'
+                  ? 'O Go XL precisa da sua localização para encontrar motoristas e definir o embarque.'
+                  : 'Não foi possível obter sua localização. Verifique se o GPS está ligado.'}
+              </Text>
+              <TouchableOpacity
+                style={styles.mapErrorBtn}
+                onPress={() => (status === 'denied' ? Linking.openSettings() : retry())}
+              >
+                <Text style={styles.mapErrorBtnText}>
+                  {status === 'denied' ? 'Abrir ajustes' : 'Tentar novamente'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       )}
 
@@ -146,6 +168,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   mapPlaceholderText: { color: Colors.gray[400] },
+  mapError: { alignItems: 'center', paddingHorizontal: 40 },
+  mapErrorEmoji: { fontSize: 40, marginBottom: 12 },
+  mapErrorTitle: { color: Colors.white, fontSize: 18, fontWeight: '700', marginBottom: 8 },
+  mapErrorText: { color: Colors.gray[400], fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 20 },
+  mapErrorBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+  },
+  mapErrorBtnText: { color: Colors.primary, fontSize: 15, fontWeight: '700' },
   overlay: {
     position: 'absolute',
     top: 0,
