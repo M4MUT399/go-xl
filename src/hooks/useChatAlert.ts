@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { showLocalNotification } from '../lib/notifications';
+import { notifyInApp } from '../lib/inAppNotify';
 import type { Message } from '../types';
 
 /**
@@ -23,6 +24,9 @@ export function useChatAlert(rideId: string | undefined, userId: string | undefi
         (payload) => {
           const msg = payload.new as Message;
           if (msg.sender_id !== userId) {
+            // Banner in-app + som (confiável no Expo Go)
+            notifyInApp('Nova mensagem', msg.text);
+            // Notificação do sistema (funciona em build nativo / app em segundo plano)
             showLocalNotification('💬 Nova mensagem', msg.text, { rideId, type: 'chat' });
           }
         }
