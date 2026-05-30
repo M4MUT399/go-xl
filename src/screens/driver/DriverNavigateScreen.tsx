@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Alert } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -11,7 +11,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
-import { formatCurrency } from '../../lib/format';
+import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
 
@@ -37,11 +37,37 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const dest = rideDestination(ride);
   const target = phase === 'pickup' ? origin : dest;
 
+  // Throttle: só recalcula rota se mover > 150m desde última chamada
+  const lastRouteCoord = useRef<{ lat: number; lng: number } | null>(null);
+  const [routeOrigin, setRouteOrigin] = useState(
+    location ? { lat: location.lat, lng: location.lng } : null
+  );
+
+  useEffect(() => {
+    if (!location) return;
+    const prev = lastRouteCoord.current;
+    if (!prev) {
+      lastRouteCoord.current = { lat: location.lat, lng: location.lng };
+      setRouteOrigin({ lat: location.lat, lng: location.lng });
+      return;
+    }
+    const dist = haversineMeters(prev, location);
+    if (dist > 150) {
+      lastRouteCoord.current = { lat: location.lat, lng: location.lng };
+      setRouteOrigin({ lat: location.lat, lng: location.lng });
+    }
+  }, [location?.lat, location?.lng]);
+
   // Rota real (ruas) do motorista até o alvo (embarque ou destino)
   const { route: path } = useRideRoute(
-    location ? { lat: location.lat, lng: location.lng } : null,
+    routeOrigin,
     { lat: target.lat, lng: target.lng }
   );
+
+  // ETA: hora de chegada estimada
+  const etaTime = path?.durationMin
+    ? new Date(Date.now() + path.durationMin * 60 * 1000)
+    : null;
 
   // Detecta cancelamento pelo passageiro
   useEffect(() => {
@@ -134,11 +160,34 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           <Text style={styles.phaseText}>
             {phase === 'pickup' ? 'Indo buscar o passageiro' : 'Levando ao destino'}
           </Text>
+          {path && (
+            <View style={styles.etaBadge}>
+              <Text style={styles.etaBadgeText}>
+                {path.durationMin} min
+              </Text>
+            </View>
+          )}
         </View>
       </SafeAreaView>
 
       <View style={styles.bottomSheet}>
         <View style={styles.handle} />
+
+        {phase === 'dropoff' && path && (
+          <View style={styles.etaCard}>
+            <View style={styles.etaMain}>
+              <Text style={styles.etaMinutes}>{path.durationMin}</Text>
+              <Text style={styles.etaUnit}>min</Text>
+              <View style={styles.etaSep} />
+              <Text style={styles.etaDist}>{formatDistance(path.distanceKm)}</Text>
+            </View>
+            {etaTime && (
+              <Text style={styles.etaArrival}>
+                Chegada estimada: {etaTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            )}
+          </View>
+        )}
 
         <View style={styles.addressCard}>
           <Text style={styles.addressLabel}>{phase === 'pickup' ? 'Local de embarque' : 'Destino final'}</Text>
@@ -237,4 +286,40 @@ const styles = StyleSheet.create({
   driverMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   markerPickup: { width: 14, height: 14, borderRadius: 7, backgroundColor: Colors.accent, borderWidth: 2, borderColor: Colors.white },
   markerDropoff: { width: 14, height: 14, borderRadius: 3, backgroundColor: Colors.primary, borderWidth: 2, borderColor: Colors.white },
+  etaBadge: {
+    marginLeft: 'auto',
+    backgroundColor: Colors.accent,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  etaBadgeText: { color: Colors.primary, fontSize: 13, fontWeight: '800' },
+  etaCard: {
+    backgroundColor: Colors.primary,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    alignItems: 'center',
+  },
+  etaMain: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginBottom: 6 },
+  etaMinutes: { fontSize: 48, fontWeight: '900', color: Colors.white, letterSpacing: -2 },
+  etaUnit: { fontSize: 18, fontWeight: '600', color: Colors.accent, marginBottom: 4 },
+  etaSep: { width: 1, height: 32, backgroundColor: 'rgba(255,255,255,0.2)', marginHorizontal: 8 },
+  etaDist: { fontSize: 20, fontWeight: '700', color: Colors.gray[300] },
+  etaArrival: { fontSize: 13, color: Colors.gray[400], fontWeight: '600' },
 });
+
+function haversineMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const x =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) *
+      Math.cos((b.lat * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
