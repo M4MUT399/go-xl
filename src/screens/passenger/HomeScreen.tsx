@@ -2,13 +2,16 @@ import React, { useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Linking,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { CarMarker } from '../../components/common/CarMarker';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList, Location } from '../../types';
 import { Colors } from '../../constants/colors';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
 import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
+import { useUnreadMessages } from '../../hooks/useUnreadMessages';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'PassengerTabs'> };
 
@@ -16,10 +19,25 @@ export function HomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { location, status, retry } = useLocation();
   const { drivers } = useNearbyDrivers(true);
+  const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
+
+  // Recarrega o badge de mensagens toda vez que a tela entra em foco
+  // (ex.: usuário volta do chat → AsyncStorage já atualizado → badge some)
+  useFocusEffect(
+    React.useCallback(() => { refresh(); }, [refresh])
+  );
   const mapRef = useRef<MapView>(null);
   const [destination, setDestination] = useState('');
 
   const firstName = profile?.full_name?.split(' ')[0] ?? 'Olá';
+
+  function handleOpenChat() {
+    if (chatRides.length === 1) {
+      navigation.navigate('Chat', { rideId: chatRides[0].rideId, title: chatRides[0].title });
+    } else {
+      navigation.navigate('ScheduledRides');
+    }
+  }
 
   function handleSearchFocus() {
     navigation.navigate('RequestRide', {
@@ -70,11 +88,9 @@ export function HomeScreen({ navigation }: Props) {
               coordinate={{ latitude: d.lat, longitude: d.lng }}
               anchor={{ x: 0.5, y: 0.5 }}
               rotation={d.heading ?? 0}
-              flat
+              tracksViewChanges={false}
             >
-              <View style={styles.carMarker}>
-                <Text style={styles.carMarkerText}>🚗</Text>
-              </View>
+              <CarMarker />
             </Marker>
           ))}
         </MapView>
@@ -118,6 +134,18 @@ export function HomeScreen({ navigation }: Props) {
             <TouchableOpacity style={styles.scheduleIcon} onPress={() => navigation.navigate('ScheduledRides')}>
               <Text style={styles.scheduleIconText}>🗓️</Text>
             </TouchableOpacity>
+            {chatRides.length > 0 && (
+              <TouchableOpacity style={styles.chatIcon} onPress={handleOpenChat}>
+                <Text style={styles.chatIconText}>💬</Text>
+                {totalUnread > 0 && (
+                  <View style={styles.chatBadge}>
+                    <Text style={styles.chatBadgeText}>
+                      {totalUnread > 9 ? '9+' : String(totalUnread)}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.avatar}>
               <Text style={styles.avatarText}>{firstName[0]}</Text>
             </TouchableOpacity>
@@ -212,14 +240,38 @@ const styles = StyleSheet.create({
   categoryText: { color: Colors.accent, fontSize: 11, fontWeight: '600' },
   topActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   scheduleIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 63,
+    height: 63,
+    borderRadius: 31.5,
     backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  scheduleIconText: { fontSize: 18 },
+  scheduleIconText: { fontSize: 27 },
+  chatIcon: {
+    width: 63,
+    height: 63,
+    borderRadius: 31.5,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatIconText: { fontSize: 27 },
+  chatBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
+    borderColor: 'rgba(26,26,46,0.9)',
+  },
+  chatBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '800' },
   avatar: {
     width: 42,
     height: 42,
@@ -263,13 +315,7 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   recenterIcon: { fontSize: 22, color: Colors.primary },
-  carMarker: {
-    width: 30,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  carMarkerText: { fontSize: 22 },
+
   searchContainer: {
     paddingHorizontal: 16,
     paddingBottom: 32,

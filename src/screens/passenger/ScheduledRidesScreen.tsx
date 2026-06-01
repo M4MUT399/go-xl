@@ -11,8 +11,14 @@ import { useAuth } from '../../hooks/useAuth';
 import { useScheduledRides } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
+import { showLocalNotification } from '../../lib/notifications';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'ScheduledRides'> };
+
+function isCancellationFree(scheduledFor?: string): boolean {
+  if (!scheduledFor) return true;
+  return new Date(scheduledFor).getTime() - Date.now() > 60 * 60 * 1000;
+}
 
 interface DriverInfo {
   name: string;
@@ -59,12 +65,16 @@ export function ScheduledRidesScreen({ navigation }: Props) {
         { event: 'UPDATE', schema: 'public', table: 'rides', filter: `passenger_id=eq.${profile.id}` },
         (payload) => {
           const updated = payload.new as RideRecord;
-          if (updated.status === 'scheduled' && updated.driver_id) {
+          if (
+            (updated.status === 'scheduled' && updated.driver_id) ||
+            (updated.status === 'accepted' && updated.driver_id)
+          ) {
             refresh();
-          }
-          // Motorista iniciou a corrida (activated → accepted)
-          if (updated.status === 'accepted' && updated.driver_id) {
-            refresh();
+            showLocalNotification(
+              '🗓️ Motorista confirmado!',
+              'Um motorista aceitou seu agendamento. Confira os detalhes.',
+              { type: 'schedule_confirmed', rideId: updated.id }
+            );
           }
         }
       )
@@ -87,10 +97,28 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   }
 
   function handleCancel(ride: RideRecord) {
+    if (!isCancellationFree(ride.scheduled_for)) {
+      Alert.alert(
+        '⚠️ Cancelamento com cobrança',
+        'Esta corrida começa em menos de 1 hora e não pode ser cancelada gratuitamente. Se confirmar, a corrida será cobrada.',
+        [
+          { text: 'Não, manter', style: 'cancel' },
+          { text: 'Cancelar mesmo assim', style: 'destructive', onPress: () => cancel(ride.id) },
+        ]
+      );
+      return;
+    }
     Alert.alert('Cancelar agendamento', 'Deseja remover esta corrida agendada?', [
       { text: 'Não', style: 'cancel' },
       { text: 'Sim, cancelar', style: 'destructive', onPress: () => cancel(ride.id) },
     ]);
+  }
+
+  function handleChat(ride: RideRecord, driverInfo?: DriverInfo) {
+    navigation.navigate('Chat', {
+      rideId: ride.id,
+      title: driverInfo?.name ?? 'Motorista',
+    });
   }
 
   return (
@@ -117,14 +145,18 @@ export function ScheduledRidesScreen({ navigation }: Props) {
               <Text style={styles.emptyText}>Agende uma corrida ao escolher o destino na tela inicial.</Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <ScheduledCard
-              ride={item}
-              driverInfo={item.driver_id ? driverInfoMap[item.driver_id] : undefined}
-              onActivate={handleActivate}
-              onCancel={handleCancel}
-            />
-          )}
+          renderItem={({ item }) => {
+            const driverInfo = item.driver_id ? driverInfoMap[item.driver_id] : undefined;
+            return (
+              <ScheduledCard
+                ride={item}
+                driverInfo={driverInfo}
+                onActivate={handleActivate}
+                onCancel={handleCancel}
+                onChat={item.driver_id ? () => handleChat(item, driverInfo) : undefined}
+              />
+            );
+          }}
         />
       )}
     </SafeAreaView>
@@ -132,19 +164,31 @@ export function ScheduledRidesScreen({ navigation }: Props) {
 }
 
 function ScheduledCard({
-  ride, driverInfo, onActivate, onCancel,
+  ride, driverInfo, onActivate, onCancel, onChat,
 }: {
   ride: RideRecord;
   driverInfo?: DriverInfo;
   onActivate: (r: RideRecord) => void;
   onCancel: (r: RideRecord) => void;
+  onChat?: () => void;
 }) {
+  // Clock interno — garante que o aviso de cobrança aparece sem precisar
+  // sair e voltar à tela quando a janela de 60 min for cruzada.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
   const when = ride.scheduled_for ? new Date(ride.scheduled_for) : null;
-  const isDue = when ? when.getTime() <= Date.now() : false;
   const hasDriver = !!ride.driver_id;
+  const minsLeft = when ? Math.floor((when.getTime() - now) / 60_000) : null;
+  const canCancel = minsLeft === null || minsLeft > 60;
 
   return (
-    <View style={[styles.card, hasDriver && styles.cardConfirmed]}>
+    <View style={[styles.card, hasDriver && styles.cardConfirmed, !canCancel && styles.cardWarning]}>
+
+      {/* ── Cabeçalho ── */}
       <View style={styles.cardTop}>
         <Text style={styles.cardDate}>
           {when
@@ -152,14 +196,34 @@ function ScheduledCard({
             : 'Sem horário'}
         </Text>
         {hasDriver ? (
-          <View style={styles.confirmedBadge}><Text style={styles.confirmedText}>✓ Motorista confirmado</Text></View>
-        ) : isDue ? (
+          <View style={styles.confirmedBadge}><Text style={styles.confirmedText}>✓ Confirmado</Text></View>
+        ) : minsLeft !== null && minsLeft <= 0 ? (
           <View style={styles.dueBadge}><Text style={styles.dueText}>No horário</Text></View>
         ) : (
-          <View style={styles.schBadge}><Text style={styles.schText}>Aguardando motorista</Text></View>
+          <View style={styles.schBadge}><Text style={styles.schText}>⏳ Aguardando</Text></View>
         )}
       </View>
 
+      {/* ── Aviso de cancelamento — SEMPRE VISÍVEL ── */}
+      {canCancel ? (
+        <View style={styles.policyFree}>
+          <Text style={styles.policyFreeText}>
+            🕐  Cancelamento gratuito até 60 min antes da corrida
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.policyCharged}>
+          <Text style={styles.policyChargedTitle}>⚠️  Atenção: cancelamento cobrado</Text>
+          <Text style={styles.policyChargedBody}>
+            Faltam menos de 60 minutos para esta corrida.{'\n'}
+            Se cancelar agora, o valor integral de{' '}
+            <Text style={styles.policyChargedValue}>{formatCurrency(ride.price)}</Text>
+            {' '}será cobrado.
+          </Text>
+        </View>
+      )}
+
+      {/* ── Rota ── */}
       <View style={styles.route}>
         <View style={styles.routeIcons}>
           <View style={styles.dotOrigin} />
@@ -172,7 +236,7 @@ function ScheduledCard({
         </View>
       </View>
 
-      {/* Card do motorista pré-confirmado */}
+      {/* ── Motorista confirmado ── */}
       {hasDriver && (
         <View style={styles.driverCard}>
           <View style={styles.driverAvatar}>
@@ -192,14 +256,28 @@ function ScheduledCard({
         </View>
       )}
 
+      {/* ── Distância / Valor ── */}
       <View style={styles.cardMeta}>
         <Text style={styles.metaText}>{formatDistance(ride.distance_km)}</Text>
         <Text style={styles.metaPrice}>{formatCurrency(ride.price)}</Text>
       </View>
 
+      {/* ── Chat ── */}
+      {onChat && (
+        <TouchableOpacity style={styles.chatBtn} onPress={onChat}>
+          <Text style={styles.chatBtnText}>💬  Falar com o motorista</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* ── Ações ── */}
       <View style={styles.cardActions}>
-        <TouchableOpacity style={styles.cancelBtn} onPress={() => onCancel(ride)}>
-          <Text style={styles.cancelBtnText}>Cancelar</Text>
+        <TouchableOpacity
+          style={[styles.cancelBtn, !canCancel && styles.cancelBtnCharged]}
+          onPress={() => onCancel(ride)}
+        >
+          <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
+            {canCancel ? 'Cancelar' : 'Cancelar (cobrado)'}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.activateBtn} onPress={() => onActivate(ride)}>
           <Text style={styles.activateBtnText}>
@@ -207,6 +285,7 @@ function ScheduledCard({
           </Text>
         </TouchableOpacity>
       </View>
+
     </View>
   );
 }
@@ -220,6 +299,7 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
   card: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 12 },
   cardConfirmed: { borderLeftWidth: 4, borderLeftColor: Colors.success },
+  cardWarning: { borderLeftWidth: 4, borderLeftColor: '#ef4444' },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   cardDate: { fontSize: 15, fontWeight: '700', color: Colors.primary },
   schBadge: { backgroundColor: Colors.gray[100], borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
@@ -270,9 +350,55 @@ const styles = StyleSheet.create({
   },
   metaText: { fontSize: 13, color: Colors.gray[500] },
   metaPrice: { fontSize: 16, fontWeight: '800', color: Colors.primary },
+  policyFree: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(100,116,139,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(100,116,139,0.15)',
+    marginBottom: 10,
+  },
+  policyFreeText: { color: Colors.gray[600], fontSize: 12, fontWeight: '600', lineHeight: 17, flex: 1 },
+  policyCharged: {
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1.5,
+    borderColor: '#ef4444',
+    marginBottom: 12,
+  },
+  policyChargedTitle: { color: '#b91c1c', fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  policyChargedBody: { color: '#7f1d1d', fontSize: 13, fontWeight: '500', lineHeight: 19 },
+  policyChargedValue: { color: '#b91c1c', fontWeight: '800' },
+  chatBtn: {
+    backgroundColor: 'rgba(201,168,76,0.12)',
+    borderRadius: 12,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(201,168,76,0.3)',
+  },
+  chatBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
+  noCancel: {
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(239,68,68,0.06)',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  noCancelText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
   cardActions: { flexDirection: 'row', gap: 10 },
   cancelBtn: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: Colors.gray[200], alignItems: 'center', justifyContent: 'center' },
   cancelBtnText: { color: Colors.gray[600], fontSize: 14, fontWeight: '700' },
+  cancelBtnCharged: { borderColor: 'rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)' },
+  cancelBtnTextCharged: { color: '#ef4444', fontSize: 13 },
   activateBtn: { flex: 2, height: 44, borderRadius: 12, backgroundColor: Colors.accent, alignItems: 'center', justifyContent: 'center' },
   activateBtnText: { color: Colors.primary, fontSize: 14, fontWeight: '800' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },

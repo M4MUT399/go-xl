@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, SectionList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert,
+  View, Text, StyleSheet, SafeAreaView, FlatList,
+  TouchableOpacity, ActivityIndicator, RefreshControl, Alert, SectionList,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, RideRecord, Ride } from '../../types';
@@ -10,122 +11,145 @@ import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverScheduledRides } from '../../hooks/useDriverScheduledRides';
 import { useScheduledRides } from '../../hooks/useRide';
+
+function isCancellationFree(scheduledFor?: string): boolean {
+  if (!scheduledFor) return true;
+  return new Date(scheduledFor).getTime() - Date.now() > 60 * 60 * 1000;
+}
 import { formatCurrency, formatDistance } from '../../lib/format';
 
-type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverScheduledRides'> };
+// ─── Funções de tempo ─────────────────────────────────────────────────────────
 
-export function DriverScheduledRidesScreen({ navigation }: Props) {
-  const { profile } = useAuth();
-  const { available, claimed, loading, refresh } = useDriverScheduledRides(profile?.id);
-  const { claimScheduledRide, activate } = useScheduledRides(profile?.id);
-  const [claiming, setClaiming] = useState<string | null>(null);
+type Urgency = 'normal' | 'soon' | 'imminent' | 'now';
 
-  useFocusEffect(
-    React.useCallback(() => { refresh(); }, [refresh])
-  );
+function computeTimeLeft(iso?: string, now = Date.now()): { label: string; urgency: Urgency } {
+  if (!iso) return { label: 'Sem horário', urgency: 'normal' };
+  const diff = new Date(iso).getTime() - now;
+  const totalMin = Math.floor(diff / 60_000);
 
-  async function handleClaim(ride: RideRecord) {
-    Alert.alert(
-      'Confirmar corrida agendada',
-      `Confirmar que você buscará o passageiro em:\n${ride.origin_address}\n\nData: ${formatDate(ride.scheduled_for)}`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            if (!profile?.id) return;
-            setClaiming(ride.id);
-            const ok = await claimScheduledRide(ride.id, profile.id);
-            setClaiming(null);
-            if (ok) {
-              Alert.alert('✅ Confirmado!', 'O passageiro será notificado que você irá buscá-lo.');
-              refresh();
-            } else {
-              Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
-            }
-          },
-        },
-      ]
-    );
-  }
+  if (diff <= 0) return { label: 'Agora!', urgency: 'now' };
+  if (totalMin < 5) return { label: `${totalMin} min`, urgency: 'now' };
+  if (totalMin < 15) return { label: `${totalMin} min`, urgency: 'imminent' };
+  if (totalMin < 60) return { label: `${totalMin} min`, urgency: 'soon' };
 
-  async function handleStartClaimed(ride: RideRecord) {
-    const activated = await activate(ride.id);
-    if (activated) {
-      navigation.navigate('DriverNavigate', { ride: activated as Ride });
-    }
-  }
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return { label: m > 0 ? `${h}h ${m}min` : `${h}h`, urgency: 'normal' };
+}
 
-  const sections = [
-    ...(claimed.length > 0 ? [{ title: 'Minhas confirmadas', data: claimed, type: 'claimed' as const }] : []),
-    ...(available.length > 0 ? [{ title: 'Disponíveis', data: available, type: 'available' as const }] : []),
-  ];
+const URGENCY_COLOR: Record<Urgency, string> = {
+  normal: Colors.gray[400],
+  soon: Colors.accent,
+  imminent: '#f97316',   // laranja
+  now: '#ef4444',        // vermelho
+};
+
+function formatDate(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short' })} • ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+// ─── Card de corrida confirmada ───────────────────────────────────────────────
+
+function ClaimedCard({
+  ride,
+  now,
+  onStart,
+  onChat,
+  onRelease,
+}: {
+  ride: RideRecord;
+  now: number;
+  onStart: (r: RideRecord) => void;
+  onChat: (r: RideRecord) => void;
+  onRelease: (r: RideRecord) => void;
+}) {
+  const { label, urgency } = computeTimeLeft(ride.scheduled_for, now);
+  const isDue = ride.scheduled_for ? new Date(ride.scheduled_for).getTime() <= now : false;
+  const urgencyColor = URGENCY_COLOR[urgency];
+  const canRelease = isCancellationFree(ride.scheduled_for);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
-          <Text style={styles.backText}>←</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Corridas Agendadas</Text>
+    <View style={[styles.card, styles.cardClaimed, urgency === 'now' && styles.cardNow]}>
+      {/* Cabeçalho: data + countdown */}
+      <View style={styles.cardTop}>
+        <View>
+          <Text style={styles.cardDate}>{formatDate(ride.scheduled_for)}</Text>
+        </View>
+        <View style={[styles.countdownBadge, { backgroundColor: urgencyColor + '22', borderColor: urgencyColor }]}>
+          <Text style={[styles.countdownIcon]}>⏰</Text>
+          <Text style={[styles.countdownText, { color: urgencyColor }]}>{label}</Text>
+        </View>
       </View>
 
-      {loading && sections.length === 0 ? (
-        <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
-      ) : (
-        <SectionList
-          sections={sections}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={Colors.accent} />}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>🗓️</Text>
-              <Text style={styles.emptyTitle}>Nenhuma corrida agendada</Text>
-              <Text style={styles.emptyText}>Passageiros que agendarem corridas aparecerão aqui.</Text>
-            </View>
-          }
-          renderSectionHeader={({ section }) => (
-            <Text style={styles.sectionHeader}>{section.title}</Text>
-          )}
-          renderItem={({ item, section }) => (
-            <ScheduledCard
-              ride={item}
-              type={section.type}
-              claiming={claiming === item.id}
-              onClaim={handleClaim}
-              onStart={handleStartClaimed}
-            />
-          )}
-        />
+      {/* Rota */}
+      <View style={styles.route}>
+        <View style={styles.routeIcons}>
+          <View style={styles.dotOrigin} />
+          <View style={styles.routeLine} />
+          <View style={styles.dotDest} />
+        </View>
+        <View style={styles.routeAddrs}>
+          <Text style={styles.addr} numberOfLines={1}>{ride.origin_address}</Text>
+          <Text style={[styles.addr, styles.addrDest]} numberOfLines={1}>{ride.destination_address}</Text>
+        </View>
+      </View>
+
+      {/* Meta */}
+      <View style={styles.meta}>
+        <Text style={styles.metaText}>{formatDistance(ride.distance_km)} • {ride.duration_min} min</Text>
+        <Text style={styles.metaPrice}>{formatCurrency(ride.price)}</Text>
+      </View>
+
+      {/* Chat com passageiro */}
+      <TouchableOpacity style={styles.chatBtn} onPress={() => onChat(ride)}>
+        <Text style={styles.chatBtnText}>💬  Falar com o passageiro</Text>
+      </TouchableOpacity>
+
+      {/* Botão iniciar */}
+      {isDue && (
+        <TouchableOpacity style={styles.startBtn} onPress={() => onStart(ride)}>
+          <Text style={styles.startBtnText}>🚀  Iniciar corrida agora</Text>
+        </TouchableOpacity>
       )}
-    </SafeAreaView>
+
+      {/* Liberar agendamento */}
+      {canRelease ? (
+        <TouchableOpacity style={styles.releaseBtn} onPress={() => onRelease(ride)}>
+          <Text style={styles.releaseBtnText}>Liberar agendamento</Text>
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.noReleaseRow}>
+          <Text style={styles.noReleaseText}>⚠️ Menos de 1h — corrida será cobrada</Text>
+        </View>
+      )}
+    </View>
   );
 }
 
-function ScheduledCard({
-  ride, type, claiming, onClaim, onStart,
+// ─── Card de corrida disponível ───────────────────────────────────────────────
+
+function AvailableCard({
+  ride,
+  now,
+  claiming,
+  onClaim,
 }: {
   ride: RideRecord;
-  type: 'available' | 'claimed';
+  now: number;
   claiming: boolean;
   onClaim: (r: RideRecord) => void;
-  onStart: (r: RideRecord) => void;
 }) {
-  const when = ride.scheduled_for ? new Date(ride.scheduled_for) : null;
-  const isDue = when ? when.getTime() <= Date.now() : false;
+  const { label } = computeTimeLeft(ride.scheduled_for, now);
 
   return (
-    <View style={[styles.card, type === 'claimed' && styles.cardClaimed]}>
+    <View style={styles.card}>
       <View style={styles.cardTop}>
         <Text style={styles.cardDate}>{formatDate(ride.scheduled_for)}</Text>
-        {type === 'claimed' ? (
-          <View style={styles.confirmedBadge}><Text style={styles.confirmedText}>✓ Confirmada</Text></View>
-        ) : isDue ? (
-          <View style={styles.dueBadge}><Text style={styles.dueText}>No horário</Text></View>
-        ) : (
-          <View style={styles.availBadge}><Text style={styles.availText}>Disponível</Text></View>
-        )}
+        <View style={styles.availBadge}>
+          <Text style={styles.availText}>em {label}</Text>
+        </View>
       </View>
 
       <View style={styles.route}>
@@ -145,52 +169,247 @@ function ScheduledCard({
         <Text style={styles.metaPrice}>{formatCurrency(ride.price)}</Text>
       </View>
 
-      {type === 'available' && (
-        <TouchableOpacity
-          style={[styles.claimBtn, claiming && { opacity: 0.7 }]}
-          onPress={() => onClaim(ride)}
-          disabled={claiming}
-        >
-          {claiming
-            ? <ActivityIndicator size="small" color={Colors.primary} />
-            : <Text style={styles.claimBtnText}>Confirmar esta corrida</Text>
-          }
-        </TouchableOpacity>
-      )}
-
-      {type === 'claimed' && isDue && (
-        <TouchableOpacity style={styles.startBtn} onPress={() => onStart(ride)}>
-          <Text style={styles.startBtnText}>Iniciar corrida agora</Text>
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity
+        style={[styles.claimBtn, claiming && { opacity: 0.6 }]}
+        onPress={() => onClaim(ride)}
+        disabled={claiming}
+      >
+        {claiming
+          ? <ActivityIndicator size="small" color={Colors.primary} />
+          : <Text style={styles.claimBtnText}>Confirmar esta corrida</Text>
+        }
+      </TouchableOpacity>
     </View>
   );
 }
 
-function formatDate(iso?: string): string {
-  if (!iso) return 'Sem horário';
-  const d = new Date(iso);
-  return `${d.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })} • ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
+// ─── Tela principal ───────────────────────────────────────────────────────────
+
+export function DriverScheduledRidesScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { profile } = useAuth();
+  const { available, claimed, loading, refresh, release } = useDriverScheduledRides(profile?.id);
+  const { claimScheduledRide, activate } = useScheduledRides(profile?.id);
+  const [claiming, setClaiming] = useState<string | null>(null);
+
+  // Relógio local — atualiza a cada 30s para refrescar os countdowns
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
+
+  async function handleClaim(ride: RideRecord) {
+    Alert.alert(
+      'Confirmar corrida agendada',
+      `Confirmar que você buscará o passageiro em:\n${ride.origin_address}\n\nData: ${formatDate(ride.scheduled_for)}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          onPress: async () => {
+            if (!profile?.id) return;
+            setClaiming(ride.id);
+            const ok = await claimScheduledRide(ride.id, profile.id);
+            setClaiming(null);
+            if (ok) {
+              Alert.alert('✅ Confirmado!', 'O passageiro foi notificado que você irá buscá-lo.');
+              refresh();
+            } else {
+              Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function handleStart(ride: RideRecord) {
+    const activated = await activate(ride.id);
+    if (activated) {
+      navigation.navigate('DriverNavigate', { ride: activated as Ride });
+    }
+  }
+
+  function handleChat(ride: RideRecord) {
+    navigation.navigate('Chat', { rideId: ride.id, title: 'Passageiro' });
+  }
+
+  function handleRelease(ride: RideRecord) {
+    Alert.alert(
+      'Liberar agendamento',
+      'Deseja liberar esta corrida? Outro motorista poderá confirmá-la.',
+      [
+        { text: 'Não', style: 'cancel' },
+        {
+          text: 'Sim, liberar',
+          style: 'destructive',
+          onPress: async () => {
+            const ok = await release(ride.id);
+            if (!ok) Alert.alert('Ops', 'Não foi possível liberar a corrida.');
+          },
+        },
+      ]
+    );
+  }
+
+  const hasClaimed = claimed.length > 0;
+  const hasAvailable = available.length > 0;
+  const isEmpty = !hasClaimed && !hasAvailable;
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* Cabeçalho */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Corridas Agendadas</Text>
+        {hasClaimed && (
+          <View style={styles.claimedBadge}>
+            <Text style={styles.claimedBadgeText}>{claimed.length} confirmada{claimed.length > 1 ? 's' : ''}</Text>
+          </View>
+        )}
+      </View>
+
+      {loading && isEmpty ? (
+        <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
+      ) : isEmpty ? (
+        <View style={styles.empty}>
+          <Text style={styles.emptyEmoji}>🗓️</Text>
+          <Text style={styles.emptyTitle}>Nenhuma corrida agendada</Text>
+          <Text style={styles.emptyText}>
+            Passageiros que agendarem corridas aparecerão aqui.{'\n'}Fique online para receber novos pedidos.
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={[]}
+          renderItem={null}
+          keyExtractor={() => ''}
+          refreshControl={
+            <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={Colors.accent} />
+          }
+          ListHeaderComponent={
+            <>
+              {/* ── Minhas corridas confirmadas ── */}
+              {hasClaimed && (
+                <>
+                  <Text style={styles.sectionHeader}>Minhas corridas</Text>
+                  {claimed.map((ride) => (
+                    <ClaimedCard
+                      key={ride.id}
+                      ride={ride}
+                      now={now}
+                      onStart={handleStart}
+                      onChat={handleChat}
+                      onRelease={handleRelease}
+                    />
+                  ))}
+                </>
+              )}
+
+              {/* ── Disponíveis para confirmar ── */}
+              {hasAvailable && (
+                <>
+                  <Text style={styles.sectionHeader}>Disponíveis</Text>
+                  {available.map((ride) => (
+                    <AvailableCard
+                      key={ride.id}
+                      ride={ride}
+                      now={now}
+                      claiming={claiming === ride.id}
+                      onClaim={handleClaim}
+                    />
+                  ))}
+                </>
+              )}
+            </>
+          }
+          contentContainerStyle={styles.list}
+        />
+      )}
+    </SafeAreaView>
+  );
 }
+
+// ─── Estilos ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.offWhite },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
-  back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: 24, color: Colors.primary },
-  title: { fontSize: 22, fontWeight: '800', color: Colors.primary, marginLeft: 4 },
-  list: { paddingHorizontal: 16, paddingBottom: 32, flexGrow: 1 },
-  sectionHeader: { fontSize: 13, fontWeight: '700', color: Colors.gray[500], textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 16, marginBottom: 8 },
-  card: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 10 },
+
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  title: { fontSize: 22, fontWeight: '800', color: Colors.primary },
+  claimedBadge: {
+    backgroundColor: 'rgba(34,197,94,0.15)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  claimedBadgeText: { color: Colors.success, fontSize: 12, fontWeight: '700' },
+
+  list: { paddingHorizontal: 16, paddingBottom: 32 },
+
+  sectionHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.gray[500],
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: 16,
+    marginBottom: 10,
+  },
+
+  // ── Cards ─────────────────────────────────────────────────────────────────
+  card: {
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
   cardClaimed: { borderLeftWidth: 4, borderLeftColor: Colors.success },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  cardDate: { fontSize: 15, fontWeight: '700', color: Colors.primary },
-  confirmedBadge: { backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  confirmedText: { color: Colors.success, fontSize: 11, fontWeight: '700' },
-  dueBadge: { backgroundColor: 'rgba(201,168,76,0.18)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  dueText: { color: Colors.accent, fontSize: 11, fontWeight: '700' },
-  availBadge: { backgroundColor: Colors.gray[100], borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  availText: { color: Colors.gray[600], fontSize: 11, fontWeight: '700' },
+  cardNow: { borderLeftColor: '#ef4444' },
+
+  cardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  cardDate: { fontSize: 14, fontWeight: '700', color: Colors.primary },
+
+  countdownBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  countdownIcon: { fontSize: 12 },
+  countdownText: { fontSize: 13, fontWeight: '800' },
+
+  availBadge: {
+    backgroundColor: Colors.gray[100],
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  availText: { color: Colors.gray[600], fontSize: 12, fontWeight: '600' },
+
+  // ── Rota ─────────────────────────────────────────────────────────────────
   route: { flexDirection: 'row', marginBottom: 12 },
   routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
   dotOrigin: { width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.accent },
@@ -199,6 +418,8 @@ const styles = StyleSheet.create({
   routeAddrs: { flex: 1, marginLeft: 12 },
   addr: { fontSize: 14, color: Colors.gray[800], fontWeight: '500' },
   addrDest: { marginTop: 14 },
+
+  // ── Meta ──────────────────────────────────────────────────────────────────
   meta: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -209,12 +430,61 @@ const styles = StyleSheet.create({
   },
   metaText: { fontSize: 13, color: Colors.gray[500] },
   metaPrice: { fontSize: 16, fontWeight: '800', color: Colors.primary },
-  claimBtn: { backgroundColor: Colors.accent, borderRadius: 12, height: 46, alignItems: 'center', justifyContent: 'center' },
+
+  // ── Botões ────────────────────────────────────────────────────────────────
+  claimBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 12,
+    height: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   claimBtnText: { color: Colors.primary, fontSize: 15, fontWeight: '800' },
-  startBtn: { backgroundColor: Colors.primary, borderRadius: 12, height: 46, alignItems: 'center', justifyContent: 'center' },
-  startBtnText: { color: Colors.white, fontSize: 15, fontWeight: '800' },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
-  emptyEmoji: { fontSize: 48, marginBottom: 16 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.primary, marginBottom: 6 },
-  emptyText: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingHorizontal: 32 },
+
+  chatBtn: {
+    backgroundColor: 'rgba(201,168,76,0.12)',
+    borderRadius: 12,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(201,168,76,0.3)',
+  },
+  chatBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
+
+  startBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  startBtnText: { color: Colors.accent, fontSize: 15, fontWeight: '800' },
+
+  releaseBtn: {
+    borderRadius: 12,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.gray[300],
+  },
+  releaseBtnText: { color: Colors.gray[500], fontSize: 13, fontWeight: '600' },
+
+  noReleaseRow: {
+    borderRadius: 12,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(239,68,68,0.06)',
+  },
+  noReleaseText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
+
+  // ── Empty ─────────────────────────────────────────────────────────────────
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 100 },
+  emptyEmoji: { fontSize: 52, marginBottom: 16 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.primary, marginBottom: 8 },
+  emptyText: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingHorizontal: 36, lineHeight: 20 },
 });

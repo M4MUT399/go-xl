@@ -1,14 +1,17 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity,
   FlatList, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, Message } from '../types';
 import { Colors } from '../constants/colors';
 import { useAuth } from '../hooks/useAuth';
 import { useMessages } from '../hooks/useMessages';
+import { markChatRead } from '../hooks/useUnreadMessages';
+import { activeChatRideId } from '../lib/activeChatRide';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Chat'>;
@@ -21,6 +24,25 @@ export function ChatScreen({ navigation, route }: Props) {
   const { messages, sendMessage } = useMessages(rideId, profile?.id);
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<Message>>(null);
+
+  // Marca como lido ao entrar e ao sair. Usa o timestamp da última mensagem
+  // (não o relógio do aparelho) para não deixar o badge preso por clock skew.
+  const latestTs = messages.length
+    ? new Date(messages[messages.length - 1].created_at).getTime()
+    : undefined;
+
+  useEffect(() => {
+    markChatRead(rideId, latestTs);
+    return () => { markChatRead(rideId, latestTs); };
+  }, [rideId, latestTs]);
+
+  // Track which chat is active so notifications can suppress banner (keep only sound)
+  useFocusEffect(
+    React.useCallback(() => {
+      activeChatRideId.current = rideId;
+      return () => { activeChatRideId.current = null; };
+    }, [rideId])
+  );
 
   function handleSend() {
     if (!text.trim()) return;

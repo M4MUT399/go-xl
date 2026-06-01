@@ -1,5 +1,4 @@
 import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
@@ -12,25 +11,40 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export async function registerForPushNotificationsAsync(): Promise<string | null> {
-  if (!Device.isDevice) return null;
+/**
+ * Solicita (ou confirma) permissão de notificação.
+ * Funciona em dispositivo real e em simulador (Device.isDevice removido
+ * para não bloquear testes em ambiente de desenvolvimento).
+ */
+export async function ensureNotificationPermissions(): Promise<boolean> {
+  try {
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('rides', {
+        name: 'Corridas',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#C9A84C',
+      });
+    }
 
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('rides', {
-      name: 'Corridas',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#C9A84C',
-    });
-  }
+    const { status: existing } = await Notifications.getPermissionsAsync();
+    if (existing === 'granted') return true;
+    if (existing === 'denied') return false; // Usuário negou — não perguntar de novo
 
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  let finalStatus = existing;
-  if (existing !== 'granted') {
     const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
+    return status === 'granted';
+  } catch {
+    return false;
   }
-  if (finalStatus !== 'granted') return null;
+}
+
+/**
+ * Tenta obter o Expo Push Token e salvar no banco.
+ * Pode falhar silenciosamente em dev sem EAS projectId.
+ */
+export async function registerForPushNotificationsAsync(): Promise<string | null> {
+  const granted = await ensureNotificationPermissions();
+  if (!granted) return null;
 
   const projectId =
     Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
@@ -41,19 +55,35 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     );
     return token.data;
   } catch {
+    // Em dev sem EAS o token não está disponível,
+    // mas notificações locais (showLocalNotification) continuam funcionando.
     return null;
   }
 }
 
-/** Dispara uma notificação local imediata (banner na tela + som). Funciona no Expo Go. */
-export async function showLocalNotification(title: string, body: string, data?: Record<string, unknown>) {
+/**
+ * Dispara uma notificação local imediata (banner + som).
+ * Solicita permissão se ainda não concedida.
+ * Funciona no Expo Go sem push token nem internet.
+ */
+export async function showLocalNotification(
+  title: string,
+  body: string,
+  data?: Record<string, unknown>
+) {
   try {
+    const granted = await ensureNotificationPermissions();
+    if (!granted) {
+      console.warn('[Notifications] Permissão não concedida — notificação ignorada.');
+      return;
+    }
+
     await Notifications.scheduleNotificationAsync({
       content: { title, body, sound: 'default', data: data ?? {} },
       trigger: null,
     });
-  } catch {
-    // best-effort
+  } catch (e) {
+    console.error('[Notifications] Erro ao disparar notificação:', e);
   }
 }
 
@@ -71,10 +101,7 @@ export async function sendPushAsync(messages: PushMessage[]): Promise<void> {
   try {
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify(
         valid.map((m) => ({
           to: m.to,
@@ -87,6 +114,6 @@ export async function sendPushAsync(messages: PushMessage[]): Promise<void> {
       ),
     });
   } catch {
-    // falha silenciosa — push é best-effort
+    // push é best-effort
   }
 }

@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { showLocalNotification } from '../lib/notifications';
 import { notifyInApp } from '../lib/inAppNotify';
 import type { Message } from '../types';
 
 /**
- * Escuta novas mensagens da corrida e dispara uma notificação local
- * (banner + som) quando chega mensagem do outro participante.
+ * Escuta novas mensagens da corrida via postgres_changes e dispara o banner
+ * in-app quando chega mensagem do outro participante.
+ *
  * `enabled` deve ser true apenas quando o usuário NÃO está na tela de chat
- * (ex.: passe useIsFocused() da tela da corrida), para não duplicar o aviso.
+ * (ex.: passe isFocused da tela de corrida) para não duplicar o aviso.
+ *
+ * `senderLabel` define o nome do remetente no banner (ex.: 'Motorista' ou 'Passageiro').
  */
-export function useChatAlert(rideId: string | undefined, userId: string | undefined, enabled: boolean) {
+export function useChatAlert(
+  rideId: string | undefined,
+  userId: string | undefined,
+  enabled: boolean,
+  senderLabel = 'Nova mensagem',
+) {
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
 
   useEffect(() => {
@@ -24,10 +31,8 @@ export function useChatAlert(rideId: string | undefined, userId: string | undefi
         (payload) => {
           const msg = payload.new as Message;
           if (msg.sender_id !== userId) {
-            // Banner in-app + som (confiável no Expo Go)
-            notifyInApp('Nova mensagem', msg.text);
-            // Notificação do sistema (funciona em build nativo / app em segundo plano)
-            showLocalNotification('💬 Nova mensagem', msg.text, { rideId, type: 'chat' });
+            // Banner in-app clicável — abre o chat ao toque
+            notifyInApp(`💬 ${senderLabel}`, msg.text, rideId, senderLabel);
           }
         }
       )
@@ -36,5 +41,5 @@ export function useChatAlert(rideId: string | undefined, userId: string | undefi
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [rideId, userId, enabled, channelId]);
+  }, [rideId, userId, enabled, senderLabel, channelId]);
 }

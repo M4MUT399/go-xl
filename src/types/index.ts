@@ -19,6 +19,7 @@ export interface Profile {
   rating?: number;
   total_rides?: number;
   push_token?: string;
+  driver_code?: string;
   created_at: string;
 }
 
@@ -69,6 +70,11 @@ export interface Ride {
   distance_km?: number;
   duration_min?: number;
   scheduled_for?: string;
+  // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
+  driver_lat?: number;
+  driver_lng?: number;
+  driver_eta_min?: number;
+  driver_eta_km?: number;
   created_at: string;
   accepted_at?: string;
   completed_at?: string;
@@ -112,7 +118,8 @@ export type RootStackParamList = {
   Register: { type: UserType };
   PassengerTabs: undefined;
   DriverTabs: undefined;
-  RequestRide: { destination: Location };
+  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string };
+  QRCode: undefined;
   FindingDriver: { ride: Ride };
   ActiveRide: { ride: Ride };
   RateRide: { ride: Ride };

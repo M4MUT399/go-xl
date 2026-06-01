@@ -9,10 +9,11 @@ import { useVehicle } from '../hooks/useVehicle';
 import { useUserStats } from '../hooks/useUserStats';
 import type { RootStackParamList } from '../types';
 
-type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'Support' | 'Terms';
+type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'Support' | 'Terms' | 'QRCode';
 
-const MENU_ITEMS: { icon: string; label: string; route: ProfileRoute }[] = [
+const MENU_ITEMS: { icon: string; label: string; route: ProfileRoute; driverOnly?: boolean }[] = [
   { icon: '👤', label: 'Dados pessoais', route: 'EditProfile' },
+  { icon: '📲', label: 'Meu QR Code', route: 'QRCode', driverOnly: true },
   { icon: '💳', label: 'Pagamento', route: 'Payment' },
   { icon: '🔔', label: 'Notificações', route: 'NotificationSettings' },
   { icon: '🛟', label: 'Ajuda e suporte', route: 'Support' },
@@ -92,7 +93,7 @@ export function ProfileScreen() {
             </View>
             {vehicle ? (
               <View style={styles.vehicleBody}>
-                <Text style={styles.vehicleEmoji}>🚗</Text>
+                <Text style={styles.vehicleEmoji}>🚙</Text>
                 <View style={styles.vehicleInfo}>
                   <Text style={styles.vehicleModel}>{vehicle.model}</Text>
                   <Text style={styles.vehicleMeta}>
@@ -114,10 +115,13 @@ export function ProfileScreen() {
         )}
 
         <View style={styles.menu}>
-          {MENU_ITEMS.map((item, i) => (
+          {MENU_ITEMS
+            .filter((item) => !(isDriver && item.route === 'Payment'))
+            .filter((item) => !item.driverOnly || isDriver)
+            .map((item, i, arr) => (
             <TouchableOpacity
-              key={i}
-              style={[styles.menuItem, i < MENU_ITEMS.length - 1 && styles.menuItemBorder]}
+              key={item.route}
+              style={[styles.menuItem, i < arr.length - 1 && styles.menuItemBorder]}
               onPress={() => navigation.navigate(item.route)}
             >
               <Text style={styles.menuIcon}>{item.icon}</Text>
@@ -179,7 +183,7 @@ const styles = StyleSheet.create({
   vehicleTitle: { fontSize: 15, fontWeight: '700', color: Colors.primary },
   vehicleAction: { fontSize: 14, fontWeight: '700', color: Colors.accent },
   vehicleBody: { flexDirection: 'row', alignItems: 'center' },
-  vehicleEmoji: { fontSize: 28, marginRight: 12 },
+  vehicleEmoji: { fontSize: 36, marginRight: 12 },
   vehicleInfo: { flex: 1 },
   vehicleModel: { fontSize: 16, fontWeight: '700', color: Colors.gray[800] },
   vehicleMeta: { fontSize: 13, color: Colors.gray[500], marginTop: 2 },

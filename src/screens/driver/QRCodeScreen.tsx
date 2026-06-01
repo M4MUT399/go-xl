@@ -1,0 +1,259 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
+  ActivityIndicator, Share, Alert, ScrollView,
+} from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
+import * as ExpoLinking from 'expo-linking';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Colors } from '../../constants/colors';
+import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../hooks/useAuth';
+import type { RootStackParamList } from '../../types';
+
+type Props = {
+  navigation: NativeStackNavigationProp<RootStackParamList, 'QRCode'>;
+};
+
+/**
+ * Deriva um código de 6 letras/números a partir do UUID do motorista.
+ * Determinístico: mesmo ID → mesmo código. Único porque UUIDs são únicos.
+ * Não precisa de consulta ao banco para verificar unicidade.
+ */
+function codeFromId(id: string): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const hex = id.replace(/-/g, '');
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    const byte = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+    result += chars[byte % chars.length];
+  }
+  return result;
+}
+
+export function QRCodeScreen({ navigation }: Props) {
+  const { profile, refreshProfile } = useAuth();
+  const [code, setCode] = useState<string | null>(profile?.driver_code ?? null);
+  const [saving, setSaving] = useState(false);
+
+  // Gera e salva o código na primeira vez que o motorista abre esta tela
+  useEffect(() => {
+    if (code || !profile?.id) return;
+
+    const newCode = codeFromId(profile.id);
+    setSaving(true);
+
+    supabase
+      .from('profiles')
+      .update({ driver_code: newCode })
+      .eq('id', profile.id)
+      .then(({ error }) => {
+        if (!error) {
+          setCode(newCode);
+          refreshProfile?.();
+        } else {
+          // Mesmo com erro no save, exibe o QR com o código derivado
+          console.warn('[QRCode] erro ao salvar driver_code:', error.message);
+          setCode(newCode);
+        }
+        setSaving(false);
+      });
+  }, [profile?.id]);
+
+  /** URL que o QR code vai codificar.
+   *  Em Expo Go  → exp+go-xl://ride?driver=ABC123
+   *  Produção    → goxl://ride?driver=ABC123
+   */
+  const deepLink = code
+    ? ExpoLinking.createURL('ride', { queryParams: { driver: code } })
+    : null;
+
+  const handleShare = useCallback(async () => {
+    if (!deepLink || !code) return;
+    try {
+      await Share.share({
+        message:
+          `Solicite uma corrida Executive XL comigo!\n\n` +
+          `Abra o app Go XL e use o código: ${code}\n\n` +
+          `Ou acesse: ${deepLink}`,
+        title: 'Go XL — Meu QR Code',
+      });
+    } catch {
+      // usuário cancelou
+    }
+  }, [deepLink, code]);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
+          <Text style={styles.backText}>←</Text>
+        </TouchableOpacity>
+        <Text style={styles.title}>Meu QR Code</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.card}>
+          {/* Título do card */}
+          <Text style={styles.cardTitle}>Go<Text style={{ color: Colors.accent }}>XL</Text></Text>
+          <Text style={styles.cardSub}>Executive XL</Text>
+
+          {/* QR Code */}
+          <View style={styles.qrWrapper}>
+            {saving ? (
+              <ActivityIndicator color={Colors.accent} size="large" />
+            ) : deepLink ? (
+              <QRCode
+                value={deepLink}
+                size={200}
+                color={Colors.primary}
+                backgroundColor={Colors.white}
+                logo={undefined}
+              />
+            ) : null}
+          </View>
+
+          {/* Código legível */}
+          {code && (
+            <View style={styles.codeBox}>
+              <Text style={styles.codeLabel}>Código</Text>
+              <Text style={styles.codeValue}>{code}</Text>
+            </View>
+          )}
+
+          {/* Motorista */}
+          <Text style={styles.driverName}>{profile?.full_name}</Text>
+          <Text style={styles.category}>Executive XL — Go XL</Text>
+        </View>
+
+        {/* Instruções */}
+        <View style={styles.instructions}>
+          <Text style={styles.instrTitle}>Como funciona</Text>
+
+          <View style={styles.instrItem}>
+            <Text style={styles.instrIcon}>📱</Text>
+            <Text style={styles.instrText}>
+              O passageiro escaneia o QR code na porta do seu carro com a câmera do celular.
+            </Text>
+          </View>
+
+          <View style={styles.instrItem}>
+            <Text style={styles.instrIcon}>⬇️</Text>
+            <Text style={styles.instrText}>
+              Se não tiver o app, ele é direcionado para baixar o Go XL. Após instalar, a
+              corrida é vinculada automaticamente ao seu veículo.
+            </Text>
+          </View>
+
+          <View style={styles.instrItem}>
+            <Text style={styles.instrIcon}>🔒</Text>
+            <Text style={styles.instrText}>
+              A corrida fica travada para você — nenhum outro motorista pode aceitá-la.
+            </Text>
+          </View>
+
+          <View style={styles.instrItem}>
+            <Text style={styles.instrIcon}>✅</Text>
+            <Text style={styles.instrText}>
+              Você recebe a notificação normalmente e aceita pela tela principal.
+            </Text>
+          </View>
+        </View>
+
+        {/* Botão compartilhar */}
+        <TouchableOpacity style={styles.shareBtn} onPress={handleShare} disabled={!code}>
+          <Text style={styles.shareBtnText}>📤  Compartilhar QR Code</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.note}>
+          Cole adesivo com este QR na janela ou porta do veículo.
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.offWhite },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.gray[100],
+  },
+  back: { marginRight: 16, padding: 4 },
+  backText: { fontSize: 24, color: Colors.primary },
+  title: { fontSize: 20, fontWeight: '700', color: Colors.primary },
+  scroll: { padding: 16, alignItems: 'center' },
+
+  card: {
+    backgroundColor: Colors.white,
+    borderRadius: 24,
+    padding: 28,
+    alignItems: 'center',
+    width: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+    marginBottom: 24,
+  },
+  cardTitle: { fontSize: 28, fontWeight: '900', color: Colors.primary, letterSpacing: -1 },
+  cardSub: { fontSize: 12, color: Colors.accent, fontWeight: '600', marginBottom: 20, letterSpacing: 1 },
+
+  qrWrapper: {
+    padding: 16,
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.gray[100],
+    marginBottom: 20,
+    minWidth: 232,
+    minHeight: 232,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  codeBox: {
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  codeLabel: { fontSize: 10, color: Colors.accent, fontWeight: '700', letterSpacing: 2, marginBottom: 2 },
+  codeValue: { fontSize: 28, fontWeight: '900', color: Colors.white, letterSpacing: 6 },
+
+  driverName: { fontSize: 16, fontWeight: '700', color: Colors.primary },
+  category: { fontSize: 12, color: Colors.gray[500], marginTop: 4 },
+
+  instructions: {
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    marginBottom: 20,
+  },
+  instrTitle: { fontSize: 15, fontWeight: '800', color: Colors.primary, marginBottom: 14 },
+  instrItem: { flexDirection: 'row', marginBottom: 12, alignItems: 'flex-start' },
+  instrIcon: { fontSize: 18, marginRight: 12, lineHeight: 24 },
+  instrText: { flex: 1, fontSize: 13, color: Colors.gray[600], lineHeight: 20 },
+
+  shareBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  shareBtnText: { fontSize: 15, fontWeight: '800', color: Colors.primary },
+
+  note: { fontSize: 12, color: Colors.gray[400], textAlign: 'center', paddingHorizontal: 24 },
+});

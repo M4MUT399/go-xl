@@ -3,6 +3,7 @@
     "name": "Go XL",
     "slug": "go-xl",
     "version": "1.0.0",
+    "scheme": "goxl",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

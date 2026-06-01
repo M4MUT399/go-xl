@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Alert } from 'react-native';
+import {
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
+  Platform, Alert, ScrollView,
+} from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
@@ -13,6 +16,8 @@ import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
+import { RouteStep } from '../../lib/routing';
+import { CarMarker } from '../../components/common/CarMarker';
 import { supabase } from '../../lib/supabase';
 
 type Props = {
@@ -22,26 +27,123 @@ type Props = {
 
 type Phase = 'pickup' | 'dropoff';
 
+// ─── Helpers de navegação ────────────────────────────────────────────────────
+
+function maneuverArrow(type: string, modifier?: string): string {
+  if (type === 'arrive') return '🏁';
+  if (type === 'roundabout' || type === 'rotary') return '↻';
+  if (type === 'fork') {
+    return modifier?.includes('right') ? '↗' : '↖';
+  }
+  if (type === 'on ramp' || type === 'off ramp') {
+    return modifier?.includes('left') ? '↖' : '↗';
+  }
+  switch (modifier) {
+    case 'uturn':       return '↩';
+    case 'sharp right': return '→';
+    case 'right':       return '→';
+    case 'slight right':return '↗';
+    case 'straight':    return '↑';
+    case 'slight left': return '↖';
+    case 'left':        return '←';
+    case 'sharp left':  return '←';
+    default:            return '↑';
+  }
+}
+
+function maneuverColor(type: string, modifier?: string): string {
+  if (type === 'arrive') return Colors.success;
+  if (type === 'roundabout' || type === 'rotary') return '#7C3AED';
+  if (modifier === 'left' || modifier === 'sharp left' || modifier === 'slight left') return '#2563EB';
+  if (modifier === 'right' || modifier === 'sharp right' || modifier === 'slight right') return '#2563EB';
+  return Colors.primary;
+}
+
+function maneuverInstruction(type: string, modifier?: string, name?: string): { action: string; street: string } {
+  const street = name || '';
+  if (type === 'arrive')    return { action: 'Chegou ao destino', street };
+  if (type === 'depart')    return { action: 'Siga em frente', street };
+  if (type === 'roundabout' || type === 'rotary') return { action: 'Entre na rotatória', street };
+  if (type === 'fork')      return { action: modifier?.includes('right') ? 'Mantenha à direita' : 'Mantenha à esquerda', street };
+  if (type === 'merge')     return { action: 'Incorpore ao tráfego', street };
+  if (type === 'on ramp')   return { action: 'Entre na rampa', street };
+  if (type === 'off ramp')  return { action: 'Saia pela rampa', street };
+  if (type === 'end of road') return { action: modifier?.includes('right') ? 'Vire à direita' : 'Vire à esquerda', street };
+  switch (modifier) {
+    case 'uturn':        return { action: 'Faça o retorno', street };
+    case 'sharp right':  return { action: 'Vire totalmente à direita', street };
+    case 'right':        return { action: 'Vire à direita', street };
+    case 'slight right': return { action: 'Siga levemente à direita', street };
+    case 'straight':     return { action: 'Continue em frente', street };
+    case 'slight left':  return { action: 'Siga levemente à esquerda', street };
+    case 'left':         return { action: 'Vire à esquerda', street };
+    case 'sharp left':   return { action: 'Vire totalmente à esquerda', street };
+    default:             return { action: 'Continue', street };
+  }
+}
+
+function formatStepDist(meters: number): string {
+  if (meters < 30)   return 'Agora';
+  if (meters < 1000) return `${Math.round(meters / 10) * 10} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
+
+// ─── Componente ──────────────────────────────────────────────────────────────
+
 export function DriverNavigateScreen({ navigation, route }: Props) {
   const { ride } = route.params;
   const { profile } = useAuth();
-  const { location } = useLocation();
+  // watch: true → posição contínua durante a navegação
+  const { location } = useLocation({ watch: true });
   const { updateRideStatus } = useDriverRide(profile?.id);
+  const lastUploadedCoord = useRef<{ lat: number; lng: number } | null>(null);
   const isFocused = useIsFocused();
   const [phase, setPhase] = useState<Phase>('pickup');
   const [loading, setLoading] = useState(false);
+  // Mantém o snapshot do marcador ligado por um instante a cada movimento,
+  // para o ícone do carro pintar e acompanhar a posição no iOS.
+  const [tracksCar, setTracksCar] = useState(true);
 
-  useChatAlert(ride.id, profile?.id, isFocused);
+  useChatAlert(ride.id, profile?.id, isFocused, 'Passageiro');
+
+  useEffect(() => {
+    if (!location) return;
+    setTracksCar(true);
+    const t = setTimeout(() => setTracksCar(false), 1000);
+    return () => clearTimeout(t);
+  }, [location?.lat, location?.lng]);
 
   const origin = rideOrigin(ride);
-  const dest = rideDestination(ride);
+  const dest   = rideDestination(ride);
   const target = phase === 'pickup' ? origin : dest;
 
-  // Throttle: só recalcula rota se mover > 150m desde última chamada
+  // Publica posição do motorista em driver_locations (passageiro vê em tempo real)
+  useEffect(() => {
+    if (!location || !profile?.id) {
+      console.log('[GOXL loc] skip — location?', !!location, 'profile?', !!profile?.id);
+      return;
+    }
+    const prev = lastUploadedCoord.current;
+    // Só grava se mover > 30 m (evita flood de writes)
+    if (prev && haversineMeters(prev, location) < 30) return;
+    lastUploadedCoord.current = { lat: location.lat, lng: location.lng };
+    supabase.from('driver_locations').upsert({
+      driver_id: profile.id,
+      lat: location.lat,
+      lng: location.lng,
+      is_online: true,
+      updated_at: new Date().toISOString(),
+    }).then(({ error }) => {
+      console.log(error ? '[GOXL loc] upsert ERROR: ' + error.message : '[GOXL loc] upsert OK');
+    });
+  }, [location?.lat, location?.lng, profile?.id]);
+
+  // Throttle: recalcula rota só se mover > 150 m
   const lastRouteCoord = useRef<{ lat: number; lng: number } | null>(null);
   const [routeOrigin, setRouteOrigin] = useState(
     location ? { lat: location.lat, lng: location.lng } : null
   );
+  const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
     if (!location) return;
@@ -51,23 +153,54 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       setRouteOrigin({ lat: location.lat, lng: location.lng });
       return;
     }
-    const dist = haversineMeters(prev, location);
-    if (dist > 150) {
+    if (haversineMeters(prev, location) > 150) {
       lastRouteCoord.current = { lat: location.lat, lng: location.lng };
       setRouteOrigin({ lat: location.lat, lng: location.lng });
     }
   }, [location?.lat, location?.lng]);
 
-  // Rota real (ruas) do motorista até o alvo (embarque ou destino)
   const { route: path } = useRideRoute(
     routeOrigin,
     { lat: target.lat, lng: target.lng }
   );
 
-  // ETA: hora de chegada estimada
+  // Passos da rota (turn-by-turn)
+  const steps: RouteStep[] = path?.steps ?? [];
+  // steps[0] = instrução atual (de onde estou → próxima manobra)
+  // steps[1..] = próximas manobras
+  const currentStep   = steps[0] ?? null;
+  const upcomingSteps = steps.slice(1, 4).filter((s) => s.maneuver.type !== 'arrive');
+
   const etaTime = path?.durationMin
     ? new Date(Date.now() + path.durationMin * 60 * 1000)
     : null;
+
+  // ── Grava posição + ETA na própria corrida ────────────────────────────────
+  // O passageiro lê esses campos (RLS garante acesso à própria corrida) e exibe
+  // os mesmos números de tempo/distância que o motorista vê.
+  const lastTelemetry = useRef<{ lat: number; lng: number; etaMin?: number } | null>(null);
+  useEffect(() => {
+    if (!location || !ride.id) {
+      console.log('[GOXL tel] skip — location?', !!location, 'rideId?', ride.id);
+      return;
+    }
+    const etaMin = path?.durationMin ?? null;
+    const etaKm = path?.distanceKm ?? null;
+    const prev = lastTelemetry.current;
+    const moved = !prev || haversineMeters(prev, location) >= 30;
+    const etaChanged = prev?.etaMin !== (etaMin ?? undefined);
+    if (!moved && !etaChanged) return;
+    lastTelemetry.current = { lat: location.lat, lng: location.lng, etaMin: etaMin ?? undefined };
+    console.log('[GOXL tel] writing', { lat: location.lat, lng: location.lng, etaMin, etaKm, rideId: ride.id });
+    supabase.from('rides').update({
+      driver_lat: location.lat,
+      driver_lng: location.lng,
+      driver_eta_min: etaMin,
+      driver_eta_km: etaKm,
+    }).eq('id', ride.id).then(({ error }) => {
+      console.log(error ? '[GOXL tel] write ERROR: ' + error.message : '[GOXL tel] write OK');
+    });
+  }, [location?.lat, location?.lng, path?.durationMin, path?.distanceKm, ride.id]);
 
   // Detecta cancelamento pelo passageiro
   useEffect(() => {
@@ -106,6 +239,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     if (phase === 'pickup') {
       await updateRideStatus(ride.id, 'in_progress' as RideStatus);
       setPhase('dropoff');
+      // Reseta throttle para recalcular rota ao destino
+      lastRouteCoord.current = null;
     } else {
       await updateRideStatus(ride.id, 'completed' as RideStatus);
       Alert.alert('Corrida concluída!', `Valor: ${formatCurrency(ride.price)}`, [
@@ -117,9 +252,30 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   const buttonLabel = phase === 'pickup' ? 'Passei buscar o passageiro' : 'Finalizar corrida';
 
+  // Instrução atual
+  const arrow       = currentStep ? maneuverArrow(currentStep.maneuver.type, currentStep.maneuver.modifier) : '↑';
+  const arrowBg     = currentStep ? maneuverColor(currentStep.maneuver.type, currentStep.maneuver.modifier) : Colors.primary;
+  const instruction = currentStep
+    ? maneuverInstruction(currentStep.maneuver.type, currentStep.maneuver.modifier, currentStep.name)
+    : { action: phase === 'pickup' ? 'Indo buscar o passageiro' : 'Levando ao destino', street: target.address };
+  const distLabel   = currentStep ? formatStepDist(currentStep.distance) : '';
+
+  // Ajusta câmera para mostrar motorista + destino quando a rota carrega
+  useEffect(() => {
+    if (!path || !location || !mapRef.current) return;
+    mapRef.current.fitToCoordinates(
+      [
+        { latitude: location.lat, longitude: location.lng },
+        { latitude: target.lat, longitude: target.lng },
+      ],
+      { edgePadding: { top: 160, right: 60, bottom: 320, left: 60 }, animated: true }
+    );
+  }, [path?.distanceKm, phase]);
+
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         initialRegion={{
@@ -128,17 +284,26 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           latitudeDelta: 0.02,
           longitudeDelta: 0.02,
         }}
+        showsUserLocation
+        showsMyLocationButton={false}
+        followsUserLocation={false}
       >
-        {location && (
-          <Marker coordinate={{ latitude: location.lat, longitude: location.lng }}>
-            <View style={styles.driverMarker}>
-              <Text style={{ fontSize: 20 }}>🚗</Text>
-            </View>
-          </Marker>
-        )}
-        <Marker coordinate={{ latitude: target.lat, longitude: target.lng }}>
+        <Marker
+          coordinate={{ latitude: target.lat, longitude: target.lng }}
+          anchor={{ x: 0.5, y: 0.5 }}
+          tracksViewChanges={false}
+        >
           <View style={phase === 'pickup' ? styles.markerPickup : styles.markerDropoff} />
         </Marker>
+        {location && (
+          <Marker
+            coordinate={{ latitude: location.lat, longitude: location.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={tracksCar}
+          >
+            <CarMarker scale={0.75} />
+          </Marker>
+        )}
         {location && (
           <Polyline
             coordinates={
@@ -154,26 +319,75 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         )}
       </MapView>
 
+      {/* ── Banner de instrução de navegação ── */}
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
-        <View style={styles.phaseBanner}>
-          <View style={[styles.phaseIndicator, phase === 'dropoff' && styles.phaseIndicatorActive]} />
-          <Text style={styles.phaseText}>
-            {phase === 'pickup' ? 'Indo buscar o passageiro' : 'Levando ao destino'}
-          </Text>
+        <View style={styles.instructionBanner}>
+          {/* Seta de direção */}
+          <View style={[styles.arrowBox, { backgroundColor: arrowBg }]}>
+            <Text style={styles.arrowText}>{arrow}</Text>
+          </View>
+
+          {/* Instrução + rua */}
+          <View style={styles.instructionInfo}>
+            {distLabel ? (
+              <Text style={styles.instructionDist}>{distLabel}</Text>
+            ) : null}
+            <Text style={styles.instructionAction} numberOfLines={1}>
+              {instruction.action}
+            </Text>
+            {instruction.street ? (
+              <Text style={styles.instructionStreet} numberOfLines={1}>
+                {instruction.street}
+              </Text>
+            ) : null}
+          </View>
+
+          {/* ETA */}
           {path && (
             <View style={styles.etaBadge}>
-              <Text style={styles.etaBadgeText}>
-                {path.durationMin} min
-              </Text>
+              <Text style={styles.etaBadgeMin}>{path.durationMin}</Text>
+              <Text style={styles.etaBadgeUnit}>min</Text>
             </View>
           )}
         </View>
       </SafeAreaView>
 
+      {/* ── Bottom sheet ── */}
       <View style={styles.bottomSheet}>
         <View style={styles.handle} />
 
-        {phase === 'dropoff' && path && (
+        {/* Próximas manobras */}
+        {upcomingSteps.length > 0 && (
+          <View style={styles.upcomingSection}>
+            <Text style={styles.upcomingTitle}>Próximas</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.upcomingList}
+            >
+              {upcomingSteps.map((s, i) => {
+                const a = maneuverArrow(s.maneuver.type, s.maneuver.modifier);
+                const bg = maneuverColor(s.maneuver.type, s.maneuver.modifier);
+                return (
+                  <View key={i} style={styles.upcomingChip}>
+                    <View style={[styles.upcomingArrowBox, { backgroundColor: bg }]}>
+                      <Text style={styles.upcomingArrow}>{a}</Text>
+                    </View>
+                    <View style={styles.upcomingChipInfo}>
+                      <Text style={styles.upcomingChipName} numberOfLines={1}>
+                        {s.name || maneuverInstruction(s.maneuver.type, s.maneuver.modifier).action}
+                      </Text>
+                      <Text style={styles.upcomingChipDist}>{formatStepDist(s.distance)}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* ETA card (pickup e dropoff) */}
+        {path && (
           <View style={styles.etaCard}>
             <View style={styles.etaMain}>
               <Text style={styles.etaMinutes}>{path.durationMin}</Text>
@@ -183,17 +397,22 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             </View>
             {etaTime && (
               <Text style={styles.etaArrival}>
-                Chegada estimada: {etaTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                {phase === 'pickup' ? 'Embarque estimado' : 'Chegada estimada'}:{' '}
+                {etaTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
               </Text>
             )}
           </View>
         )}
 
+        {/* Endereço alvo */}
         <View style={styles.addressCard}>
-          <Text style={styles.addressLabel}>{phase === 'pickup' ? 'Local de embarque' : 'Destino final'}</Text>
+          <Text style={styles.addressLabel}>
+            {phase === 'pickup' ? 'Local de embarque' : 'Destino final'}
+          </Text>
           <Text style={styles.addressText}>{target.address}</Text>
         </View>
 
+        {/* Passageiro */}
         <View style={styles.passengerRow}>
           <View style={styles.passengerAvatar}>
             <Text style={styles.passengerAvatarText}>P</Text>
@@ -234,21 +453,84 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
-  phaseBanner: {
+
+  // Instruction banner
+  instructionBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    margin: 16,
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    padding: 14,
+    margin: 12,
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    padding: 12,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
   },
-  phaseIndicator: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.accent, marginRight: 10 },
-  phaseIndicatorActive: { backgroundColor: Colors.success },
-  phaseText: { color: Colors.white, fontSize: 14, fontWeight: '600' },
+  arrowBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  arrowText: {
+    fontSize: 26,
+    color: Colors.white,
+    fontWeight: '900',
+  },
+  instructionInfo: {
+    flex: 1,
+  },
+  instructionDist: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Colors.accent,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 1,
+  },
+  instructionAction: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.primary,
+    lineHeight: 19,
+  },
+  instructionStreet: {
+    fontSize: 12,
+    color: Colors.gray[500],
+    marginTop: 1,
+  },
+  etaBadge: {
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    flexShrink: 0,
+  },
+  etaBadgeMin: {
+    color: Colors.accent,
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 20,
+  },
+  etaBadgeUnit: {
+    color: Colors.gray[400],
+    fontSize: 10,
+    fontWeight: '700',
+  },
+
+  // Bottom sheet
   bottomSheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,
@@ -261,39 +543,68 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 16,
   },
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.gray[300], alignSelf: 'center', marginBottom: 16 },
-  addressCard: {
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.gray[300],
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+
+  // Upcoming steps
+  upcomingSection: {
+    marginBottom: 14,
+  },
+  upcomingTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Colors.gray[400],
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+  },
+  upcomingList: {
+    gap: 8,
+  },
+  upcomingChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: Colors.gray[100],
     borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-  },
-  addressLabel: { fontSize: 11, color: Colors.gray[400], textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
-  addressText: { fontSize: 15, color: Colors.primary, fontWeight: '600' },
-  passengerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  passengerAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: Colors.gray[200], alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  passengerAvatarText: { fontSize: 18, fontWeight: '700', color: Colors.gray[600] },
-  passengerInfo: { flex: 1 },
-  passengerName: { fontSize: 15, fontWeight: '600', color: Colors.primary },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  star: { color: Colors.accent, fontSize: 13, marginRight: 2 },
-  ratingText: { fontSize: 12, color: Colors.gray[500] },
-  actions: { flexDirection: 'row', gap: 8 },
-  actionBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.gray[100], alignItems: 'center', justifyContent: 'center' },
-  btn: {},
-  cancelBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 10 },
-  cancelBtnText: { color: Colors.error, fontSize: 15, fontWeight: '700' },
-  driverMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  markerPickup: { width: 14, height: 14, borderRadius: 7, backgroundColor: Colors.accent, borderWidth: 2, borderColor: Colors.white },
-  markerDropoff: { width: 14, height: 14, borderRadius: 3, backgroundColor: Colors.primary, borderWidth: 2, borderColor: Colors.white },
-  etaBadge: {
-    marginLeft: 'auto',
-    backgroundColor: Colors.accent,
-    borderRadius: 8,
+    paddingVertical: 8,
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    gap: 8,
+    maxWidth: 180,
   },
-  etaBadgeText: { color: Colors.primary, fontSize: 13, fontWeight: '800' },
+  upcomingArrowBox: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  upcomingArrow: {
+    fontSize: 16,
+    color: Colors.white,
+    fontWeight: '700',
+  },
+  upcomingChipInfo: {
+    flex: 1,
+  },
+  upcomingChipName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  upcomingChipDist: {
+    fontSize: 11,
+    color: Colors.gray[500],
+    marginTop: 1,
+  },
+
+  // ETA card (dropoff)
   etaCard: {
     backgroundColor: Colors.primary,
     borderRadius: 16,
@@ -301,13 +612,127 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     alignItems: 'center',
   },
-  etaMain: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginBottom: 6 },
-  etaMinutes: { fontSize: 48, fontWeight: '900', color: Colors.white, letterSpacing: -2 },
-  etaUnit: { fontSize: 18, fontWeight: '600', color: Colors.accent, marginBottom: 4 },
-  etaSep: { width: 1, height: 32, backgroundColor: 'rgba(255,255,255,0.2)', marginHorizontal: 8 },
-  etaDist: { fontSize: 20, fontWeight: '700', color: Colors.gray[300] },
-  etaArrival: { fontSize: 13, color: Colors.gray[400], fontWeight: '600' },
+  etaMain: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+    marginBottom: 6,
+  },
+  etaMinutes: {
+    fontSize: 48,
+    fontWeight: '900',
+    color: Colors.white,
+    letterSpacing: -2,
+  },
+  etaUnit: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: Colors.accent,
+    marginBottom: 4,
+  },
+  etaSep: {
+    width: 1,
+    height: 32,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    marginHorizontal: 8,
+  },
+  etaDist: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.gray[300],
+  },
+  etaArrival: {
+    fontSize: 13,
+    color: Colors.gray[400],
+    fontWeight: '600',
+  },
+
+  // Address card
+  addressCard: {
+    backgroundColor: Colors.gray[100],
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+  },
+  addressLabel: {
+    fontSize: 11,
+    color: Colors.gray[400],
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  addressText: {
+    fontSize: 15,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+
+  // Passenger row
+  passengerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  passengerAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: Colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  passengerAvatarText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.gray[600],
+  },
+  passengerInfo: { flex: 1 },
+  passengerName: { fontSize: 15, fontWeight: '600', color: Colors.primary },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  star: { color: Colors.accent, fontSize: 13, marginRight: 2 },
+  ratingText: { fontSize: 12, color: Colors.gray[500] },
+  actions: { flexDirection: 'row', gap: 8 },
+  actionBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btn: {},
+  cancelBtn: {
+    marginTop: 12,
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  cancelBtnText: {
+    color: Colors.error,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  // Markers
+  markerPickup: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: Colors.accent,
+    borderWidth: 2,
+    borderColor: Colors.white,
+  },
+  markerDropoff: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    backgroundColor: Colors.primary,
+    borderWidth: 2,
+    borderColor: Colors.white,
+  },
 });
+
+// ─── Utilitário ──────────────────────────────────────────────────────────────
 
 function haversineMeters(
   a: { lat: number; lng: number },

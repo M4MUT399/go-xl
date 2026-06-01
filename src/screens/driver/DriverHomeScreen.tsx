@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Platform, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
@@ -15,14 +16,26 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Driver
 
 export function DriverHomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
-  const { location } = useLocation();
-  const { pendingRide, pendingScheduledRide, setPendingRide, setPendingScheduledRide, acceptRide, confirmScheduledRide } = useDriverRide(profile?.id);
   const [isOnline, setIsOnline] = useState(false);
+  // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m)
+  const { location } = useLocation({ watch: isOnline });
+  const { pendingRide, pendingScheduledRide, setPendingRide, setPendingScheduledRide, acceptRide, confirmScheduledRide } = useDriverRide(profile?.id);
+  // true após carregar o valor persistido — evita gravar is_online=false no banco antes de ler o AsyncStorage
+  const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
+  // Carrega o status online salvo ao montar (persiste entre sessões)
   useEffect(() => {
-    if (!location || !profile?.id) return;
+    AsyncStorage.getItem('driver_is_online').then((val) => {
+      if (val === 'true') setIsOnline(true);
+      setOnlineLoaded(true);
+    });
+  }, []);
+
+  // Sincroniza localização + status online no banco (só após carregar o valor persistido)
+  useEffect(() => {
+    if (!location || !profile?.id || !onlineLoaded) return;
     supabase.from('driver_locations').upsert({
       driver_id: profile.id,
       lat: location.lat,
@@ -30,7 +43,13 @@ export function DriverHomeScreen({ navigation }: Props) {
       is_online: isOnline,
       updated_at: new Date().toISOString(),
     });
-  }, [location, isOnline, profile?.id]);
+  }, [location, isOnline, profile?.id, onlineLoaded]);
+
+  // Alterna online/offline e persiste a escolha
+  function handleOnlineChange(val: boolean) {
+    setIsOnline(val);
+    AsyncStorage.setItem('driver_is_online', val ? 'true' : 'false');
+  }
 
   async function handleAccept() {
     if (!pendingRide) return;
@@ -87,7 +106,7 @@ export function DriverHomeScreen({ navigation }: Props) {
             </Text>
             <Switch
               value={isOnline}
-              onValueChange={setIsOnline}
+              onValueChange={handleOnlineChange}
               trackColor={{ false: Colors.gray[400], true: Colors.success }}
               thumbColor={Colors.white}
             />
@@ -102,12 +121,6 @@ export function DriverHomeScreen({ navigation }: Props) {
           </View>
         )}
 
-        <TouchableOpacity
-          style={styles.scheduledBtn}
-          onPress={() => navigation.navigate('DriverScheduledRides')}
-        >
-          <Text style={styles.scheduledBtnText}>🗓️  Ver corridas agendadas</Text>
-        </TouchableOpacity>
       </SafeAreaView>
 
       {pendingScheduledRide && !pendingRide && (
@@ -181,9 +194,14 @@ export function DriverHomeScreen({ navigation }: Props) {
         </View>
       )}
 
-      {pendingRide && isOnline && (
+      {pendingRide && (isOnline || !!pendingRide.driver_id) && (
         <View style={styles.rideRequestSheet}>
           <View style={styles.requestHandle} />
+          {pendingRide.driver_id ? (
+            <View style={styles.qrRideBadge}>
+              <Text style={styles.qrRideBadgeText}>📲 Corrida via QR Code — reservada para você</Text>
+            </View>
+          ) : null}
           <Text style={styles.requestTitle}>Nova corrida!</Text>
 
           <View style={styles.requestDetails}>
@@ -303,6 +321,16 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   requestHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.gray[300], alignSelf: 'center', marginBottom: 16 },
+  qrRideBadge: {
+    backgroundColor: 'rgba(201,168,76,0.15)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(201,168,76,0.4)',
+  },
+  qrRideBadgeText: { color: Colors.accent, fontSize: 13, fontWeight: '700', textAlign: 'center' },
   scheduledHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
   scheduledIcon: { fontSize: 32 },
   scheduledWhen: { fontSize: 14, color: Colors.accent, fontWeight: '700', marginTop: 2 },

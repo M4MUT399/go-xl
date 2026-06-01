@@ -35,6 +35,48 @@ async function notifyOnlineDrivers(destination: string, price: number) {
   );
 }
 
+/** Notifica apenas o motorista vinculado ao QR code (não transmite para todos). */
+async function notifySpecificDriver(driverId: string, destination: string, price: number) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', driverId)
+    .single();
+
+  const token = (data as { push_token: string | null })?.push_token;
+  if (token) {
+    await sendPushAsync([{
+      to: token,
+      title: '📲 Corrida via QR Code — Executive XL',
+      body: `Passageiro solicitou pelo seu QR. Destino: ${destination} • ${formatCurrency(price)}`,
+      data: { type: 'new_ride' },
+    }]);
+  }
+}
+
+/**
+ * Broadcast direto para o motorista específico (não precisa de push token).
+ * Usado como fallback confiável no Expo Go / desenvolvimento.
+ */
+async function broadcastToDriver(driverId: string, ride: object) {
+  const channelName = `driver-notify-${driverId}`;
+  const ch = supabase.channel(channelName);
+
+  await new Promise<void>((resolve) => {
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        ch.send({
+          type: 'broadcast',
+          event: 'new_qr_ride',
+          payload: { ride },
+        }).then(() => { supabase.removeChannel(ch); resolve(); })
+          .catch(() => { supabase.removeChannel(ch); resolve(); });
+      }
+    });
+    setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
+  });
+}
+
 async function notifyPassenger(passengerId: string) {
   const { data } = await supabase
     .from('profiles')
@@ -50,6 +92,84 @@ async function notifyPassenger(passengerId: string) {
         title: '✅ Motorista a caminho!',
         body: 'Seu Executive XL foi confirmado e está indo até você.',
         data: { type: 'ride_accepted' },
+      },
+    ]);
+  }
+}
+
+/**
+ * Envia um Broadcast Supabase diretamente para o canal do passageiro.
+ * Não depende de WAL, RLS ou push token — basta o passageiro ter o app aberto.
+ */
+async function broadcastToPassenger(passengerId: string, rideId: string) {
+  const channelName = `pax-notify-${passengerId}`;
+  const ch = supabase.channel(channelName);
+
+  await new Promise<void>((resolve) => {
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        ch.send({
+          type: 'broadcast',
+          event: 'schedule_confirmed',
+          payload: { rideId },
+        }).then(() => {
+          supabase.removeChannel(ch);
+          resolve();
+        }).catch(() => {
+          supabase.removeChannel(ch);
+          resolve();
+        });
+      }
+    });
+
+    // timeout de segurança: se não conectar em 5s, desiste
+    setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
+  });
+}
+
+/**
+ * Avisa o passageiro que a corrida foi aceita pelo motorista.
+ * Usa Broadcast (não depende de WAL/RLS/push) no canal pax-notify-${passengerId}.
+ */
+async function broadcastRideAccepted(passengerId: string, ride: object) {
+  const channelName = `pax-notify-${passengerId}`;
+  const ch = supabase.channel(channelName);
+
+  await new Promise<void>((resolve) => {
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        ch.send({
+          type: 'broadcast',
+          event: 'ride_accepted',
+          payload: { ride },
+        }).then(() => {
+          supabase.removeChannel(ch);
+          resolve();
+        }).catch(() => {
+          supabase.removeChannel(ch);
+          resolve();
+        });
+      }
+    });
+    setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
+  });
+}
+
+async function notifyPassengerScheduleConfirmed(passengerId: string) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', passengerId)
+    .single();
+
+  const token = (data as { push_token: string | null })?.push_token;
+  if (token) {
+    await sendPushAsync([
+      {
+        to: token,
+        title: '🗓️ Motorista confirmado!',
+        body: 'Um motorista aceitou seu agendamento. Você pode ver os detalhes na tela de corridas agendadas.',
+        data: { type: 'schedule_confirmed' },
       },
     ]);
   }
@@ -104,7 +224,8 @@ export function usePassengerRide(passengerId: string | undefined) {
   const requestRide = useCallback(async (
     origin: Location,
     destination: Location,
-    routeInfo?: { distanceKm: number; durationMin: number }
+    routeInfo?: { distanceKm: number; durationMin: number },
+    options?: { lockedDriverId?: string }
   ): Promise<Ride | null> => {
     if (!passengerId) return null;
 
@@ -117,29 +238,57 @@ export function usePassengerRide(passengerId: string | undefined) {
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
     const { driverAmount, platformFee } = calculateSplit(price);
 
-    const { data, error } = await supabase
+    const insertPayload = {
+      passenger_id: passengerId,
+      origin_lat: origin.lat,
+      origin_lng: origin.lng,
+      origin_address: origin.address,
+      destination_lat: destination.lat,
+      destination_lng: destination.lng,
+      destination_address: destination.address,
+      status: 'requesting' as RideStatus,
+      price,
+      distance_km: distanceKm,
+      duration_min: duration,
+      driver_amount: driverAmount,
+      platform_fee: platformFee,
+      // QR: pré-vincula o motorista; ele ainda precisa aceitar
+      ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
+    };
+
+    const { error: insertError } = await supabase
       .from('rides')
-      .insert({
-        passenger_id: passengerId,
-        origin_lat: origin.lat,
-        origin_lng: origin.lng,
-        origin_address: origin.address,
-        destination_lat: destination.lat,
-        destination_lng: destination.lng,
-        destination_address: destination.address,
-        status: 'requesting' as RideStatus,
-        price,
-        distance_km: distanceKm,
-        duration_min: duration,
-        driver_amount: driverAmount,
-        platform_fee: platformFee,
-      })
-      .select()
+      .insert(insertPayload);
+
+    if (insertError) {
+      console.error('[requestRide] erro no INSERT:', JSON.stringify(insertError));
+      return null;
+    }
+
+    // SELECT separado — evita problema de RLS no RETURNING pós-insert
+    const { data, error: selectError } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('passenger_id', passengerId)
+      .eq('status', 'requesting')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .single();
 
-    if (error) return null;
+    if (selectError || !data) {
+      console.error('[requestRide] erro no SELECT:', JSON.stringify(selectError));
+      return null;
+    }
+
     setActiveRide(data as Ride);
-    notifyOnlineDrivers(destination.address, price);
+    if (options?.lockedDriverId) {
+      // Broadcast in-app (confiável mesmo sem push token no Expo Go)
+      broadcastToDriver(options.lockedDriverId, data);
+      // Push remoto como reforço (funciona em produção)
+      notifySpecificDriver(options.lockedDriverId, destination.address, price);
+    } else {
+      notifyOnlineDrivers(destination.address, price);
+    }
     return data as Ride;
   }, [passengerId]);
 
@@ -271,10 +420,29 @@ export function useDriverRide(driverId: string | undefined) {
   const [pendingScheduledRide, setPendingScheduledRide] = useState<Ride | null>(null);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
+  const pendingRideIdRef = useRef<string | null>(null);
 
-  // Fetch inicial: pega a corrida agendada mais próxima ainda sem motorista
+  // Mantém ref sincronizada para usar dentro de setInterval sem stale closure
+  useEffect(() => {
+    pendingRideIdRef.current = pendingRide?.id ?? null;
+  }, [pendingRide?.id]);
+
+  // ─── Fetch inicial ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!driverId) return;
+
+    // Corrida QR pendente já criada (caso motorista abra o app depois do passageiro)
+    supabase
+      .from('rides')
+      .select('*')
+      .eq('driver_id', driverId)
+      .eq('status', 'requesting')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) setPendingRide(data as Ride);
+      });
+
+    // Corrida agendada disponível
     supabase
       .from('rides')
       .select('*')
@@ -288,11 +456,34 @@ export function useDriverRide(driverId: string | undefined) {
       });
   }, [driverId]);
 
+  // ─── Polling: verifica corrida QR a cada 4s ─────────────────────────────────
+  // Garante entrega mesmo quando realtime não dispara (ex.: sem REPLICA IDENTITY FULL)
+  useEffect(() => {
+    if (!driverId) return;
+
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('driver_id', driverId)
+        .eq('status', 'requesting')
+        .maybeSingle();
+
+      if (data && (data as Ride).id !== pendingRideIdRef.current) {
+        setPendingRide(data as Ride);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [driverId]);
+
+  // ─── Realtime ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!driverId) return;
 
     const channel = supabase
       .channel(`driver-ride-${driverId}-${channelId}`)
+      // Corridas normais (sem motorista pré-fixado)
       .on(
         'postgres_changes',
         {
@@ -301,7 +492,12 @@ export function useDriverRide(driverId: string | undefined) {
           table: 'rides',
           filter: `status=eq.requesting`,
         },
-        (payload) => setPendingRide(payload.new as Ride)
+        (payload) => {
+          const ride = payload.new as Ride;
+          if (!ride.driver_id || ride.driver_id === driverId) {
+            setPendingRide(ride);
+          }
+        }
       )
       // Nova corrida agendada — aparece como card de pedido para o motorista aceitar
       .on(
@@ -355,19 +551,43 @@ export function useDriverRide(driverId: string | undefined) {
   }, [driverId]);
 
   const acceptRide = useCallback(async (rideId: string): Promise<Ride | null> => {
-    const { data, error } = await supabase
+    // 1) UPDATE (sem RETURNING — o .select().single() falha silenciosamente em alguns casos)
+    const { error: updateError } = await supabase
       .from('rides')
       .update({ driver_id: driverId, status: 'accepted' as RideStatus, accepted_at: new Date().toISOString() })
       .eq('id', rideId)
       .eq('status', 'requesting')
-      .select()
+      // Aceita apenas se a corrida não estiver travada para outro motorista
+      .or(`driver_id.is.null,driver_id.eq.${driverId}`);
+
+    if (updateError) {
+      console.error('[acceptRide] erro no UPDATE:', JSON.stringify(updateError));
+      return null;
+    }
+
+    // 2) SELECT separado para confirmar e obter a corrida atualizada
+    const { data, error: selectError } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('id', rideId)
+      .eq('driver_id', driverId)
+      .eq('status', 'accepted')
       .single();
 
-    if (error) return null;
-    setActiveRide(data as Ride);
+    if (selectError || !data) {
+      console.error('[acceptRide] erro no SELECT:', JSON.stringify(selectError));
+      return null;
+    }
+
+    const ride = data as Ride;
+    setActiveRide(ride);
     setPendingRide(null);
-    notifyPassenger((data as Ride).passenger_id);
-    return data as Ride;
+
+    // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback
+    broadcastRideAccepted(ride.passenger_id, ride);
+    notifyPassenger(ride.passenger_id);
+
+    return ride;
   }, [driverId]);
 
   const confirmScheduledRide = useCallback(async (rideId: string): Promise<boolean> => {
@@ -382,8 +602,15 @@ export function useDriverRide(driverId: string | undefined) {
 
     if (error || !data) return false;
     setPendingScheduledRide(null);
-    // Notifica o passageiro que seu motorista foi confirmado
-    notifyPassenger((data as Ride).passenger_id);
+
+    const ride = data as Ride;
+
+    // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
+    broadcastToPassenger(ride.passenger_id, ride.id);
+
+    // Tenta push remoto como fallback (só funciona se o passageiro tiver token EAS)
+    notifyPassengerScheduleConfirmed(ride.passenger_id);
+
     return true;
   }, [driverId]);
 

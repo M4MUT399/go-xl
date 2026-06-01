@@ -35,6 +35,9 @@ export function useNearbyDrivers(enabled = true) {
 
     fetchDrivers();
 
+    // Polling a cada 8s — garante atualização mesmo sem realtime (REPLICA IDENTITY pode não estar ativo)
+    const poll = setInterval(fetchDrivers, 8000);
+
     const channel = supabase
       .channel('nearby-drivers')
       .on(
@@ -44,18 +47,26 @@ export function useNearbyDrivers(enabled = true) {
           const row = (payload.new ?? payload.old) as DriverLocationRow;
           if (!row?.driver_id) return;
 
+          // DELETE ou ficou offline → remove do mapa
+          if (payload.eventType === 'DELETE' || row.is_online === false) {
+            setDrivers((prev) => prev.filter((d) => d.driver_id !== row.driver_id));
+            return;
+          }
+
+          // Se lat/lng não vieram (REPLICA IDENTITY não estava ativo ainda) → re-fetch completo
+          if (row.lat == null || row.lng == null) {
+            fetchDrivers();
+            return;
+          }
+
+          // Atualiza ou adiciona com dados completos
+          const next: NearbyDriver = {
+            driver_id: row.driver_id,
+            lat: row.lat,
+            lng: row.lng,
+            heading: row.heading,
+          };
           setDrivers((prev) => {
-            // Removeu / ficou offline → tira do mapa
-            if (payload.eventType === 'DELETE' || row.is_online === false) {
-              return prev.filter((d) => d.driver_id !== row.driver_id);
-            }
-            // Online → atualiza ou adiciona
-            const next: NearbyDriver = {
-              driver_id: row.driver_id,
-              lat: row.lat,
-              lng: row.lng,
-              heading: row.heading,
-            };
             const exists = prev.some((d) => d.driver_id === row.driver_id);
             return exists
               ? prev.map((d) => (d.driver_id === row.driver_id ? next : d))
@@ -66,6 +77,7 @@ export function useNearbyDrivers(enabled = true) {
       .subscribe();
 
     return () => {
+      clearInterval(poll);
       supabase.removeChannel(channel);
     };
   }, [enabled, fetchDrivers]);

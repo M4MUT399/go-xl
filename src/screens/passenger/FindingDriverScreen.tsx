@@ -50,6 +50,14 @@ export function FindingDriverScreen({ navigation, route }: Props) {
   }, []);
 
   useEffect(() => {
+    let done = false;
+    const goActive = (ride: typeof initialRide) => {
+      if (done) return;
+      done = true;
+      navigation.replace('ActiveRide', { ride });
+    };
+
+    // 1) postgres_changes UPDATE (precisa de REPLICA IDENTITY FULL)
     const channel = supabase
       .channel(`ride-${initialRide.id}`)
       .on(
@@ -58,7 +66,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
         (payload) => {
           const updated = payload.new as typeof initialRide;
           if (updated.status === 'accepted' || updated.status === 'driver_en_route') {
-            navigation.replace('ActiveRide', { ride: updated });
+            goActive(updated);
           } else if (updated.status === 'cancelled') {
             Alert.alert('Corrida cancelada', 'Nenhum motorista disponível no momento.');
             navigation.goBack();
@@ -67,8 +75,41 @@ export function FindingDriverScreen({ navigation, route }: Props) {
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [initialRide.id]);
+    // 2) Broadcast direto do motorista (não depende de WAL/RLS) — mais confiável no Expo Go
+    const paxChannel = profile?.id
+      ? supabase
+          .channel(`pax-notify-${profile.id}`)
+          .on('broadcast', { event: 'ride_accepted' }, ({ payload }) => {
+            const ride = payload?.ride as typeof initialRide | undefined;
+            if (ride && ride.id === initialRide.id) goActive(ride);
+          })
+          .subscribe()
+      : null;
+
+    // 3) Polling fallback (a cada 4s) — garante a confirmação mesmo se os canais falharem
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('id', initialRide.id)
+        .maybeSingle();
+      const updated = data as typeof initialRide | null;
+      if (!updated) return;
+      if (updated.status === 'accepted' || updated.status === 'driver_en_route') {
+        goActive(updated);
+      } else if (updated.status === 'cancelled') {
+        clearInterval(interval);
+        Alert.alert('Corrida cancelada', 'Nenhum motorista disponível no momento.');
+        navigation.goBack();
+      }
+    }, 4000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (paxChannel) supabase.removeChannel(paxChannel);
+      clearInterval(interval);
+    };
+  }, [initialRide.id, profile?.id]);
 
   async function handleCancel() {
     Alert.alert(
