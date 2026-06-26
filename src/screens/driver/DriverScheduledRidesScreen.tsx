@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, FlatList,
-  TouchableOpacity, ActivityIndicator, RefreshControl, Alert, SectionList,
+  TouchableOpacity, ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, RideRecord, Ride } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverScheduledRides } from '../../hooks/useDriverScheduledRides';
 import { useScheduledRides } from '../../hooks/useRide';
@@ -37,12 +38,14 @@ function computeTimeLeft(iso?: string, now = Date.now()): { label: string; urgen
   return { label: m > 0 ? `${h}h ${m}min` : `${h}h`, urgency: 'normal' };
 }
 
-const URGENCY_COLOR: Record<Urgency, string> = {
-  normal: Colors.gray[400],
-  soon: Colors.accent,
-  imminent: '#f97316',   // laranja
-  now: '#ef4444',        // vermelho
-};
+function urgencyColor(urgency: Urgency, colors: AppTheme): string {
+  switch (urgency) {
+    case 'soon': return colors.accent;
+    case 'imminent': return '#f97316';
+    case 'now': return '#ef4444';
+    default: return colors.gray[400];
+  }
+}
 
 function formatDate(iso?: string): string {
   if (!iso) return '—';
@@ -55,19 +58,23 @@ function formatDate(iso?: string): string {
 function ClaimedCard({
   ride,
   now,
+  colors,
+  styles,
   onStart,
   onChat,
   onRelease,
 }: {
   ride: RideRecord;
   now: number;
+  colors: AppTheme;
+  styles: ReturnType<typeof makeStyles>;
   onStart: (r: RideRecord) => void;
   onChat: (r: RideRecord) => void;
   onRelease: (r: RideRecord) => void;
 }) {
   const { label, urgency } = computeTimeLeft(ride.scheduled_for, now);
   const isDue = ride.scheduled_for ? new Date(ride.scheduled_for).getTime() <= now : false;
-  const urgencyColor = URGENCY_COLOR[urgency];
+  const uColor = urgencyColor(urgency, colors);
   const canRelease = isCancellationFree(ride.scheduled_for);
 
   return (
@@ -77,9 +84,9 @@ function ClaimedCard({
         <View>
           <Text style={styles.cardDate}>{formatDate(ride.scheduled_for)}</Text>
         </View>
-        <View style={[styles.countdownBadge, { backgroundColor: urgencyColor + '22', borderColor: urgencyColor }]}>
-          <Text style={[styles.countdownIcon]}>⏰</Text>
-          <Text style={[styles.countdownText, { color: urgencyColor }]}>{label}</Text>
+        <View style={[styles.countdownBadge, { backgroundColor: uColor + '22', borderColor: uColor }]}>
+          <Text style={styles.countdownIcon}>⏰</Text>
+          <Text style={[styles.countdownText, { color: uColor }]}>{label}</Text>
         </View>
       </View>
 
@@ -134,11 +141,15 @@ function AvailableCard({
   ride,
   now,
   claiming,
+  colors,
+  styles,
   onClaim,
 }: {
   ride: RideRecord;
   now: number;
   claiming: boolean;
+  colors: AppTheme;
+  styles: ReturnType<typeof makeStyles>;
   onClaim: (r: RideRecord) => void;
 }) {
   const { label } = computeTimeLeft(ride.scheduled_for, now);
@@ -175,7 +186,7 @@ function AvailableCard({
         disabled={claiming}
       >
         {claiming
-          ? <ActivityIndicator size="small" color={Colors.primary} />
+          ? <ActivityIndicator size="small" color={colors.primary} />
           : <Text style={styles.claimBtnText}>Confirmar esta corrida</Text>
         }
       </TouchableOpacity>
@@ -188,9 +199,12 @@ function AvailableCard({
 export function DriverScheduledRidesScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { available, claimed, loading, refresh, release } = useDriverScheduledRides(profile?.id);
   const { claimScheduledRide, activate } = useScheduledRides(profile?.id);
   const [claiming, setClaiming] = useState<string | null>(null);
+
+  const styles = makeStyles(colors);
 
   // Relógio local — atualiza a cada 30s para refrescar os countdowns
   const [now, setNow] = useState(Date.now());
@@ -272,7 +286,7 @@ export function DriverScheduledRidesScreen() {
       </View>
 
       {loading && isEmpty ? (
-        <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
+        <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
       ) : isEmpty ? (
         <View style={styles.empty}>
           <Text style={styles.emptyEmoji}>🗓️</Text>
@@ -287,7 +301,7 @@ export function DriverScheduledRidesScreen() {
           renderItem={null}
           keyExtractor={() => ''}
           refreshControl={
-            <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={Colors.accent} />
+            <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />
           }
           ListHeaderComponent={
             <>
@@ -300,6 +314,8 @@ export function DriverScheduledRidesScreen() {
                       key={ride.id}
                       ride={ride}
                       now={now}
+                      colors={colors}
+                      styles={styles}
                       onStart={handleStart}
                       onChat={handleChat}
                       onRelease={handleRelease}
@@ -318,6 +334,8 @@ export function DriverScheduledRidesScreen() {
                       ride={ride}
                       now={now}
                       claiming={claiming === ride.id}
+                      colors={colors}
+                      styles={styles}
                       onClaim={handleClaim}
                     />
                   ))}
@@ -334,157 +352,159 @@ export function DriverScheduledRidesScreen() {
 
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
 
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  title: { fontSize: 22, fontWeight: '800', color: Colors.primary },
-  claimedBadge: {
-    backgroundColor: 'rgba(34,197,94,0.15)',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  claimedBadgeText: { color: Colors.success, fontSize: 12, fontWeight: '700' },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      paddingBottom: 8,
+    },
+    title: { fontSize: 22, fontWeight: '800', color: colors.text },
+    claimedBadge: {
+      backgroundColor: 'rgba(34,197,94,0.15)',
+      borderRadius: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    claimedBadgeText: { color: colors.success, fontSize: 12, fontWeight: '700' },
 
-  list: { paddingHorizontal: 16, paddingBottom: 32 },
+    list: { paddingHorizontal: 16, paddingBottom: 32 },
 
-  sectionHeader: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.gray[500],
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 16,
-    marginBottom: 10,
-  },
+    sectionHeader: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.gray[500],
+      textTransform: 'uppercase',
+      letterSpacing: 0.8,
+      marginTop: 16,
+      marginBottom: 10,
+    },
 
-  // ── Cards ─────────────────────────────────────────────────────────────────
-  card: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  cardClaimed: { borderLeftWidth: 4, borderLeftColor: Colors.success },
-  cardNow: { borderLeftColor: '#ef4444' },
+    // ── Cards ─────────────────────────────────────────────────────────────────
+    card: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 10,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.06,
+      shadowRadius: 4,
+      elevation: 2,
+    },
+    cardClaimed: { borderLeftWidth: 4, borderLeftColor: colors.success },
+    cardNow: { borderLeftColor: '#ef4444' },
 
-  cardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  cardDate: { fontSize: 14, fontWeight: '700', color: Colors.primary },
+    cardTop: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 14,
+    },
+    cardDate: { fontSize: 14, fontWeight: '700', color: colors.text },
 
-  countdownBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  countdownIcon: { fontSize: 12 },
-  countdownText: { fontSize: 13, fontWeight: '800' },
+    countdownBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      borderRadius: 10,
+      borderWidth: 1,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+    },
+    countdownIcon: { fontSize: 12 },
+    countdownText: { fontSize: 13, fontWeight: '800' },
 
-  availBadge: {
-    backgroundColor: Colors.gray[100],
-    borderRadius: 10,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  availText: { color: Colors.gray[600], fontSize: 12, fontWeight: '600' },
+    availBadge: {
+      backgroundColor: colors.gray[100],
+      borderRadius: 10,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+    },
+    availText: { color: colors.gray[600], fontSize: 12, fontWeight: '600' },
 
-  // ── Rota ─────────────────────────────────────────────────────────────────
-  route: { flexDirection: 'row', marginBottom: 12 },
-  routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
-  dotOrigin: { width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.accent },
-  routeLine: { flex: 1, width: 2, backgroundColor: Colors.gray[200], marginVertical: 3 },
-  dotDest: { width: 9, height: 9, borderRadius: 2, backgroundColor: Colors.primary },
-  routeAddrs: { flex: 1, marginLeft: 12 },
-  addr: { fontSize: 14, color: Colors.gray[800], fontWeight: '500' },
-  addrDest: { marginTop: 14 },
+    // ── Rota ─────────────────────────────────────────────────────────────────
+    route: { flexDirection: 'row', marginBottom: 12 },
+    routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
+    dotOrigin: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.accent },
+    routeLine: { flex: 1, width: 2, backgroundColor: colors.gray[200], marginVertical: 3 },
+    dotDest: { width: 9, height: 9, borderRadius: 2, backgroundColor: colors.primary },
+    routeAddrs: { flex: 1, marginLeft: 12 },
+    addr: { fontSize: 14, color: colors.gray[800], fontWeight: '500' },
+    addrDest: { marginTop: 14 },
 
-  // ── Meta ──────────────────────────────────────────────────────────────────
-  meta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.gray[100],
-    marginBottom: 14,
-  },
-  metaText: { fontSize: 13, color: Colors.gray[500] },
-  metaPrice: { fontSize: 16, fontWeight: '800', color: Colors.primary },
+    // ── Meta ──────────────────────────────────────────────────────────────────
+    meta: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.gray[100],
+      marginBottom: 14,
+    },
+    metaText: { fontSize: 13, color: colors.gray[500] },
+    metaPrice: { fontSize: 16, fontWeight: '800', color: colors.text },
 
-  // ── Botões ────────────────────────────────────────────────────────────────
-  claimBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: 12,
-    height: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  claimBtnText: { color: Colors.primary, fontSize: 15, fontWeight: '800' },
+    // ── Botões ────────────────────────────────────────────────────────────────
+    claimBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: 12,
+      height: 46,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    claimBtnText: { color: colors.primary, fontSize: 15, fontWeight: '800' },
 
-  chatBtn: {
-    backgroundColor: 'rgba(201,168,76,0.12)',
-    borderRadius: 12,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(201,168,76,0.3)',
-  },
-  chatBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
+    chatBtn: {
+      backgroundColor: 'rgba(201,168,76,0.12)',
+      borderRadius: 12,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: 'rgba(201,168,76,0.3)',
+    },
+    chatBtnText: { color: colors.accent, fontSize: 14, fontWeight: '700' },
 
-  startBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    height: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-  startBtnText: { color: Colors.accent, fontSize: 15, fontWeight: '800' },
+    startBtn: {
+      backgroundColor: colors.primary,
+      borderRadius: 12,
+      height: 50,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 10,
+    },
+    startBtnText: { color: colors.accent, fontSize: 15, fontWeight: '800' },
 
-  releaseBtn: {
-    borderRadius: 12,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: Colors.gray[300],
-  },
-  releaseBtnText: { color: Colors.gray[500], fontSize: 13, fontWeight: '600' },
+    releaseBtn: {
+      borderRadius: 12,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: colors.gray[300],
+    },
+    releaseBtnText: { color: colors.gray[500], fontSize: 13, fontWeight: '600' },
 
-  noReleaseRow: {
-    borderRadius: 12,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(239,68,68,0.06)',
-  },
-  noReleaseText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
+    noReleaseRow: {
+      borderRadius: 12,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(239,68,68,0.06)',
+    },
+    noReleaseText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
 
-  // ── Empty ─────────────────────────────────────────────────────────────────
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 100 },
-  emptyEmoji: { fontSize: 52, marginBottom: 16 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.primary, marginBottom: 8 },
-  emptyText: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingHorizontal: 36, lineHeight: 20 },
-});
+    // ── Empty ─────────────────────────────────────────────────────────────────
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 100 },
+    emptyEmoji: { fontSize: 52, marginBottom: 16 },
+    emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 8 },
+    emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center', paddingHorizontal: 36, lineHeight: 20 },
+  });
+}

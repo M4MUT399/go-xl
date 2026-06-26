@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, RefreshControl, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverStats, CompletedRide } from '../../hooks/useRideHistory';
 import { usePayouts } from '../../hooks/usePayouts';
@@ -33,10 +34,13 @@ function startOf(period: Period): number {
 
 export function EarningsScreen() {
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
   const { payouts, pendingBalance, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
   const [period, setPeriod] = useState<Period>('week');
   const [requestingPayout, setRequestingPayout] = useState(false);
+
+  const styles = makeStyles(colors);
 
   const filtered = useMemo(() => {
     const from = startOf(period);
@@ -112,7 +116,7 @@ export function EarningsScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={Colors.accent} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
       >
         <Text style={styles.title}>Seus ganhos</Text>
 
@@ -163,7 +167,7 @@ export function EarningsScreen() {
             disabled={pendingBalance <= 0 || requestingPayout}
           >
             {requestingPayout
-              ? <ActivityIndicator size="small" color={Colors.white} />
+              ? <ActivityIndicator size="small" color={colors.white} />
               : <Text style={styles.payoutBtnText}>Solicitar{'\n'}repasse</Text>
             }
           </TouchableOpacity>
@@ -230,7 +234,7 @@ export function EarningsScreen() {
         ) : (
           <View style={styles.historyList}>
             {filtered.slice(0, 20).map((ride) => (
-              <EarningRow key={ride.id} ride={ride} />
+              <EarningRow key={ride.id} ride={ride} styles={styles} />
             ))}
           </View>
         )}
@@ -239,7 +243,7 @@ export function EarningsScreen() {
   );
 }
 
-function EarningRow({ ride }: { ride: CompletedRide }) {
+function EarningRow({ ride, styles }: { ride: CompletedRide; styles: ReturnType<typeof makeStyles> }) {
   const date = new Date(ride.completed_at);
   return (
     <View style={styles.row}>
@@ -257,72 +261,74 @@ function EarningRow({ ride }: { ride: CompletedRide }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
-  scroll: { padding: 16, paddingTop: 12, paddingBottom: 24 },
-  title: { fontSize: 28, fontWeight: '800', color: Colors.primary, marginBottom: 16 },
-  tabs: { flexDirection: 'row', backgroundColor: Colors.white, borderRadius: 12, padding: 4, marginBottom: 16 },
-  tab: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: 'center' },
-  tabActive: { backgroundColor: Colors.primary },
-  tabText: { fontSize: 13, fontWeight: '600', color: Colors.gray[500] },
-  tabTextActive: { color: Colors.white },
-  heroCard: { backgroundColor: Colors.primary, borderRadius: 20, padding: 24, alignItems: 'center', marginBottom: 12 },
-  heroLabel: { fontSize: 11, color: Colors.accent, letterSpacing: 1.2, fontWeight: '700', textAlign: 'center' },
-  heroValue: { fontSize: 44, fontWeight: '900', color: Colors.white, marginVertical: 6, letterSpacing: -1 },
-  heroSub: { fontSize: 14, color: Colors.gray[400] },
-  heroDivider: { width: '100%', height: 1, backgroundColor: 'rgba(255,255,255,0.15)', marginVertical: 14 },
-  heroBreakdown: { flexDirection: 'row', width: '100%', justifyContent: 'space-around' },
-  heroBreakdownItem: { alignItems: 'center' },
-  heroBreakdownLabel: { fontSize: 11, color: Colors.gray[400], marginBottom: 2 },
-  heroBreakdownValue: { fontSize: 14, fontWeight: '700', color: Colors.white },
-  heroBreakdownSep: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
-  balanceCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.accent,
-  },
-  balanceInfo: { flex: 1 },
-  balanceLabel: { fontSize: 12, color: Colors.gray[500], fontWeight: '600', marginBottom: 4 },
-  balanceValue: { fontSize: 26, fontWeight: '900', color: Colors.primary },
-  balanceSub: { fontSize: 11, color: Colors.gray[400], marginTop: 2 },
-  payoutBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    alignItems: 'center',
-    minWidth: 80,
-  },
-  payoutBtnDisabled: { backgroundColor: Colors.gray[300] },
-  payoutBtnText: { color: Colors.primary, fontSize: 12, fontWeight: '800', textAlign: 'center' },
-  payoutStatusWrap: { alignItems: 'flex-end' },
-  payoutStatus: { fontSize: 11, color: Colors.gray[500], fontWeight: '600', marginTop: 2 },
-  payoutDone: { color: Colors.success },
-  statsRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
-  statCard: { flex: 1, backgroundColor: Colors.white, borderRadius: 16, padding: 18, alignItems: 'center' },
-  statValue: { fontSize: 20, fontWeight: '800', color: Colors.primary },
-  statLabel: { fontSize: 12, color: Colors.gray[500], marginTop: 4 },
-  chartCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 18, marginBottom: 24 },
-  chartTitle: { fontSize: 15, fontWeight: '700', color: Colors.primary, marginBottom: 16 },
-  chart: { flexDirection: 'row', alignItems: 'flex-end', height: 120, gap: 8 },
-  chartCol: { flex: 1, alignItems: 'center' },
-  barWrap: { width: '100%', height: 100, justifyContent: 'flex-end', backgroundColor: Colors.gray[100], borderRadius: 6, overflow: 'hidden' },
-  bar: { width: '100%', backgroundColor: Colors.accent, borderRadius: 6, minHeight: 3 },
-  chartLabel: { fontSize: 11, color: Colors.gray[500], marginTop: 6 },
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: Colors.primary, marginBottom: 12 },
-  historyList: { backgroundColor: Colors.white, borderRadius: 16, overflow: 'hidden' },
-  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: Colors.gray[100] },
-  rowIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.gray[100], alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  rowInfo: { flex: 1 },
-  rowAddr: { fontSize: 14, fontWeight: '600', color: Colors.gray[800] },
-  rowDate: { fontSize: 12, color: Colors.gray[500], marginTop: 2 },
-  rowPrice: { fontSize: 15, fontWeight: '800', color: Colors.success },
-  empty: { alignItems: 'center', paddingVertical: 40 },
-  emptyEmoji: { fontSize: 44, marginBottom: 12 },
-  emptyText: { fontSize: 14, color: Colors.gray[500], textAlign: 'center' },
-});
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    scroll: { padding: 16, paddingTop: 12, paddingBottom: 24 },
+    title: { fontSize: 28, fontWeight: '800', color: colors.text, marginBottom: 16 },
+    tabs: { flexDirection: 'row', backgroundColor: colors.card, borderRadius: 12, padding: 4, marginBottom: 16 },
+    tab: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: 'center' },
+    tabActive: { backgroundColor: colors.primary },
+    tabText: { fontSize: 13, fontWeight: '600', color: colors.gray[500] },
+    tabTextActive: { color: colors.white },
+    heroCard: { backgroundColor: colors.primary, borderRadius: 20, padding: 24, alignItems: 'center', marginBottom: 12 },
+    heroLabel: { fontSize: 11, color: colors.accent, letterSpacing: 1.2, fontWeight: '700', textAlign: 'center' },
+    heroValue: { fontSize: 44, fontWeight: '900', color: colors.white, marginVertical: 6, letterSpacing: -1 },
+    heroSub: { fontSize: 14, color: colors.gray[400] },
+    heroDivider: { width: '100%', height: 1, backgroundColor: 'rgba(255,255,255,0.15)', marginVertical: 14 },
+    heroBreakdown: { flexDirection: 'row', width: '100%', justifyContent: 'space-around' },
+    heroBreakdownItem: { alignItems: 'center' },
+    heroBreakdownLabel: { fontSize: 11, color: colors.gray[400], marginBottom: 2 },
+    heroBreakdownValue: { fontSize: 14, fontWeight: '700', color: colors.white },
+    heroBreakdownSep: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
+    balanceCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 18,
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 12,
+      borderLeftWidth: 4,
+      borderLeftColor: colors.accent,
+    },
+    balanceInfo: { flex: 1 },
+    balanceLabel: { fontSize: 12, color: colors.gray[500], fontWeight: '600', marginBottom: 4 },
+    balanceValue: { fontSize: 26, fontWeight: '900', color: colors.text },
+    balanceSub: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
+    payoutBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      alignItems: 'center',
+      minWidth: 80,
+    },
+    payoutBtnDisabled: { backgroundColor: colors.gray[300] },
+    payoutBtnText: { color: colors.primary, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+    payoutStatusWrap: { alignItems: 'flex-end' },
+    payoutStatus: { fontSize: 11, color: colors.gray[500], fontWeight: '600', marginTop: 2 },
+    payoutDone: { color: colors.success },
+    statsRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+    statCard: { flex: 1, backgroundColor: colors.card, borderRadius: 16, padding: 18, alignItems: 'center' },
+    statValue: { fontSize: 20, fontWeight: '800', color: colors.text },
+    statLabel: { fontSize: 12, color: colors.gray[500], marginTop: 4 },
+    chartCard: { backgroundColor: colors.card, borderRadius: 16, padding: 18, marginBottom: 24 },
+    chartTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    chart: { flexDirection: 'row', alignItems: 'flex-end', height: 120, gap: 8 },
+    chartCol: { flex: 1, alignItems: 'center' },
+    barWrap: { width: '100%', height: 100, justifyContent: 'flex-end', backgroundColor: colors.gray[100], borderRadius: 6, overflow: 'hidden' },
+    bar: { width: '100%', backgroundColor: colors.accent, borderRadius: 6, minHeight: 3 },
+    chartLabel: { fontSize: 11, color: colors.gray[500], marginTop: 6 },
+    sectionTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 12 },
+    historyList: { backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' },
+    row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+    rowIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+    rowInfo: { flex: 1 },
+    rowAddr: { fontSize: 14, fontWeight: '600', color: colors.gray[800] },
+    rowDate: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+    rowPrice: { fontSize: 15, fontWeight: '800', color: colors.success },
+    empty: { alignItems: 'center', paddingVertical: 40 },
+    emptyEmoji: { fontSize: 44, marginBottom: 12 },
+    emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center' },
+  });
+}

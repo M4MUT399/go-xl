@@ -1,172 +1,149 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert } from 'react-native';
+import {
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
+  ActivityIndicator, Alert,
+} from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
-import { Button } from '../../components/common/Button';
-import { startCheckout } from '../../lib/payments';
-import { formatCurrency } from '../../lib/format';
+import { useTheme } from '../../hooks/useTheme';
+import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Payment'> };
 
-const TEST_AMOUNT = 15.0;
+const SUPABASE_URL   = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const SETUP_CARD_URL = `${SUPABASE_URL}/functions/v1/setup-card`;
+
+const BRAND_LABEL: Record<string, string> = {
+  visa: 'Visa', mastercard: 'Mastercard', amex: 'Amex',
+  discover: 'Discover', jcb: 'JCB', diners: 'Diners', unionpay: 'UnionPay',
+};
 
 export function PaymentScreen({ navigation }: Props) {
+  const { profile, refreshProfile } = useAuth();
+  const { colors } = useTheme();
   const [loading, setLoading] = useState(false);
-  const [paid, setPaid] = useState(false);
 
-  async function handleTestPayment() {
+  const styles = makeStyles(colors);
+  const hasCard    = !!profile?.stripe_payment_method_id;
+  const brandLabel = profile?.card_brand
+    ? (BRAND_LABEL[profile.card_brand] ?? profile.card_brand.toUpperCase())
+    : 'CARTÃO';
+
+  async function handleAddCard() {
     setLoading(true);
-    const result = await startCheckout(TEST_AMOUNT, 'Pagamento de teste — Go XL');
-    setLoading(false);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { Alert.alert('Erro', 'Sessão expirada. Faça login novamente.'); return; }
 
-    if (result.status === 'error') {
-      Alert.alert('Erro no pagamento', result.error ?? 'Tente novamente.');
-    } else if (result.status === 'completed') {
-      setPaid(true);
+      const res = await fetch(SETUP_CARD_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const json = await res.json() as { url?: string; error?: string };
+      if (!json.url) {
+        Alert.alert('Erro', json.error ?? 'Não foi possível abrir o formulário de pagamento.');
+        return;
+      }
+
+      // Abre o Stripe Checkout (modo setup) no navegador do aparelho
+      await WebBrowser.openBrowserAsync(json.url);
+
+      // Aguarda o webhook do Stripe gravar o cartão (normalmente < 2 s)
+      await new Promise<void>((r) => setTimeout(r, 2500));
+      await refreshProfile();
+    } catch {
+      Alert.alert('Erro', 'Não foi possível configurar o pagamento. Tente novamente.');
+    } finally {
+      setLoading(false);
     }
-  }
-
-  // Tela de sucesso estilizada no padrão da abertura do app
-  if (paid) {
-    return (
-      <SafeAreaView style={styles.successContainer}>
-        <View style={styles.successHero}>
-          <View style={styles.checkCircle}>
-            <Text style={styles.checkMark}>✓</Text>
-          </View>
-          <Text style={styles.successTitle}>Pagamento{'\n'}concluído!</Text>
-          <Text style={styles.successAmount}>{formatCurrency(TEST_AMOUNT)}</Text>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>✦ Executive XL</Text>
-          </View>
-          <Text style={styles.successSub}>
-            Seu pagamento de teste foi processado com sucesso pela Stripe.
-          </Text>
-        </View>
-        <View style={styles.successFooter}>
-          <Button title="Concluir" onPress={() => navigation.goBack()} style={styles.fullBtn} />
-        </View>
-      </SafeAreaView>
-    );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-        <Text style={styles.backText}>← Voltar</Text>
-      </TouchableOpacity>
+      {/* ── Cabeçalho ── */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
+          <Text style={styles.backText}>←</Text>
+        </TouchableOpacity>
+        <Text style={styles.title}>Pagamento</Text>
+      </View>
 
       <View style={styles.content}>
-        <View style={styles.iconCircle}>
-          <Text style={{ fontSize: 40 }}>💳</Text>
+        <View style={styles.card}>
+          {hasCard ? (
+            /* ── Cartão salvo ── */
+            <>
+              <Text style={styles.cardEmoji}>💳</Text>
+              <Text style={styles.cardBrandText}>{brandLabel}</Text>
+              <Text style={styles.cardNumber}>•••• •••• •••• {profile?.card_last4}</Text>
+              <Text style={styles.cardInfo}>
+                Seu cartão é debitado automaticamente quando o motorista aceitar a corrida.
+              </Text>
+              <TouchableOpacity style={styles.changeBtn} onPress={handleAddCard} disabled={loading}>
+                {loading
+                  ? <ActivityIndicator color={colors.primary} />
+                  : <Text style={styles.changeBtnText}>Alterar cartão</Text>}
+              </TouchableOpacity>
+            </>
+          ) : (
+            /* ── Sem cartão ── */
+            <>
+              <Text style={[styles.cardEmoji, styles.cardEmojiMuted]}>💳</Text>
+              <Text style={styles.noCardTitle}>Nenhum cartão salvo</Text>
+              <Text style={styles.noCardSub}>
+                Adicione um cartão para pedir corridas. O pagamento é feito automaticamente
+                no momento em que o motorista aceita.
+              </Text>
+              <TouchableOpacity style={styles.addBtn} onPress={handleAddCard} disabled={loading}>
+                {loading
+                  ? <ActivityIndicator color={colors.white} />
+                  : <Text style={styles.addBtnText}>Adicionar cartão</Text>}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
-        <Text style={styles.title}>Pagamento</Text>
-        <Text style={styles.badgeLight}>Modo de teste</Text>
-        <Text style={styles.text}>
-          Pagamentos em dólar (US$) via Stripe. Use um cartão de teste do Stripe, como
-          4242 4242 4242 4242, qualquer data futura e qualquer CVC.
-        </Text>
 
-        <View style={styles.amountCard}>
-          <Text style={styles.amountLabel}>Pagamento de teste</Text>
-          <Text style={styles.amountValue}>{formatCurrency(TEST_AMOUNT)}</Text>
-        </View>
-
-        <Button
-          title="Pagar com Stripe (teste)"
-          onPress={handleTestPayment}
-          loading={loading}
-          style={styles.payBtn}
-        />
-        <Text style={styles.note}>
-          O pagamento abre em uma página segura do Stripe. Ao concluir, feche o navegador
-          para voltar ao app.
-        </Text>
+        <Text style={styles.secureNote}>🔒 Dados processados com segurança pelo Stripe</Text>
       </View>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.white, padding: 24 },
-  back: { alignSelf: 'flex-start' },
-  backText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  iconCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: Colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  title: { fontSize: 24, fontWeight: '800', color: Colors.primary, marginBottom: 8 },
-  badgeLight: {
-    backgroundColor: 'rgba(201,168,76,0.15)',
-    color: Colors.accent,
-    fontSize: 13,
-    fontWeight: '700',
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  text: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', lineHeight: 21, marginBottom: 24 },
-  amountCard: {
-    width: '100%',
-    backgroundColor: Colors.offWhite,
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  amountLabel: { fontSize: 13, color: Colors.gray[500] },
-  amountValue: { fontSize: 32, fontWeight: '900', color: Colors.primary, marginTop: 4 },
-  payBtn: { width: '100%' },
-  note: { fontSize: 12, color: Colors.gray[400], textAlign: 'center', marginTop: 16, lineHeight: 18 },
-
-  // Tela de sucesso (padrão da abertura)
-  successContainer: { flex: 1, backgroundColor: Colors.primary },
-  successHero: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  checkCircle: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: Colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 32,
-  },
-  checkMark: { fontSize: 64, fontWeight: '900', color: Colors.primary, lineHeight: 70 },
-  successTitle: {
-    fontSize: 48,
-    fontWeight: '900',
-    color: Colors.white,
-    textAlign: 'center',
-    letterSpacing: -1,
-    lineHeight: 54,
-    marginBottom: 12,
-  },
-  successAmount: { fontSize: 40, fontWeight: '900', color: Colors.accent, letterSpacing: -1, marginBottom: 20 },
-  badge: {
-    backgroundColor: 'rgba(201,168,76,0.15)',
-    borderWidth: 1,
-    borderColor: Colors.accent,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    marginBottom: 24,
-  },
-  badgeText: { color: Colors.accent, fontSize: 13, fontWeight: '600', letterSpacing: 1 },
-  successSub: {
-    fontSize: 16,
-    color: Colors.gray[300],
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  successFooter: { paddingHorizontal: 24, paddingBottom: 32 },
-  fullBtn: { width: '100%' },
-});
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row', alignItems: 'center',
+      paddingHorizontal: 16, paddingVertical: 12,
+      backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.gray[100],
+    },
+    back:          { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+    backText:      { fontSize: 24, color: colors.primary },
+    title:         { fontSize: 18, fontWeight: '700', color: colors.text, marginLeft: 4 },
+    content:       { flex: 1, padding: 20, justifyContent: 'center' },
+    card: {
+      backgroundColor: colors.card, borderRadius: 20, padding: 28, alignItems: 'center',
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.08, shadowRadius: 16, elevation: 4,
+    },
+    cardEmoji:      { fontSize: 52, marginBottom: 14 },
+    cardEmojiMuted: { opacity: 0.25 },
+    cardBrandText:  { fontSize: 13, fontWeight: '800', color: colors.gray[500], letterSpacing: 3, marginBottom: 6 },
+    cardNumber:     { fontSize: 22, fontWeight: '700', color: colors.text, letterSpacing: 4, marginBottom: 16 },
+    cardInfo:       { fontSize: 13, color: colors.gray[500], textAlign: 'center', lineHeight: 18, marginBottom: 24 },
+    changeBtn:      { paddingVertical: 12, paddingHorizontal: 28, borderRadius: 12, borderWidth: 1.5, borderColor: colors.primary, minWidth: 160, alignItems: 'center' },
+    changeBtnText:  { fontSize: 15, fontWeight: '700', color: colors.primary },
+    noCardTitle:    { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 10 },
+    noCardSub:      { fontSize: 14, color: colors.gray[500], textAlign: 'center', lineHeight: 20, marginBottom: 28, paddingHorizontal: 8 },
+    addBtn:         { backgroundColor: colors.primary, paddingVertical: 14, paddingHorizontal: 36, borderRadius: 14, minWidth: 200, alignItems: 'center' },
+    addBtnText:     { color: colors.white, fontSize: 16, fontWeight: '700' },
+    secureNote:     { marginTop: 20, fontSize: 12, color: colors.gray[400], textAlign: 'center' },
+  });
+}

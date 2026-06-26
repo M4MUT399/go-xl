@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, ScrollV
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'NotificationSettings'> };
 
@@ -24,7 +24,10 @@ const ITEMS: { key: keyof Prefs; title: string; desc: string }[] = [
 ];
 
 export function NotificationSettingsScreen({ navigation }: Props) {
+  const { colors } = useTheme();
   const [prefs, setPrefs] = useState<Prefs>(DEFAULTS);
+
+  const styles = makeStyles(colors);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
@@ -58,8 +61,8 @@ export function NotificationSettingsScreen({ navigation }: Props) {
               <Switch
                 value={prefs[item.key]}
                 onValueChange={() => toggle(item.key)}
-                trackColor={{ true: Colors.accent, false: Colors.gray[300] }}
-                thumbColor={Colors.white}
+                trackColor={{ true: colors.accent, false: colors.gray[300] }}
+                thumbColor={colors.white}
               />
             </View>
           ))}
@@ -74,18 +77,20 @@ export function NotificationSettingsScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
-  scroll: { padding: 24 },
-  back: { marginBottom: 20, alignSelf: 'flex-start' },
-  backText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.primary, marginBottom: 6 },
-  subtitle: { fontSize: 14, color: Colors.gray[500], marginBottom: 24 },
-  card: { backgroundColor: Colors.white, borderRadius: 16, paddingHorizontal: 16 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16 },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: Colors.gray[100] },
-  rowText: { flex: 1, paddingRight: 12 },
-  rowTitle: { fontSize: 15, fontWeight: '600', color: Colors.gray[800] },
-  rowDesc: { fontSize: 12, color: Colors.gray[500], marginTop: 2 },
-  note: { fontSize: 12, color: Colors.gray[400], marginTop: 16, lineHeight: 18 },
-});
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    scroll: { padding: 24 },
+    back: { marginBottom: 20, alignSelf: 'flex-start' },
+    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+    title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 6 },
+    subtitle: { fontSize: 14, color: colors.gray[500], marginBottom: 24 },
+    card: { backgroundColor: colors.card, borderRadius: 16, paddingHorizontal: 16 },
+    row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16 },
+    rowBorder: { borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+    rowText: { flex: 1, paddingRight: 12 },
+    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.gray[800] },
+    rowDesc: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+    note: { fontSize: 12, color: colors.gray[400], marginTop: 16, lineHeight: 18 },
+  });
+}

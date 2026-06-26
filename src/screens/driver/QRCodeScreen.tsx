@@ -6,7 +6,7 @@ import {
 import QRCode from 'react-native-qrcode-svg';
 import * as ExpoLinking from 'expo-linking';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import type { RootStackParamList } from '../../types';
@@ -33,8 +33,11 @@ function codeFromId(id: string): string {
 
 export function QRCodeScreen({ navigation }: Props) {
   const { profile, refreshProfile } = useAuth();
+  const { colors } = useTheme();
   const [code, setCode] = useState<string | null>(profile?.driver_code ?? null);
   const [saving, setSaving] = useState(false);
+
+  const styles = makeStyles(colors);
 
   // Gera e salva o código na primeira vez que o motorista abre esta tela
   useEffect(() => {
@@ -95,19 +98,19 @@ export function QRCodeScreen({ navigation }: Props) {
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.card}>
           {/* Título do card */}
-          <Text style={styles.cardTitle}>Go<Text style={{ color: Colors.accent }}>XL</Text></Text>
+          <Text style={styles.cardTitle}>Go<Text style={{ color: colors.accent }}>XL</Text></Text>
           <Text style={styles.cardSub}>Executive XL</Text>
 
           {/* QR Code */}
           <View style={styles.qrWrapper}>
             {saving ? (
-              <ActivityIndicator color={Colors.accent} size="large" />
+              <ActivityIndicator color={colors.accent} size="large" />
             ) : deepLink ? (
               <QRCode
                 value={deepLink}
                 size={200}
-                color={Colors.primary}
-                backgroundColor={Colors.white}
+                color={colors.primary}
+                backgroundColor={colors.white}
                 logo={undefined}
               />
             ) : null}
@@ -173,87 +176,89 @@ export function QRCodeScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: Colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.gray[100],
-  },
-  back: { marginRight: 16, padding: 4 },
-  backText: { fontSize: 24, color: Colors.primary },
-  title: { fontSize: 20, fontWeight: '700', color: Colors.primary },
-  scroll: { padding: 16, alignItems: 'center' },
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      backgroundColor: colors.card,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.gray[100],
+    },
+    back: { marginRight: 16, padding: 4 },
+    backText: { fontSize: 24, color: colors.primary },
+    title: { fontSize: 20, fontWeight: '700', color: colors.text },
+    scroll: { padding: 16, alignItems: 'center' },
 
-  card: {
-    backgroundColor: Colors.white,
-    borderRadius: 24,
-    padding: 28,
-    alignItems: 'center',
-    width: '100%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
-    marginBottom: 24,
-  },
-  cardTitle: { fontSize: 28, fontWeight: '900', color: Colors.primary, letterSpacing: -1 },
-  cardSub: { fontSize: 12, color: Colors.accent, fontWeight: '600', marginBottom: 20, letterSpacing: 1 },
+    card: {
+      backgroundColor: colors.card,
+      borderRadius: 24,
+      padding: 28,
+      alignItems: 'center',
+      width: '100%',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.08,
+      shadowRadius: 16,
+      elevation: 4,
+      marginBottom: 24,
+    },
+    cardTitle: { fontSize: 28, fontWeight: '900', color: colors.text, letterSpacing: -1 },
+    cardSub: { fontSize: 12, color: colors.accent, fontWeight: '600', marginBottom: 20, letterSpacing: 1 },
 
-  qrWrapper: {
-    padding: 16,
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.gray[100],
-    marginBottom: 20,
-    minWidth: 232,
-    minHeight: 232,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+    qrWrapper: {
+      padding: 16,
+      backgroundColor: colors.white,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.gray[100],
+      marginBottom: 20,
+      minWidth: 232,
+      minHeight: 232,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
 
-  codeBox: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  codeLabel: { fontSize: 10, color: Colors.accent, fontWeight: '700', letterSpacing: 2, marginBottom: 2 },
-  codeValue: { fontSize: 28, fontWeight: '900', color: Colors.white, letterSpacing: 6 },
+    codeBox: {
+      backgroundColor: colors.primary,
+      borderRadius: 12,
+      paddingHorizontal: 24,
+      paddingVertical: 10,
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    codeLabel: { fontSize: 10, color: colors.accent, fontWeight: '700', letterSpacing: 2, marginBottom: 2 },
+    codeValue: { fontSize: 28, fontWeight: '900', color: colors.white, letterSpacing: 6 },
 
-  driverName: { fontSize: 16, fontWeight: '700', color: Colors.primary },
-  category: { fontSize: 12, color: Colors.gray[500], marginTop: 4 },
+    driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
+    category: { fontSize: 12, color: colors.gray[500], marginTop: 4 },
 
-  instructions: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 20,
-    width: '100%',
-    marginBottom: 20,
-  },
-  instrTitle: { fontSize: 15, fontWeight: '800', color: Colors.primary, marginBottom: 14 },
-  instrItem: { flexDirection: 'row', marginBottom: 12, alignItems: 'flex-start' },
-  instrIcon: { fontSize: 18, marginRight: 12, lineHeight: 24 },
-  instrText: { flex: 1, fontSize: 13, color: Colors.gray[600], lineHeight: 20 },
+    instructions: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 20,
+      width: '100%',
+      marginBottom: 20,
+    },
+    instrTitle: { fontSize: 15, fontWeight: '800', color: colors.text, marginBottom: 14 },
+    instrItem: { flexDirection: 'row', marginBottom: 12, alignItems: 'flex-start' },
+    instrIcon: { fontSize: 18, marginRight: 12, lineHeight: 24 },
+    instrText: { flex: 1, fontSize: 13, color: colors.gray[600], lineHeight: 20 },
 
-  shareBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: 16,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  shareBtnText: { fontSize: 15, fontWeight: '800', color: Colors.primary },
+    shareBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: 16,
+      paddingVertical: 16,
+      paddingHorizontal: 32,
+      width: '100%',
+      alignItems: 'center',
+      marginBottom: 14,
+    },
+    shareBtnText: { fontSize: 15, fontWeight: '800', color: colors.primary },
 
-  note: { fontSize: 12, color: Colors.gray[400], textAlign: 'center', paddingHorizontal: 24 },
-});
+    note: { fontSize: 12, color: colors.gray[400], textAlign: 'center', paddingHorizontal: 24 },
+  });
+}

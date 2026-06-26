@@ -7,6 +7,71 @@ import { calculateSplit } from '../lib/split';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
 
+const SUPABASE_URL     = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const CHARGE_RIDE_URL  = `${SUPABASE_URL}/functions/v1/charge-ride`;
+const REFUND_RIDE_URL  = `${SUPABASE_URL}/functions/v1/refund-ride`;
+const TIP_RIDE_URL     = `${SUPABASE_URL}/functions/v1/tip-ride`;
+
+/** Cobra o cartão do passageiro via Edge Function (off-session). */
+async function chargeRide(rideId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(CHARGE_RIDE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session?.access_token ?? ''}`,
+      },
+      body: JSON.stringify({ rideId }),
+    });
+    const json = await res.json() as { success?: boolean; already_paid?: boolean; error?: string };
+    if (json.success || json.already_paid) return { ok: true };
+    return { ok: false, error: json.error ?? 'Pagamento recusado' };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/** Cobra gorjeta do passageiro via Edge Function (off-session). */
+export async function tipRide(rideId: string, amountCents: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(TIP_RIDE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session?.access_token ?? ''}`,
+      },
+      body: JSON.stringify({ rideId, amountCents }),
+    });
+    const json = await res.json() as { success?: boolean; already_tipped?: boolean; error?: string };
+    if (json.success || json.already_tipped) return { ok: true };
+    return { ok: false, error: json.error ?? 'Erro ao processar gorjeta' };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/** Extorna o pagamento de uma corrida via Edge Function. */
+async function refundRide(rideId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(REFUND_RIDE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session?.access_token ?? ''}`,
+      },
+      body: JSON.stringify({ rideId }),
+    });
+    const json = await res.json() as { success?: boolean; no_charge?: boolean; error?: string };
+    if (json.success) return { ok: true };
+    return { ok: false, error: json.error ?? 'Erro ao extornar' };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 async function notifyOnlineDrivers(destination: string, price: number) {
   const { data: online } = await supabase
     .from('driver_locations')
@@ -77,7 +142,7 @@ async function broadcastToDriver(driverId: string, ride: object) {
   });
 }
 
-async function notifyPassenger(passengerId: string) {
+async function notifyPassenger(passengerId: string, price?: number) {
   const { data } = await supabase
     .from('profiles')
     .select('push_token')
@@ -86,11 +151,14 @@ async function notifyPassenger(passengerId: string) {
 
   const token = (data as { push_token: string | null })?.push_token;
   if (token) {
+    const body = price
+      ? `${formatCurrency(price)} cobrado do seu cartão. Motorista a caminho!`
+      : 'Seu Executive XL foi confirmado e está indo até você.';
     await sendPushAsync([
       {
         to: token,
-        title: '✅ Motorista a caminho!',
-        body: 'Seu Executive XL foi confirmado e está indo até você.',
+        title: '💳 Pagamento confirmado — Motorista a caminho!',
+        body,
         data: { type: 'ride_accepted' },
       },
     ]);
@@ -170,6 +238,30 @@ async function notifyPassengerScheduleConfirmed(passengerId: string) {
         title: '🗓️ Motorista confirmado!',
         body: 'Um motorista aceitou seu agendamento. Você pode ver os detalhes na tela de corridas agendadas.',
         data: { type: 'schedule_confirmed' },
+      },
+    ]);
+  }
+}
+
+/** Notifica o passageiro (push) que a corrida foi concluída. */
+export async function notifyPassengerRideCompleted(passengerId: string, price?: number) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', passengerId)
+    .single();
+
+  const token = (data as { push_token: string | null })?.push_token;
+  if (token) {
+    const body = price
+      ? `Valor: ${formatCurrency(price)}. Avalie o motorista e deixe uma gorjeta! 🌟`
+      : 'Sua corrida Executive XL foi concluída. Avalie o motorista!';
+    await sendPushAsync([
+      {
+        to: token,
+        title: '🏁 Corrida finalizada!',
+        body,
+        data: { type: 'ride_completed' },
       },
     ]);
   }
@@ -336,6 +428,8 @@ export function usePassengerRide(passengerId: string | undefined) {
   }, [passengerId]);
 
   const cancelRide = useCallback(async (rideId: string) => {
+    // Extorna o pagamento se a corrida já tiver sido cobrada
+    await refundRide(rideId);
     await supabase
       .from('rides')
       .update({ status: 'cancelled' as RideStatus })
@@ -550,7 +644,15 @@ export function useDriverRide(driverId: string | undefined) {
     return () => { supabase.removeChannel(channel); };
   }, [driverId]);
 
-  const acceptRide = useCallback(async (rideId: string): Promise<Ride | null> => {
+  const acceptRide = useCallback(async (rideId: string): Promise<Ride | null | 'payment_error'> => {
+    // 0) Cobra o cartão do passageiro ANTES de aceitar.
+    //    Se o pagamento falhar, o motorista vê o erro e a corrida permanece em 'requesting'.
+    const charge = await chargeRide(rideId);
+    if (!charge.ok) {
+      console.error('[acceptRide] cobrança falhou:', charge.error);
+      return 'payment_error';
+    }
+
     // 1) UPDATE (sem RETURNING — o .select().single() falha silenciosamente em alguns casos)
     const { error: updateError } = await supabase
       .from('rides')
@@ -585,7 +687,7 @@ export function useDriverRide(driverId: string | undefined) {
 
     // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback
     broadcastRideAccepted(ride.passenger_id, ride);
-    notifyPassenger(ride.passenger_id);
+    notifyPassenger(ride.passenger_id, ride.price);
 
     return ride;
   }, [driverId]);
@@ -625,6 +727,7 @@ export function useDriverRide(driverId: string | undefined) {
     pendingRide, pendingScheduledRide,
     activeRide, acceptRide, confirmScheduledRide,
     updateRideStatus, setPendingRide, setPendingScheduledRide,
+    refundRide,
   };
 }
 

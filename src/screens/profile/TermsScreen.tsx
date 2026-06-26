@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Terms'> };
 
@@ -34,6 +34,8 @@ const SECTIONS = [
 ];
 
 export function TermsScreen({ navigation }: Props) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -55,14 +57,16 @@ export function TermsScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.white },
-  scroll: { padding: 24 },
-  back: { marginBottom: 20, alignSelf: 'flex-start' },
-  backText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.primary, marginBottom: 6 },
-  updated: { fontSize: 13, color: Colors.gray[400], marginBottom: 24 },
-  section: { marginBottom: 20 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: Colors.gray[800], marginBottom: 6 },
-  sectionBody: { fontSize: 14, color: Colors.gray[600], lineHeight: 21 },
-});
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { padding: 24 },
+    back: { marginBottom: 20, alignSelf: 'flex-start' },
+    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+    title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 6 },
+    updated: { fontSize: 13, color: colors.gray[400], marginBottom: 24 },
+    section: { marginBottom: 20 },
+    sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.gray[800], marginBottom: 6 },
+    sectionBody: { fontSize: 14, color: colors.gray[600], lineHeight: 21 },
+  });
+}

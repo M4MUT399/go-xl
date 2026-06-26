@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Linking } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Support'> };
 
@@ -25,6 +25,8 @@ const FAQ = [
 ];
 
 export function SupportScreen({ navigation }: Props) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -67,23 +69,25 @@ export function SupportScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
-  scroll: { padding: 24 },
-  back: { marginBottom: 20, alignSelf: 'flex-start' },
-  backText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.primary, marginBottom: 6 },
-  subtitle: { fontSize: 14, color: Colors.gray[500], marginBottom: 24 },
-  card: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 24 },
-  contactRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
-  contactIcon: { fontSize: 22, marginRight: 14 },
-  contactText: { flex: 1 },
-  contactLabel: { fontSize: 12, color: Colors.gray[500] },
-  contactValue: { fontSize: 15, fontWeight: '600', color: Colors.primary, marginTop: 2 },
-  divider: { height: 1, backgroundColor: Colors.gray[100], marginVertical: 8 },
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: Colors.primary, marginBottom: 12 },
-  faqItem: { paddingVertical: 12 },
-  faqBorder: { borderBottomWidth: 1, borderBottomColor: Colors.gray[100] },
-  faqQ: { fontSize: 15, fontWeight: '600', color: Colors.gray[800], marginBottom: 4 },
-  faqA: { fontSize: 13, color: Colors.gray[600], lineHeight: 19 },
-});
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    scroll: { padding: 24 },
+    back: { marginBottom: 20, alignSelf: 'flex-start' },
+    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+    title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 6 },
+    subtitle: { fontSize: 14, color: colors.gray[500], marginBottom: 24 },
+    card: { backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 24 },
+    contactRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+    contactIcon: { fontSize: 22, marginRight: 14 },
+    contactText: { flex: 1 },
+    contactLabel: { fontSize: 12, color: colors.gray[500] },
+    contactValue: { fontSize: 15, fontWeight: '600', color: colors.text, marginTop: 2 },
+    divider: { height: 1, backgroundColor: colors.gray[100], marginVertical: 8 },
+    sectionTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 12 },
+    faqItem: { paddingVertical: 12 },
+    faqBorder: { borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+    faqQ: { fontSize: 15, fontWeight: '600', color: colors.gray[800], marginBottom: 4 },
+    faqA: { fontSize: 13, color: colors.gray[600], lineHeight: 19 },
+  });
+}

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Animated, TouchableOpacity, Platform } from 'react-native';
 import { createAudioPlayer, AudioPlayer } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
-import { Colors } from '../constants/colors';
+import { useTheme } from '../hooks/useTheme';
 import { setNotifyHandler } from '../lib/inAppNotify';
 
 interface BannerData {
@@ -11,6 +11,7 @@ interface BannerData {
 }
 
 export function NotificationBanner() {
+  const { colors } = useTheme();
   const [data, setData] = useState<BannerData | null>(null);
   const translateY = useRef(new Animated.Value(-160)).current;
   const playerRef = useRef<AudioPlayer | null>(null);
@@ -64,13 +65,13 @@ export function NotificationBanner() {
 
   return (
     <Animated.View style={[styles.container, { transform: [{ translateY }] }]} pointerEvents="box-none">
-      <TouchableOpacity activeOpacity={0.9} style={styles.banner} onPress={hide}>
-        <View style={styles.iconCircle}>
+      <TouchableOpacity activeOpacity={0.9} style={[styles.banner, { backgroundColor: colors.primary }]} onPress={hide}>
+        <View style={[styles.iconCircle, { backgroundColor: colors.accent }]}>
           <Text style={styles.icon}>💬</Text>
         </View>
         <View style={styles.textWrap}>
-          <Text style={styles.title} numberOfLines={1}>{data.title}</Text>
-          <Text style={styles.body} numberOfLines={2}>{data.body}</Text>
+          <Text style={[styles.title, { color: colors.white }]} numberOfLines={1}>{data.title}</Text>
+          <Text style={[styles.body, { color: colors.gray[300] }]} numberOfLines={2}>{data.body}</Text>
         </View>
       </TouchableOpacity>
     </Animated.View>
@@ -88,7 +89,6 @@ const styles = StyleSheet.create({
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.primary,
     borderRadius: 16,
     padding: 14,
     shadowColor: '#000',
@@ -101,13 +101,12 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: Colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
   icon: { fontSize: 20 },
   textWrap: { flex: 1 },
-  title: { color: Colors.white, fontSize: 15, fontWeight: '800' },
-  body: { color: Colors.gray[300], fontSize: 14, marginTop: 2 },
+  title: { fontSize: 15, fontWeight: '800' },
+  body: { fontSize: 14, marginTop: 2 },
 });

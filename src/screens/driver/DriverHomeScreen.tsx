@@ -4,18 +4,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useDriverRide } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
+import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
 export function DriverHomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const { t } = useTranslation();
   const [isOnline, setIsOnline] = useState(false);
   // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m)
   const { location } = useLocation({ watch: isOnline });
@@ -24,6 +28,8 @@ export function DriverHomeScreen({ navigation }: Props) {
   const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [confirming, setConfirming] = useState(false);
+
+  const styles = makeStyles(colors);
 
   // Carrega o status online salvo ao montar (persiste entre sessões)
   useEffect(() => {
@@ -45,8 +51,21 @@ export function DriverHomeScreen({ navigation }: Props) {
     });
   }, [location, isOnline, profile?.id, onlineLoaded]);
 
-  // Alterna online/offline e persiste a escolha
+  // Alterna online/offline e persiste a escolha.
+  // Só permite ficar online se a verificação (selfie + documento) já tiver
+  // sido aprovada pela equipe — duplo grau de conferência antes de aceitar corridas.
   function handleOnlineChange(val: boolean) {
+    if (val && profile?.verification_status !== 'approved') {
+      Alert.alert(
+        t('driver.verificationRequiredTitle'),
+        t('driver.verificationRequiredBody'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('driver.verificationGo'), onPress: () => navigation.navigate('DriverVerification') },
+        ]
+      );
+      return;
+    }
     setIsOnline(val);
     AsyncStorage.setItem('driver_is_online', val ? 'true' : 'false');
   }
@@ -56,7 +75,13 @@ export function DriverHomeScreen({ navigation }: Props) {
     setAccepting(true);
     const ride = await acceptRide(pendingRide.id);
     setAccepting(false);
-    if (ride) {
+    if (ride === 'payment_error') {
+      Alert.alert(
+        'Pagamento recusado',
+        'O cartão do passageiro foi recusado. A corrida não pôde ser aceita.',
+      );
+      setPendingRide(null);
+    } else if (ride) {
       navigation.navigate('DriverNavigate', { ride });
     } else {
       Alert.alert('Ops', 'Corrida já foi aceita por outro motorista.');
@@ -97,18 +122,18 @@ export function DriverHomeScreen({ navigation }: Props) {
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.topBar}>
           <View>
-            <Text style={styles.greeting}>Olá, {firstName}</Text>
-            <Text style={styles.role}>Motorista Executive XL</Text>
+            <Text style={styles.greeting}>{t('driver.hello')}, {firstName}</Text>
+            <Text style={styles.role}>{t('driver.driverLabel')}</Text>
           </View>
           <View style={styles.onlineToggle}>
             <Text style={[styles.onlineLabel, isOnline && styles.onlineLabelActive]}>
-              {isOnline ? 'Online' : 'Offline'}
+              {isOnline ? t('driver.online') : t('driver.offline')}
             </Text>
             <Switch
               value={isOnline}
               onValueChange={handleOnlineChange}
-              trackColor={{ false: Colors.gray[400], true: Colors.success }}
-              thumbColor={Colors.white}
+              trackColor={{ false: colors.gray[400], true: colors.success }}
+              thumbColor={colors.white}
             />
           </View>
         </View>
@@ -116,7 +141,7 @@ export function DriverHomeScreen({ navigation }: Props) {
         {!isOnline && (
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineBannerText}>
-              Ative o modo Online para receber corridas
+              {t('driver.activateOnline')}
             </Text>
           </View>
         )}
@@ -267,104 +292,106 @@ const darkMapStyle = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0d1b2a' }] },
 ];
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-  overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
-  topBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    margin: 16,
-    backgroundColor: Colors.primary,
-    borderRadius: 16,
-    padding: 16,
-  },
-  greeting: { fontSize: 17, fontWeight: '700', color: Colors.white },
-  role: { fontSize: 12, color: Colors.accent, marginTop: 2 },
-  onlineToggle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  onlineLabel: { fontSize: 13, color: Colors.gray[400], fontWeight: '600' },
-  onlineLabelActive: { color: Colors.success },
-  offlineBanner: {
-    marginHorizontal: 16,
-    backgroundColor: 'rgba(26,26,46,0.9)',
-    borderRadius: 12,
-    padding: 12,
-    alignItems: 'center',
-  },
-  offlineBannerText: { color: Colors.gray[300], fontSize: 13, textAlign: 'center' },
-  scheduledBtn: {
-    marginHorizontal: 16,
-    marginTop: 10,
-    backgroundColor: 'rgba(201,168,76,0.15)',
-    borderRadius: 12,
-    padding: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(201,168,76,0.4)',
-  },
-  scheduledBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
-  rideRequestSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 8,
-    paddingHorizontal: 20,
-    paddingBottom: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-  },
-  requestHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.gray[300], alignSelf: 'center', marginBottom: 16 },
-  qrRideBadge: {
-    backgroundColor: 'rgba(201,168,76,0.15)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(201,168,76,0.4)',
-  },
-  qrRideBadgeText: { color: Colors.accent, fontSize: 13, fontWeight: '700', textAlign: 'center' },
-  scheduledHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  scheduledIcon: { fontSize: 32 },
-  scheduledWhen: { fontSize: 14, color: Colors.accent, fontWeight: '700', marginTop: 2 },
-  requestTitle: { fontSize: 22, fontWeight: '800', color: Colors.primary },
-  requestDetails: { backgroundColor: Colors.gray[100], borderRadius: 14, padding: 14, marginBottom: 16 },
-  requestRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
-  requestIcon: { fontSize: 18, marginRight: 12 },
-  requestLabel: { fontSize: 11, color: Colors.gray[400], textTransform: 'uppercase', letterSpacing: 0.5 },
-  requestAddr: { fontSize: 14, color: Colors.gray[800], fontWeight: '500', maxWidth: 240 },
-  requestDivider: { height: 1, backgroundColor: Colors.gray[200], marginVertical: 8, marginLeft: 30 },
-  requestMeta: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  metaItem: { flex: 1, alignItems: 'center' },
-  metaValue: { fontSize: 18, fontWeight: '800', color: Colors.primary },
-  priceValue: { color: Colors.accent },
-  metaLabel: { fontSize: 11, color: Colors.gray[400], marginTop: 2 },
-  metaDivider: { width: 1, height: 32, backgroundColor: Colors.gray[200] },
-  requestActions: { flexDirection: 'row', gap: 12 },
-  declineBtn: {
-    flex: 1,
-    height: 54,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.gray[300],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  declineText: { color: Colors.gray[600], fontSize: 16, fontWeight: '600' },
-  acceptBtn: {
-    flex: 2,
-    height: 54,
-    borderRadius: 12,
-    backgroundColor: Colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  acceptText: { color: Colors.primary, fontSize: 16, fontWeight: '800' },
-});
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1 },
+    map: { flex: 1 },
+    overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
+    topBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      margin: 16,
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      padding: 16,
+    },
+    greeting: { fontSize: 17, fontWeight: '700', color: colors.white },
+    role: { fontSize: 12, color: colors.accent, marginTop: 2 },
+    onlineToggle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    onlineLabel: { fontSize: 13, color: colors.gray[400], fontWeight: '600' },
+    onlineLabelActive: { color: colors.success },
+    offlineBanner: {
+      marginHorizontal: 16,
+      backgroundColor: 'rgba(26,26,46,0.9)',
+      borderRadius: 12,
+      padding: 12,
+      alignItems: 'center',
+    },
+    offlineBannerText: { color: colors.gray[300], fontSize: 13, textAlign: 'center' },
+    scheduledBtn: {
+      marginHorizontal: 16,
+      marginTop: 10,
+      backgroundColor: 'rgba(201,168,76,0.15)',
+      borderRadius: 12,
+      padding: 12,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: 'rgba(201,168,76,0.4)',
+    },
+    scheduledBtnText: { color: colors.accent, fontSize: 14, fontWeight: '700' },
+    rideRequestSheet: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingTop: 8,
+      paddingHorizontal: 20,
+      paddingBottom: 32,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -6 },
+      shadowOpacity: 0.15,
+      shadowRadius: 16,
+    },
+    requestHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.gray[300], alignSelf: 'center', marginBottom: 16 },
+    qrRideBadge: {
+      backgroundColor: 'rgba(201,168,76,0.15)',
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: 'rgba(201,168,76,0.4)',
+    },
+    qrRideBadgeText: { color: colors.accent, fontSize: 13, fontWeight: '700', textAlign: 'center' },
+    scheduledHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+    scheduledIcon: { fontSize: 32 },
+    scheduledWhen: { fontSize: 14, color: colors.accent, fontWeight: '700', marginTop: 2 },
+    requestTitle: { fontSize: 22, fontWeight: '800', color: colors.text },
+    requestDetails: { backgroundColor: colors.gray[100], borderRadius: 14, padding: 14, marginBottom: 16 },
+    requestRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+    requestIcon: { fontSize: 18, marginRight: 12 },
+    requestLabel: { fontSize: 11, color: colors.gray[400], textTransform: 'uppercase', letterSpacing: 0.5 },
+    requestAddr: { fontSize: 14, color: colors.gray[800], fontWeight: '500', maxWidth: 240 },
+    requestDivider: { height: 1, backgroundColor: colors.gray[200], marginVertical: 8, marginLeft: 30 },
+    requestMeta: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+    metaItem: { flex: 1, alignItems: 'center' },
+    metaValue: { fontSize: 18, fontWeight: '800', color: colors.text },
+    priceValue: { color: colors.accent },
+    metaLabel: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
+    metaDivider: { width: 1, height: 32, backgroundColor: colors.gray[200] },
+    requestActions: { flexDirection: 'row', gap: 12 },
+    declineBtn: {
+      flex: 1,
+      height: 54,
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: colors.gray[300],
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    declineText: { color: colors.gray[600], fontSize: 16, fontWeight: '600' },
+    acceptBtn: {
+      flex: 2,
+      height: 54,
+      borderRadius: 12,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    acceptText: { color: colors.primary, fontSize: 16, fontWeight: '800' },
+  });
+}

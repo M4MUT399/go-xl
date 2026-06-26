@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
 
 /**
  * Marcador de carro para react-native-maps.
@@ -10,6 +10,7 @@ import { Colors } from '../../constants/colors';
  * `scale` reduz/aumenta proporcionalmente o ícone (1 = tamanho padrão).
  */
 export function CarMarker({ scale = 1 }: { scale?: number }) {
+  const { colors } = useTheme();
   const container = 46 * scale;
   const shadow = 36 * scale;
   const circle = 38 * scale;
@@ -33,6 +34,8 @@ export function CarMarker({ scale = 1 }: { scale?: number }) {
             height: circle,
             borderRadius: circle / 2,
             borderWidth: 2.5 * scale,
+            backgroundColor: colors.primary,
+            borderColor: colors.accent,
           },
         ]}
       >
@@ -54,8 +57,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.18)',
   },
   circle: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },

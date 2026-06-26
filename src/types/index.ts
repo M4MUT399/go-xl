@@ -16,11 +16,27 @@ export interface Profile {
   email: string;
   type: UserType;
   avatar_url?: string;
+  /** Idioma preferido: 'en' | 'es' | 'pt'. */
+  language?: string;
   rating?: number;
   total_rides?: number;
   push_token?: string;
   driver_code?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  // Verificação de identidade do motorista (selfie + documento)
+  verification_selfie_url?: string;
+  verification_document_url?: string;
+  verification_status?: 'unsubmitted' | 'pending' | 'approved' | 'rejected' | 'revoked';
+  verification_notes?: string;
+  verification_submitted_at?: string;
+  is_admin?: boolean;
   created_at: string;
+  // Pagamento Stripe
+  stripe_customer_id?: string;
+  stripe_payment_method_id?: string;
+  card_last4?: string;
+  card_brand?: string;
 }
 
 export interface Vehicle {
@@ -30,7 +46,6 @@ export interface Vehicle {
   plate: string;
   color: string;
   year: number;
-  photo_url?: string;
 }
 
 export interface DriverLocation {
@@ -78,6 +93,9 @@ export interface Ride {
   created_at: string;
   accepted_at?: string;
   completed_at?: string;
+  paid?: boolean;
+  stripe_payment_intent_id?: string;
+  tip_amount?: number;
   passenger?: Profile;
   driver?: Profile;
   vehicle?: Vehicle;
@@ -115,7 +133,11 @@ export interface RideRequest {
 export type RootStackParamList = {
   Welcome: undefined;
   Login: undefined;
+  ForgotPassword: undefined;
+  ResetPassword: undefined;
   Register: { type: UserType };
+  ExpressRegister: { driverCode: string };
+  AddCardOnboarding: undefined;
   PassengerTabs: undefined;
   DriverTabs: undefined;
   RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string };
@@ -126,6 +148,7 @@ export type RootStackParamList = {
   DriverRequest: { ride: Ride };
   DriverNavigate: { ride: Ride };
   VehicleForm: undefined;
+  DriverVerification: undefined;
   EditProfile: undefined;
   NotificationSettings: undefined;
   Support: undefined;

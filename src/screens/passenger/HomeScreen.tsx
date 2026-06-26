@@ -7,7 +7,8 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { CarMarker } from '../../components/common/CarMarker';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList, Location } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
 import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
@@ -17,9 +18,12 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Passen
 
 export function HomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { location, status, retry } = useLocation();
   const { drivers } = useNearbyDrivers(true);
   const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
+
+  const styles = makeStyles(colors);
 
   // Recarrega o badge de mensagens toda vez que a tela entra em foco
   // (ex.: usuário volta do chat → AsyncStorage já atualizado → badge some)
@@ -32,10 +36,9 @@ export function HomeScreen({ navigation }: Props) {
   const firstName = profile?.full_name?.split(' ')[0] ?? 'Olá';
 
   function handleOpenChat() {
-    if (chatRides.length === 1) {
-      navigation.navigate('Chat', { rideId: chatRides[0].rideId, title: chatRides[0].title });
-    } else {
-      navigation.navigate('ScheduledRides');
+    const target = chatRides.find(r => r.unread > 0) ?? chatRides[0];
+    if (target) {
+      navigation.navigate('Chat', { rideId: target.rideId, title: target.title });
     }
   }
 
@@ -192,176 +195,178 @@ const darkMapStyle = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0d1b2a' }] },
 ];
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-  mapPlaceholder: {
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapPlaceholderText: { color: Colors.gray[400] },
-  mapError: { alignItems: 'center', paddingHorizontal: 40 },
-  mapErrorEmoji: { fontSize: 40, marginBottom: 12 },
-  mapErrorTitle: { color: Colors.white, fontSize: 18, fontWeight: '700', marginBottom: 8 },
-  mapErrorText: { color: Colors.gray[400], fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 20 },
-  mapErrorBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-  },
-  mapErrorBtnText: { color: Colors.primary, fontSize: 15, fontWeight: '700' },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'space-between',
-  },
-  topBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-  },
-  greeting: {},
-  greetingText: { fontSize: 20, fontWeight: '700', color: Colors.white },
-  categoryBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(201,168,76,0.2)',
-    borderRadius: 12,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginTop: 2,
-  },
-  categoryText: { color: Colors.accent, fontSize: 11, fontWeight: '600' },
-  topActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  scheduleIcon: {
-    width: 63,
-    height: 63,
-    borderRadius: 31.5,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scheduleIconText: { fontSize: 27 },
-  chatIcon: {
-    width: 63,
-    height: 63,
-    borderRadius: 31.5,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chatIconText: { fontSize: 27 },
-  chatBadge: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#ef4444',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-    borderWidth: 1.5,
-    borderColor: 'rgba(26,26,46,0.9)',
-  },
-  chatBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '800' },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: Colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { color: Colors.primary, fontSize: 18, fontWeight: '800' },
-  bottomArea: {},
-  bottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  driversStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15,15,30,0.85)',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-  statusOnline: { backgroundColor: '#22C55E' },
-  statusOffline: { backgroundColor: Colors.gray[400] },
-  driversStatusText: { color: Colors.white, fontSize: 13, fontWeight: '600' },
-  recenterBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 5,
-  },
-  recenterIcon: { fontSize: 22, color: Colors.primary },
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1 },
+    map: { flex: 1 },
+    mapPlaceholder: {
+      backgroundColor: colors.primaryLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    mapPlaceholderText: { color: colors.gray[400] },
+    mapError: { alignItems: 'center', paddingHorizontal: 40 },
+    mapErrorEmoji: { fontSize: 40, marginBottom: 12 },
+    mapErrorTitle: { color: colors.white, fontSize: 18, fontWeight: '700', marginBottom: 8 },
+    mapErrorText: { color: colors.gray[400], fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 20 },
+    mapErrorBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: 12,
+      paddingHorizontal: 24,
+      paddingVertical: 12,
+    },
+    mapErrorBtnText: { color: colors.primary, fontSize: 15, fontWeight: '700' },
+    overlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      justifyContent: 'space-between',
+    },
+    topBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingTop: 8,
+    },
+    greeting: {},
+    greetingText: { fontSize: 20, fontWeight: '700', color: colors.white },
+    categoryBadge: {
+      alignSelf: 'flex-start',
+      backgroundColor: 'rgba(201,168,76,0.2)',
+      borderRadius: 12,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      marginTop: 2,
+    },
+    categoryText: { color: colors.accent, fontSize: 11, fontWeight: '600' },
+    topActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    scheduleIcon: {
+      width: 79,
+      height: 79,
+      borderRadius: 39.5,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    scheduleIconText: { fontSize: 34 },
+    chatIcon: {
+      width: 79,
+      height: 79,
+      borderRadius: 39.5,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    chatIconText: { fontSize: 34 },
+    chatBadge: {
+      position: 'absolute',
+      top: 2,
+      right: 2,
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: '#ef4444',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 4,
+      borderWidth: 1.5,
+      borderColor: 'rgba(26,26,46,0.9)',
+    },
+    chatBadgeText: { color: colors.white, fontSize: 10, fontWeight: '800' },
+    avatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarText: { color: colors.primary, fontSize: 18, fontWeight: '800' },
+    bottomArea: {},
+    bottomRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      marginBottom: 12,
+    },
+    driversStatus: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: 'rgba(15,15,30,0.85)',
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+    },
+    statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+    statusOnline: { backgroundColor: '#22C55E' },
+    statusOffline: { backgroundColor: colors.gray[400] },
+    driversStatusText: { color: colors.white, fontSize: 13, fontWeight: '600' },
+    recenterBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
+    recenterIcon: { fontSize: 22, color: colors.primary },
 
-  searchContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 32,
-  },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    height: 58,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  originDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: Colors.accent,
-    marginRight: 12,
-  },
-  searchPlaceholder: { flex: 1, fontSize: 16, color: Colors.gray[400] },
-  searchArrow: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: Colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchArrowText: { color: Colors.primary, fontSize: 16, fontWeight: '700' },
-  userMarker: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(201,168,76,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  userMarkerDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: Colors.accent,
-  },
-});
+    searchContainer: {
+      paddingHorizontal: 16,
+      paddingBottom: 32,
+    },
+    searchBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      height: 58,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.2,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    originDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.accent,
+      marginRight: 12,
+    },
+    searchPlaceholder: { flex: 1, fontSize: 16, color: colors.gray[400] },
+    searchArrow: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    searchArrowText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+    userMarker: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: 'rgba(201,168,76,0.3)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    userMarkerDot: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      backgroundColor: colors.accent,
+    },
+  });
+}

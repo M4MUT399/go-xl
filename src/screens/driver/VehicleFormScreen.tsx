@@ -5,11 +5,12 @@ import {
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { useVehicle } from '../../hooks/useVehicle';
+import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'VehicleForm'> };
 
@@ -17,6 +18,8 @@ const currentYear = new Date().getFullYear();
 
 export function VehicleFormScreen({ navigation }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
+  const { t } = useTranslation();
   const { vehicle, loading, saveVehicle } = useVehicle(profile?.id);
 
   const [model, setModel] = useState('');
@@ -24,6 +27,8 @@ export function VehicleFormScreen({ navigation }: Props) {
   const [color, setColor] = useState('');
   const [year, setYear] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const styles = makeStyles(colors);
 
   useEffect(() => {
     if (vehicle) {
@@ -37,11 +42,11 @@ export function VehicleFormScreen({ navigation }: Props) {
   async function handleSave() {
     const yearNum = parseInt(year, 10);
     if (!model.trim() || !plate.trim() || !color.trim() || !year.trim()) {
-      Alert.alert('Atenção', 'Preencha todos os campos.');
+      Alert.alert(t('common.attention'), t('vehicle.fillAll'));
       return;
     }
     if (isNaN(yearNum) || yearNum < 1990 || yearNum > currentYear + 1) {
-      Alert.alert('Atenção', `Informe um ano válido (1990–${currentYear + 1}).`);
+      Alert.alert(t('common.attention'), `${t('vehicle.invalidYear')} (1990–${currentYear + 1}).`);
       return;
     }
 
@@ -55,10 +60,10 @@ export function VehicleFormScreen({ navigation }: Props) {
     setSaving(false);
 
     if (error) {
-      Alert.alert('Erro', error);
+      Alert.alert(t('common.error'), error);
     } else {
-      Alert.alert('Pronto!', 'Veículo salvo com sucesso.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
+      Alert.alert(t('common.done'), t('vehicle.saved'), [
+        { text: t('common.ok'), onPress: () => navigation.goBack() },
       ]);
     }
   }
@@ -66,7 +71,7 @@ export function VehicleFormScreen({ navigation }: Props) {
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, styles.center]}>
-        <ActivityIndicator color={Colors.accent} />
+        <ActivityIndicator color={colors.accent} />
       </SafeAreaView>
     );
   }
@@ -76,42 +81,42 @@ export function VehicleFormScreen({ navigation }: Props) {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-            <Text style={styles.backText}>← Voltar</Text>
+            <Text style={styles.backText}>← {t('common.back')}</Text>
           </TouchableOpacity>
 
           <View style={styles.header}>
             <View style={styles.iconCircle}>
               <Text style={{ fontSize: 28 }}>🚗</Text>
             </View>
-            <Text style={styles.title}>{vehicle ? 'Editar veículo' : 'Cadastrar veículo'}</Text>
-            <Text style={styles.subtitle}>Seu carro precisa atender ao padrão Executive XL</Text>
+            <Text style={styles.title}>{vehicle ? t('vehicle.editTitle') : t('vehicle.newTitle')}</Text>
+            <Text style={styles.subtitle}>{t('vehicle.subtitle')}</Text>
           </View>
 
           <View style={styles.form}>
             <Input
-              label="Modelo"
+              label={t('vehicle.model')}
               value={model}
               onChangeText={setModel}
-              placeholder="Ex: Toyota Corolla"
+              placeholder={t('vehicle.modelPh')}
               autoCapitalize="words"
             />
             <Input
-              label="Placa"
+              label={t('vehicle.plate')}
               value={plate}
-              onChangeText={(t) => setPlate(t.toUpperCase())}
+              onChangeText={(tx) => setPlate(tx.toUpperCase())}
               placeholder="ABC1D23"
               autoCapitalize="characters"
               maxLength={8}
             />
             <Input
-              label="Cor"
+              label={t('vehicle.color')}
               value={color}
               onChangeText={setColor}
-              placeholder="Ex: Preto"
+              placeholder={t('vehicle.colorPh')}
               autoCapitalize="words"
             />
             <Input
-              label="Ano"
+              label={t('vehicle.year')}
               value={year}
               onChangeText={setYear}
               placeholder={String(currentYear)}
@@ -120,30 +125,36 @@ export function VehicleFormScreen({ navigation }: Props) {
             />
           </View>
 
-          <Button title={vehicle ? 'Salvar alterações' : 'Cadastrar veículo'} onPress={handleSave} loading={saving} />
+          <Button
+            title={vehicle ? t('vehicle.save') : t('vehicle.register')}
+            onPress={handleSave}
+            loading={saving}
+          />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.white },
-  center: { alignItems: 'center', justifyContent: 'center' },
-  scroll: { flexGrow: 1, padding: 24 },
-  back: { marginBottom: 24, alignSelf: 'flex-start' },
-  backText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
-  header: { alignItems: 'center', marginBottom: 32 },
-  iconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: Colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.primary, marginBottom: 8 },
-  subtitle: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingHorizontal: 20 },
-  form: { marginBottom: 24 },
-});
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    center: { alignItems: 'center', justifyContent: 'center' },
+    scroll: { flexGrow: 1, padding: 24 },
+    back: { marginBottom: 24, alignSelf: 'flex-start' },
+    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+    header: { alignItems: 'center', marginBottom: 32 },
+    iconCircle: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: colors.gray[100],
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 16,
+    },
+    title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 8 },
+    subtitle: { fontSize: 14, color: colors.gray[500], textAlign: 'center', paddingHorizontal: 20 },
+    form: { marginBottom: 24 },
+  });
+}

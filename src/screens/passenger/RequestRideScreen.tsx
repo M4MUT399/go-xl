@@ -9,7 +9,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList, Location } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { Button } from '../../components/common/Button';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
@@ -27,8 +28,11 @@ type Props = {
 
 export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { location } = useLocation();
   const { requestRide, scheduleRide } = usePassengerRide(profile?.id);
+
+  const styles = makeStyles(colors);
 
   const lockedDriverId   = screenRoute.params?.lockedDriverId;
   const lockedDriverName = screenRoute.params?.lockedDriverName;
@@ -205,7 +209,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   { latitude: selectedDest.lat, longitude: selectedDest.lng },
                 ]
               }
-              strokeColor={Colors.accent}
+              strokeColor={colors.accent}
               strokeWidth={route ? 4 : 2.5}
               lineDashPattern={route ? undefined : [8, 4]}
             />
@@ -228,7 +232,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 value={destinationText}
                 onChangeText={(t) => { setDestinationText(t); setSelectedDest(null); }}
                 placeholder="Digite o destino..."
-                placeholderTextColor={Colors.gray[400]}
+                placeholderTextColor={colors.gray[400]}
                 autoFocus
               />
             </View>
@@ -248,7 +252,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                       {formatDistance(distanceKm)}{estimatedMin ? ` • ${estimatedMin} min` : ''}
                     </Text>
                   ) : (
-                    <ActivityIndicator size="small" color={Colors.accent} style={{ alignSelf: 'flex-start', marginTop: 2 }} />
+                    <ActivityIndicator size="small" color={colors.accent} style={{ alignSelf: 'flex-start', marginTop: 2 }} />
                   )}
                 </View>
                 {displayPrice ? (
@@ -257,7 +261,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                     {!estimatedPrice && <Text style={styles.priceMin}> mín.</Text>}
                   </Text>
                 ) : (
-                  <ActivityIndicator size="small" color={Colors.accent} />
+                  <ActivityIndicator size="small" color={colors.accent} />
                 )}
               </View>
 
@@ -279,7 +283,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   disabled={loading || !displayPrice}
                 >
                   {loading
-                    ? <ActivityIndicator color={Colors.primary} size="small" />
+                    ? <ActivityIndicator color={colors.primary} size="small" />
                     : <Text style={styles.requestBtnText}>Solicitar agora</Text>
                   }
                 </TouchableOpacity>
@@ -290,7 +294,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
           <ScrollView style={styles.suggestionList} keyboardShouldPersistTaps="handled">
             {searching && (
               <View style={styles.searchingRow}>
-                <ActivityIndicator color={Colors.accent} size="small" />
+                <ActivityIndicator color={colors.accent} size="small" />
                 <Text style={styles.searchingText}>Buscando endereços...</Text>
               </View>
             )}
@@ -302,7 +306,10 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
               >
                 <Text style={styles.suggestionIcon}>📍</Text>
                 <View style={styles.suggestionTextWrap}>
-                  <Text style={styles.suggestionText} numberOfLines={1}>{d.shortName}</Text>
+                  <Text style={styles.suggestionText} numberOfLines={1}>
+                    {d.shortName}
+                    {d.category ? <Text style={styles.suggestionTag}>{`  ·  ${d.category}`}</Text> : null}
+                  </Text>
                   <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
                 </View>
               </TouchableOpacity>
@@ -355,175 +362,178 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.white },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
-  // Banner motorista QR
-  lockedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  lockedIcon: { fontSize: 20 },
-  lockedInfo: { flex: 1 },
-  lockedLabel: { fontSize: 10, color: Colors.accent, fontWeight: '700', letterSpacing: 1 },
-  lockedName: { fontSize: 15, color: Colors.white, fontWeight: '800' },
-  lockedBadge: {
-    backgroundColor: Colors.accent,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  lockedBadgeText: { fontSize: 11, fontWeight: '800', color: Colors.primary },
-  back: { marginRight: 16, padding: 4 },
-  backText: { fontSize: 24, color: Colors.primary },
-  title: { fontSize: 20, fontWeight: '700', color: Colors.primary },
-  miniMap: { height: 180 },
-  searchSection: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  routeRow: { flexDirection: 'row', marginBottom: 16 },
-  routeIcon: { width: 20, alignItems: 'center', paddingTop: 16, marginRight: 12 },
-  dotOrigin: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.accent },
-  routeLine: { flex: 1, width: 2, backgroundColor: Colors.gray[300], marginVertical: 4 },
-  dotDest: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.primary },
-  routeInputs: { flex: 1 },
-  originBox: {
-    height: 44,
-    backgroundColor: Colors.gray[100],
-    borderRadius: 10,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    marginBottom: 8,
-  },
-  originLabel: { color: Colors.gray[500], fontSize: 14 },
-  destInput: {
-    height: 44,
-    backgroundColor: Colors.gray[100],
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 15,
-    color: Colors.black,
-    borderWidth: 1.5,
-    borderColor: Colors.accent,
-  },
-  suggestionList: { flex: 1 },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.gray[100],
-  },
-  // Botões de ação lado a lado
-  actionRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  scheduleBtnInline: {
-    flex: 1,
-    height: 50,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.gray[300],
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-  },
-  scheduleBtnInlineText: {
-    fontSize: 18,
-    lineHeight: 22,
-  },
-  scheduleBtnInlineLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.gray[600],
-  },
-  requestBtnInline: {
-    flex: 2,
-    height: 50,
-    borderRadius: 12,
-    backgroundColor: Colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  requestBtnText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: Colors.primary,
-  },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  modalSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    paddingBottom: 36,
-  },
-  modalTitle: { fontSize: 20, fontWeight: '800', color: Colors.primary, textAlign: 'center' },
-  modalSub: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', marginTop: 4, marginBottom: 8 },
-  pickerWrap: { alignItems: 'center', marginBottom: 12 },
-  modalCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
-  modalCancelText: { color: Colors.gray[500], fontSize: 15, fontWeight: '600' },
-  suggestionIcon: { fontSize: 18, marginRight: 12 },
-  suggestionTextWrap: { flex: 1 },
-  suggestionText: { fontSize: 14, color: Colors.gray[800], fontWeight: '500' },
-  suggestionSub: { fontSize: 12, color: Colors.gray[400], marginTop: 2 },
-  searchingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, gap: 10 },
-  searchingText: { fontSize: 14, color: Colors.gray[500] },
-  noResults: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingVertical: 24 },
-  hint: { fontSize: 13, color: Colors.gray[400], textAlign: 'center', paddingVertical: 24 },
-  estimateCard: {
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.gray[200],
-    gap: 12,
-    marginTop: 4,
-  },
-  categoryRow: { flexDirection: 'row', alignItems: 'center' },
-  categoryIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: Colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  categoryInfo: { flex: 1 },
-  categoryName: { fontSize: 15, fontWeight: '700', color: Colors.primary },
-  categoryDesc: { fontSize: 12, color: Colors.gray[500], marginTop: 2 },
-  price: { fontSize: 20, fontWeight: '800', color: Colors.primary },
-  priceMin: { fontSize: 12, fontWeight: '500', color: Colors.gray[500] },
-  markerOrigin: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: Colors.accent,
-    borderWidth: 2,
-    borderColor: Colors.white,
-  },
-  markerDest: {
-    width: 12,
-    height: 12,
-    borderRadius: 2,
-    backgroundColor: Colors.primary,
-    borderWidth: 2,
-    borderColor: Colors.white,
-  },
-  surgeBadge: {
-    backgroundColor: '#FFF3CD',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#FFCA2C',
-    alignItems: 'center',
-  },
-  surgeText: {
-    color: '#7B5800',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-});
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
+    // Banner motorista QR
+    lockedBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.primary,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      gap: 12,
+    },
+    lockedIcon: { fontSize: 20 },
+    lockedInfo: { flex: 1 },
+    lockedLabel: { fontSize: 10, color: colors.accent, fontWeight: '700', letterSpacing: 1 },
+    lockedName: { fontSize: 15, color: colors.white, fontWeight: '800' },
+    lockedBadge: {
+      backgroundColor: colors.accent,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    lockedBadgeText: { fontSize: 11, fontWeight: '800', color: colors.primary },
+    back: { marginRight: 16, padding: 4 },
+    backText: { fontSize: 24, color: colors.text },
+    title: { fontSize: 20, fontWeight: '700', color: colors.text },
+    miniMap: { height: 180 },
+    searchSection: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+    routeRow: { flexDirection: 'row', marginBottom: 16 },
+    routeIcon: { width: 20, alignItems: 'center', paddingTop: 16, marginRight: 12 },
+    dotOrigin: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent },
+    routeLine: { flex: 1, width: 2, backgroundColor: colors.gray[300], marginVertical: 4 },
+    dotDest: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary },
+    routeInputs: { flex: 1 },
+    originBox: {
+      height: 44,
+      backgroundColor: colors.gray[100],
+      borderRadius: 10,
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+      marginBottom: 8,
+    },
+    originLabel: { color: colors.gray[500], fontSize: 14 },
+    destInput: {
+      height: 44,
+      backgroundColor: colors.gray[100],
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      fontSize: 15,
+      color: colors.text,
+      borderWidth: 1.5,
+      borderColor: colors.accent,
+    },
+    suggestionList: { flex: 1 },
+    suggestionItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.gray[100],
+    },
+    // Botões de ação lado a lado
+    actionRow: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    scheduleBtnInline: {
+      flex: 1,
+      height: 50,
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: colors.gray[300],
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 2,
+    },
+    scheduleBtnInlineText: {
+      fontSize: 18,
+      lineHeight: 22,
+    },
+    scheduleBtnInlineLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.gray[600],
+    },
+    requestBtnInline: {
+      flex: 2,
+      height: 50,
+      borderRadius: 12,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    requestBtnText: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.primary,
+    },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+    modalSheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      padding: 24,
+      paddingBottom: 36,
+    },
+    modalTitle: { fontSize: 20, fontWeight: '800', color: colors.text, textAlign: 'center' },
+    modalSub: { fontSize: 14, color: colors.gray[500], textAlign: 'center', marginTop: 4, marginBottom: 8 },
+    pickerWrap: { alignItems: 'center', marginBottom: 12 },
+    modalCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
+    modalCancelText: { color: colors.gray[500], fontSize: 15, fontWeight: '600' },
+    suggestionIcon: { fontSize: 18, marginRight: 12 },
+    suggestionTextWrap: { flex: 1 },
+    suggestionText: { fontSize: 14, color: colors.gray[800], fontWeight: '500' },
+    suggestionSub: { fontSize: 12, color: colors.gray[400], marginTop: 2 },
+    suggestionTag: { fontSize: 12, color: colors.accent, fontWeight: '600' },
+    searchingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, gap: 10 },
+    searchingText: { fontSize: 14, color: colors.gray[500] },
+    noResults: { fontSize: 14, color: colors.gray[500], textAlign: 'center', paddingVertical: 24 },
+    hint: { fontSize: 13, color: colors.gray[400], textAlign: 'center', paddingVertical: 24 },
+    estimateCard: {
+      paddingVertical: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.gray[200],
+      gap: 12,
+      marginTop: 4,
+    },
+    categoryRow: { flexDirection: 'row', alignItems: 'center' },
+    categoryIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 10,
+      backgroundColor: colors.gray[100],
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+    categoryInfo: { flex: 1 },
+    categoryName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    categoryDesc: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+    price: { fontSize: 20, fontWeight: '800', color: colors.text },
+    priceMin: { fontSize: 12, fontWeight: '500', color: colors.gray[500] },
+    markerOrigin: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      backgroundColor: colors.accent,
+      borderWidth: 2,
+      borderColor: colors.white,
+    },
+    markerDest: {
+      width: 12,
+      height: 12,
+      borderRadius: 2,
+      backgroundColor: colors.primary,
+      borderWidth: 2,
+      borderColor: colors.white,
+    },
+    surgeBadge: {
+      backgroundColor: '#FFF3CD',
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderWidth: 1,
+      borderColor: '#FFCA2C',
+      alignItems: 'center',
+    },
+    surgeText: {
+      color: '#7B5800',
+      fontSize: 13,
+      fontWeight: '700',
+    },
+  });
+}

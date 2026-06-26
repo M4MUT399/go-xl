@@ -6,7 +6,8 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { Button } from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide } from '../../hooks/useRide';
@@ -22,8 +23,11 @@ type Props = {
 export function FindingDriverScreen({ navigation, route }: Props) {
   const { ride: initialRide } = route.params;
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { cancelRide } = usePassengerRide(profile?.id);
   const [elapsed, setElapsed] = useState(0);
+
+  const styles = makeStyles(colors);
 
   const pulse1 = useRef(new Animated.Value(1)).current;
   const pulse2 = useRef(new Animated.Value(1)).current;
@@ -54,7 +58,15 @@ export function FindingDriverScreen({ navigation, route }: Props) {
     const goActive = (ride: typeof initialRide) => {
       if (done) return;
       done = true;
-      navigation.replace('ActiveRide', { ride });
+      // Notifica o passageiro que a cobrança foi realizada ao aceitar
+      const price = ride.price ? formatCurrency(ride.price) : '';
+      Alert.alert(
+        '💳 Cobrança realizada!',
+        price
+          ? `${price} debitado do seu cartão. Seu motorista está a caminho!`
+          : 'Pagamento processado. Seu motorista está a caminho!',
+        [{ text: 'OK', onPress: () => navigation.replace('ActiveRide', { ride }) }],
+      );
     };
 
     // 1) postgres_changes UPDATE (precisa de REPLICA IDENTITY FULL)
@@ -184,45 +196,47 @@ export function FindingDriverScreen({ navigation, route }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.primary },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  pulseContainer: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center', marginBottom: 40 },
-  pulseRing: {
-    position: 'absolute',
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: Colors.accent,
-  },
-  carCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: Colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  carEmoji: { fontSize: 36 },
-  title: { fontSize: 28, fontWeight: '800', color: Colors.white, textAlign: 'center', marginBottom: 12, lineHeight: 36 },
-  subtitle: { fontSize: 15, color: Colors.gray[400], textAlign: 'center', lineHeight: 22, marginBottom: 32 },
-  timer: { alignItems: 'center', marginBottom: 32 },
-  timerText: { fontSize: 42, fontWeight: '900', color: Colors.accent, letterSpacing: -1 },
-  timerLabel: { fontSize: 12, color: Colors.gray[500], textTransform: 'uppercase', letterSpacing: 1, marginTop: 4 },
-  tripInfo: {
-    width: '100%',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  infoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
-  infoIcon: { fontSize: 16, marginRight: 10 },
-  infoText: { flex: 1, color: Colors.gray[300], fontSize: 14 },
-  infoSeparator: { height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginHorizontal: 8 },
-  priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, marginTop: 4, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' },
-  priceLabel: { color: Colors.gray[400], fontSize: 13 },
-  price: { color: Colors.accent, fontSize: 20, fontWeight: '800' },
-  footer: { paddingHorizontal: 24, paddingBottom: 32 },
-});
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    content: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+    pulseContainer: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center', marginBottom: 40 },
+    pulseRing: {
+      position: 'absolute',
+      width: 100,
+      height: 100,
+      borderRadius: 50,
+      backgroundColor: colors.accent,
+    },
+    carCircle: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    carEmoji: { fontSize: 36 },
+    title: { fontSize: 28, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 12, lineHeight: 36 },
+    subtitle: { fontSize: 15, color: colors.gray[400], textAlign: 'center', lineHeight: 22, marginBottom: 32 },
+    timer: { alignItems: 'center', marginBottom: 32 },
+    timerText: { fontSize: 42, fontWeight: '900', color: colors.accent, letterSpacing: -1 },
+    timerLabel: { fontSize: 12, color: colors.gray[500], textTransform: 'uppercase', letterSpacing: 1, marginTop: 4 },
+    tripInfo: {
+      width: '100%',
+      backgroundColor: 'rgba(255,255,255,0.06)',
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.1)',
+    },
+    infoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+    infoIcon: { fontSize: 16, marginRight: 10 },
+    infoText: { flex: 1, color: colors.gray[300], fontSize: 14 },
+    infoSeparator: { height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginHorizontal: 8 },
+    priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, marginTop: 4, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' },
+    priceLabel: { color: colors.gray[400], fontSize: 13 },
+    price: { color: colors.accent, fontSize: 20, fontWeight: '800' },
+    footer: { paddingHorizontal: 24, paddingBottom: 32 },
+  });
+}

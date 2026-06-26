@@ -7,7 +7,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, Message } from '../types';
-import { Colors } from '../constants/colors';
+import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../hooks/useAuth';
 import { useMessages } from '../hooks/useMessages';
 import { markChatRead } from '../hooks/useUnreadMessages';
@@ -21,9 +21,12 @@ type Props = {
 export function ChatScreen({ navigation, route }: Props) {
   const { rideId, title } = route.params;
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { messages, sendMessage } = useMessages(rideId, profile?.id);
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<Message>>(null);
+
+  const styles = makeStyles(colors);
 
   // Marca como lido ao entrar e ao sair. Usa o timestamp da última mensagem
   // (não o relógio do aparelho) para não deixar o badge preso por clock skew.
@@ -100,7 +103,7 @@ export function ChatScreen({ navigation, route }: Props) {
             value={text}
             onChangeText={setText}
             placeholder="Mensagem..."
-            placeholderTextColor={Colors.gray[400]}
+            placeholderTextColor={colors.gray[400]}
             multiline
             onSubmitEditing={handleSend}
           />
@@ -113,57 +116,59 @@ export function ChatScreen({ navigation, route }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: Colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.gray[100],
-  },
-  back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: 24, color: Colors.primary },
-  headerInfo: { marginLeft: 4 },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: Colors.primary },
-  headerSub: { fontSize: 12, color: Colors.accent, fontWeight: '600' },
-  list: { padding: 16, flexGrow: 1 },
-  bubbleRow: { marginBottom: 10, flexDirection: 'row' },
-  bubbleRowMine: { justifyContent: 'flex-end' },
-  bubbleRowTheirs: { justifyContent: 'flex-start' },
-  bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
-  bubbleMine: { backgroundColor: Colors.primary, borderBottomRightRadius: 4 },
-  bubbleTheirs: { backgroundColor: Colors.white, borderBottomLeftRadius: 4 },
-  bubbleText: { fontSize: 15, color: Colors.gray[800] },
-  bubbleTextMine: { color: Colors.white },
-  bubbleTime: { fontSize: 10, color: Colors.gray[400], marginTop: 4, alignSelf: 'flex-end' },
-  bubbleTimeMine: { color: 'rgba(255,255,255,0.6)' },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80, paddingHorizontal: 40 },
-  emptyEmoji: { fontSize: 44, marginBottom: 12 },
-  emptyText: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', lineHeight: 20 },
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: Colors.white,
-    borderTopWidth: 1,
-    borderTopColor: Colors.gray[100],
-    gap: 8,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: Colors.gray[100],
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: Colors.black,
-    maxHeight: 100,
-  },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.accent, alignItems: 'center', justifyContent: 'center' },
-  sendBtnDisabled: { backgroundColor: Colors.gray[300] },
-  sendBtnText: { color: Colors.primary, fontSize: 20, fontWeight: '900' },
-});
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: colors.card,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.gray[100],
+    },
+    back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+    backText: { fontSize: 24, color: colors.primary },
+    headerInfo: { marginLeft: 4 },
+    headerTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
+    headerSub: { fontSize: 12, color: colors.accent, fontWeight: '600' },
+    list: { padding: 16, flexGrow: 1 },
+    bubbleRow: { marginBottom: 10, flexDirection: 'row' },
+    bubbleRowMine: { justifyContent: 'flex-end' },
+    bubbleRowTheirs: { justifyContent: 'flex-start' },
+    bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
+    bubbleMine: { backgroundColor: colors.primary, borderBottomRightRadius: 4 },
+    bubbleTheirs: { backgroundColor: colors.card, borderBottomLeftRadius: 4 },
+    bubbleText: { fontSize: 15, color: colors.gray[800] },
+    bubbleTextMine: { color: colors.white },
+    bubbleTime: { fontSize: 10, color: colors.gray[400], marginTop: 4, alignSelf: 'flex-end' },
+    bubbleTimeMine: { color: 'rgba(255,255,255,0.6)' },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80, paddingHorizontal: 40 },
+    emptyEmoji: { fontSize: 44, marginBottom: 12 },
+    emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center', lineHeight: 20 },
+    inputBar: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: colors.card,
+      borderTopWidth: 1,
+      borderTopColor: colors.gray[100],
+      gap: 8,
+    },
+    input: {
+      flex: 1,
+      backgroundColor: colors.gray[100],
+      borderRadius: 20,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      fontSize: 15,
+      color: colors.black,
+      maxHeight: 100,
+    },
+    sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+    sendBtnDisabled: { backgroundColor: colors.gray[300] },
+    sendBtnText: { color: colors.primary, fontSize: 20, fontWeight: '900' },
+  });
+}

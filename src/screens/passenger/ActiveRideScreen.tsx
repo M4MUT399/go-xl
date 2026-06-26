@@ -6,7 +6,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide } from '../../hooks/useRide';
@@ -34,6 +35,7 @@ const STATUS_LABELS: Record<RideStatus, string> = {
 
 export function ActiveRideScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { cancelRide } = usePassengerRide(profile?.id);
   const isFocused = useIsFocused();
   const [ride, setRide] = useState<Ride>(route.params.ride);
@@ -42,6 +44,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // instante a cada atualização para o ícone do carro realmente pintar no iOS.
   const [tracksCar, setTracksCar] = useState(true);
   const mapRef = useRef<MapView>(null);
+
+  const styles = makeStyles(colors);
 
   useChatAlert(ride.id, profile?.id, isFocused, 'Motorista');
   const [driverName, setDriverName] = useState('Motorista');
@@ -134,7 +138,10 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           if (updated.status === 'completed') {
             navigation.replace('RateRide', { ride: updated });
           } else if (updated.status === 'cancelled') {
-            Alert.alert('Corrida cancelada', 'O motorista cancelou a corrida.');
+            Alert.alert(
+              'Corrida cancelada',
+              'O motorista cancelou a corrida. O valor cobrado será estornado automaticamente para o seu cartão.',
+            );
             navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
           }
         }
@@ -224,7 +231,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         }}
       >
         {path && (
-          <Polyline coordinates={path.coordinates} strokeColor={Colors.accent} strokeWidth={4} />
+          <Polyline coordinates={path.coordinates} strokeColor={colors.accent} strokeWidth={4} />
         )}
         <Marker coordinate={{ latitude: origin.lat, longitude: origin.lng }}>
           <View style={styles.markerOrigin} />
@@ -323,158 +330,160 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1 },
+    map: { flex: 1 },
 
-  // ── Bottom sheet ──────────────────────────────────────────────────────────
-  bottomSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 8,
-    paddingHorizontal: 20,
-    paddingBottom: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: Colors.gray[300],
-    alignSelf: 'center',
-    marginBottom: 14,
-  },
+    // ── Bottom sheet ──────────────────────────────────────────────────────────
+    bottomSheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingTop: 8,
+      paddingHorizontal: 20,
+      paddingBottom: 32,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 16,
+    },
+    handle: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.gray[300],
+      alignSelf: 'center',
+      marginBottom: 14,
+    },
 
-  // ── Caixa preta ETA (igual ao motorista) ─────────────────────────────────
-  etaCard: {
-    backgroundColor: Colors.primary,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 14,
-    alignItems: 'center',
-  },
-  etaMain: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 6,
-    marginBottom: 6,
-  },
-  etaMinutes: {
-    fontSize: 48,
-    fontWeight: '900',
-    color: Colors.white,
-    letterSpacing: -2,
-  },
-  etaUnit: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.accent,
-    marginBottom: 4,
-  },
-  etaSep: {
-    width: 1,
-    height: 32,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    marginHorizontal: 8,
-  },
-  etaDist: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.gray[300],
-  },
-  etaDistUnit: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.accent,
-    marginBottom: 4,
-  },
-  etaArrival: {
-    fontSize: 13,
-    color: Colors.gray[400],
-    fontWeight: '600',
-  },
+    // ── Caixa preta ETA (igual ao motorista) ─────────────────────────────────
+    etaCard: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 14,
+      alignItems: 'center',
+    },
+    etaMain: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: 6,
+      marginBottom: 6,
+    },
+    etaMinutes: {
+      fontSize: 48,
+      fontWeight: '900',
+      color: colors.white,
+      letterSpacing: -2,
+    },
+    etaUnit: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: colors.accent,
+      marginBottom: 4,
+    },
+    etaSep: {
+      width: 1,
+      height: 32,
+      backgroundColor: 'rgba(255,255,255,0.2)',
+      marginHorizontal: 8,
+    },
+    etaDist: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: colors.gray[300],
+    },
+    etaDistUnit: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: colors.accent,
+      marginBottom: 4,
+    },
+    etaArrival: {
+      fontSize: 13,
+      color: colors.gray[400],
+      fontWeight: '600',
+    },
 
-  // ── Endereço ──────────────────────────────────────────────────────────────
-  addressCard: {
-    backgroundColor: Colors.gray[100],
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
-  },
-  addressLabel: {
-    fontSize: 11,
-    color: Colors.gray[400],
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  addressText: {
-    fontSize: 15,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
+    // ── Endereço ──────────────────────────────────────────────────────────────
+    addressCard: {
+      backgroundColor: colors.gray[100],
+      borderRadius: 12,
+      padding: 14,
+      marginBottom: 14,
+    },
+    addressLabel: {
+      fontSize: 11,
+      color: colors.gray[400],
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 4,
+    },
+    addressText: {
+      fontSize: 15,
+      color: colors.text,
+      fontWeight: '600',
+    },
 
-  // ── Motorista ─────────────────────────────────────────────────────────────
-  driverRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  driverAvatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  driverAvatarText: { color: Colors.accent, fontSize: 18, fontWeight: '800' },
-  driverInfo: { flex: 1 },
-  driverName: { fontSize: 15, fontWeight: '700', color: Colors.primary },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  star: { color: Colors.accent, fontSize: 13, marginRight: 2 },
-  ratingText: { fontSize: 12, color: Colors.gray[500] },
-  plateBox: {
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginRight: 8,
-  },
-  plateText: { color: Colors.white, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
-  driverActions: { flexDirection: 'row', gap: 8 },
-  actionBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: Colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionIcon: { fontSize: 18 },
-  vehicleLabel: {
-    fontSize: 12,
-    color: Colors.gray[400],
-    marginBottom: 14,
-    marginLeft: 58,
-  },
+    // ── Motorista ─────────────────────────────────────────────────────────────
+    driverRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 6,
+    },
+    driverAvatar: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    driverAvatarText: { color: colors.accent, fontSize: 18, fontWeight: '800' },
+    driverInfo: { flex: 1 },
+    driverName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+    star: { color: colors.accent, fontSize: 13, marginRight: 2 },
+    ratingText: { fontSize: 12, color: colors.gray[500] },
+    plateBox: {
+      backgroundColor: colors.primary,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      marginRight: 8,
+    },
+    plateText: { color: colors.white, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
+    driverActions: { flexDirection: 'row', gap: 8 },
+    actionBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: colors.gray[100],
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionIcon: { fontSize: 18 },
+    vehicleLabel: {
+      fontSize: 12,
+      color: colors.gray[400],
+      marginBottom: 14,
+      marginLeft: 58,
+    },
 
-  // ── Cancelar ──────────────────────────────────────────────────────────────
-  cancelBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4 },
-  cancelBtnText: { color: Colors.error, fontSize: 15, fontWeight: '700' },
+    // ── Cancelar ──────────────────────────────────────────────────────────────
+    cancelBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4 },
+    cancelBtnText: { color: colors.error, fontSize: 15, fontWeight: '700' },
 
-  // ── Marcadores no mapa ────────────────────────────────────────────────────
-  markerOrigin: {
-    width: 12, height: 12, borderRadius: 6,
-    backgroundColor: Colors.accent, borderWidth: 2, borderColor: Colors.white,
-  },
-  markerDest: {
-    width: 12, height: 12, borderRadius: 2,
-    backgroundColor: Colors.primary, borderWidth: 2, borderColor: Colors.white,
-  },
-});
+    // ── Marcadores no mapa ────────────────────────────────────────────────────
+    markerOrigin: {
+      width: 12, height: 12, borderRadius: 6,
+      backgroundColor: colors.accent, borderWidth: 2, borderColor: colors.white,
+    },
+    markerDest: {
+      width: 12, height: 12, borderRadius: 2,
+      backgroundColor: colors.primary, borderWidth: 2, borderColor: colors.white,
+    },
+  });
+}

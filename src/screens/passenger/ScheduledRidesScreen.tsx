@@ -6,7 +6,8 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, RideRecord, Ride } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useScheduledRides } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
@@ -28,8 +29,11 @@ interface DriverInfo {
 
 export function ScheduledRidesScreen({ navigation }: Props) {
   const { profile } = useAuth();
+  const { colors } = useTheme();
   const { rides, loading, refresh, activate, cancel } = useScheduledRides(profile?.id);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
+
+  const styles = makeStyles(colors);
 
   useFocusEffect(
     React.useCallback(() => { refresh(); }, [refresh])
@@ -131,13 +135,13 @@ export function ScheduledRidesScreen({ navigation }: Props) {
       </View>
 
       {loading && rides.length === 0 ? (
-        <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
+        <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
           data={rides}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={Colors.accent} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🗓️</Text>
@@ -154,6 +158,8 @@ export function ScheduledRidesScreen({ navigation }: Props) {
                 onActivate={handleActivate}
                 onCancel={handleCancel}
                 onChat={item.driver_id ? () => handleChat(item, driverInfo) : undefined}
+                styles={styles}
+                colors={colors}
               />
             );
           }}
@@ -164,13 +170,15 @@ export function ScheduledRidesScreen({ navigation }: Props) {
 }
 
 function ScheduledCard({
-  ride, driverInfo, onActivate, onCancel, onChat,
+  ride, driverInfo, onActivate, onCancel, onChat, styles, colors,
 }: {
   ride: RideRecord;
   driverInfo?: DriverInfo;
   onActivate: (r: RideRecord) => void;
   onCancel: (r: RideRecord) => void;
   onChat?: () => void;
+  styles: ReturnType<typeof makeStyles>;
+  colors: AppTheme;
 }) {
   // Clock interno — garante que o aviso de cobrança aparece sem precisar
   // sair e voltar à tela quando a janela de 60 min for cruzada.
@@ -290,119 +298,121 @@ function ScheduledCard({
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.offWhite },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
-  back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: 24, color: Colors.primary },
-  title: { fontSize: 22, fontWeight: '800', color: Colors.primary, marginLeft: 4 },
-  list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
-  card: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 12 },
-  cardConfirmed: { borderLeftWidth: 4, borderLeftColor: Colors.success },
-  cardWarning: { borderLeftWidth: 4, borderLeftColor: '#ef4444' },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  cardDate: { fontSize: 15, fontWeight: '700', color: Colors.primary },
-  schBadge: { backgroundColor: Colors.gray[100], borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  schText: { color: Colors.gray[600], fontSize: 11, fontWeight: '700' },
-  confirmedBadge: { backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  confirmedText: { color: Colors.success, fontSize: 11, fontWeight: '700' },
-  dueBadge: { backgroundColor: 'rgba(201,168,76,0.15)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  dueText: { color: Colors.accent, fontSize: 11, fontWeight: '700' },
-  route: { flexDirection: 'row', marginBottom: 12 },
-  routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
-  dotOrigin: { width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.accent },
-  routeLine: { flex: 1, width: 2, backgroundColor: Colors.gray[200], marginVertical: 3 },
-  dotDest: { width: 9, height: 9, borderRadius: 2, backgroundColor: Colors.primary },
-  routeText: { flex: 1, marginLeft: 12 },
-  addr: { fontSize: 14, color: Colors.gray[800], fontWeight: '500' },
-  driverCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.gray[100],
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(34,197,94,0.2)',
-  },
-  driverAvatar: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: Colors.primary,
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 12,
-  },
-  driverAvatarText: { color: Colors.accent, fontSize: 18, fontWeight: '800' },
-  driverInfo: { flex: 1 },
-  driverName: { fontSize: 15, fontWeight: '700', color: Colors.primary },
-  driverVehicle: { fontSize: 12, color: Colors.gray[500], marginTop: 2 },
-  plateBox: {
-    backgroundColor: Colors.primary, borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 5,
-  },
-  plateText: { color: Colors.white, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
-  cardMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.gray[100],
-    marginBottom: 14,
-  },
-  metaText: { fontSize: 13, color: Colors.gray[500] },
-  metaPrice: { fontSize: 16, fontWeight: '800', color: Colors.primary },
-  policyFree: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(100,116,139,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(100,116,139,0.15)',
-    marginBottom: 10,
-  },
-  policyFreeText: { color: Colors.gray[600], fontSize: 12, fontWeight: '600', lineHeight: 17, flex: 1 },
-  policyCharged: {
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    backgroundColor: '#fef2f2',
-    borderWidth: 1.5,
-    borderColor: '#ef4444',
-    marginBottom: 12,
-  },
-  policyChargedTitle: { color: '#b91c1c', fontSize: 14, fontWeight: '800', marginBottom: 4 },
-  policyChargedBody: { color: '#7f1d1d', fontSize: 13, fontWeight: '500', lineHeight: 19 },
-  policyChargedValue: { color: '#b91c1c', fontWeight: '800' },
-  chatBtn: {
-    backgroundColor: 'rgba(201,168,76,0.12)',
-    borderRadius: 12,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(201,168,76,0.3)',
-  },
-  chatBtnText: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
-  noCancel: {
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(239,68,68,0.06)',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  noCancelText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
-  cardActions: { flexDirection: 'row', gap: 10 },
-  cancelBtn: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: Colors.gray[200], alignItems: 'center', justifyContent: 'center' },
-  cancelBtnText: { color: Colors.gray[600], fontSize: 14, fontWeight: '700' },
-  cancelBtnCharged: { borderColor: 'rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)' },
-  cancelBtnTextCharged: { color: '#ef4444', fontSize: 13 },
-  activateBtn: { flex: 2, height: 44, borderRadius: 12, backgroundColor: Colors.accent, alignItems: 'center', justifyContent: 'center' },
-  activateBtnText: { color: Colors.primary, fontSize: 14, fontWeight: '800' },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
-  emptyEmoji: { fontSize: 48, marginBottom: 16 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.primary, marginBottom: 6 },
-  emptyText: { fontSize: 14, color: Colors.gray[500], textAlign: 'center', paddingHorizontal: 32 },
-});
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
+    back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+    backText: { fontSize: 24, color: colors.text },
+    title: { fontSize: 22, fontWeight: '800', color: colors.text, marginLeft: 4 },
+    list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
+    card: { backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 12 },
+    cardConfirmed: { borderLeftWidth: 4, borderLeftColor: colors.success },
+    cardWarning: { borderLeftWidth: 4, borderLeftColor: '#ef4444' },
+    cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+    cardDate: { fontSize: 15, fontWeight: '700', color: colors.text },
+    schBadge: { backgroundColor: colors.gray[100], borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+    schText: { color: colors.gray[600], fontSize: 11, fontWeight: '700' },
+    confirmedBadge: { backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+    confirmedText: { color: colors.success, fontSize: 11, fontWeight: '700' },
+    dueBadge: { backgroundColor: 'rgba(201,168,76,0.15)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+    dueText: { color: colors.accent, fontSize: 11, fontWeight: '700' },
+    route: { flexDirection: 'row', marginBottom: 12 },
+    routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
+    dotOrigin: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.accent },
+    routeLine: { flex: 1, width: 2, backgroundColor: colors.gray[200], marginVertical: 3 },
+    dotDest: { width: 9, height: 9, borderRadius: 2, backgroundColor: colors.primary },
+    routeText: { flex: 1, marginLeft: 12 },
+    addr: { fontSize: 14, color: colors.gray[800], fontWeight: '500' },
+    driverCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.gray[100],
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: 'rgba(34,197,94,0.2)',
+    },
+    driverAvatar: {
+      width: 44, height: 44, borderRadius: 22,
+      backgroundColor: colors.primary,
+      alignItems: 'center', justifyContent: 'center',
+      marginRight: 12,
+    },
+    driverAvatarText: { color: colors.accent, fontSize: 18, fontWeight: '800' },
+    driverInfo: { flex: 1 },
+    driverName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    driverVehicle: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+    plateBox: {
+      backgroundColor: colors.primary, borderRadius: 8,
+      paddingHorizontal: 10, paddingVertical: 5,
+    },
+    plateText: { color: colors.white, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+    cardMeta: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.gray[100],
+      marginBottom: 14,
+    },
+    metaText: { fontSize: 13, color: colors.gray[500] },
+    metaPrice: { fontSize: 16, fontWeight: '800', color: colors.text },
+    policyFree: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderRadius: 10,
+      paddingVertical: 9,
+      paddingHorizontal: 12,
+      backgroundColor: 'rgba(100,116,139,0.08)',
+      borderWidth: 1,
+      borderColor: 'rgba(100,116,139,0.15)',
+      marginBottom: 10,
+    },
+    policyFreeText: { color: colors.gray[600], fontSize: 12, fontWeight: '600', lineHeight: 17, flex: 1 },
+    policyCharged: {
+      borderRadius: 12,
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      backgroundColor: '#fef2f2',
+      borderWidth: 1.5,
+      borderColor: '#ef4444',
+      marginBottom: 12,
+    },
+    policyChargedTitle: { color: '#b91c1c', fontSize: 14, fontWeight: '800', marginBottom: 4 },
+    policyChargedBody: { color: '#7f1d1d', fontSize: 13, fontWeight: '500', lineHeight: 19 },
+    policyChargedValue: { color: '#b91c1c', fontWeight: '800' },
+    chatBtn: {
+      backgroundColor: 'rgba(201,168,76,0.12)',
+      borderRadius: 12,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: 'rgba(201,168,76,0.3)',
+    },
+    chatBtnText: { color: colors.accent, fontSize: 14, fontWeight: '700' },
+    noCancel: {
+      borderRadius: 10,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      backgroundColor: 'rgba(239,68,68,0.06)',
+      alignItems: 'center',
+      marginBottom: 10,
+    },
+    noCancelText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
+    cardActions: { flexDirection: 'row', gap: 10 },
+    cancelBtn: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: colors.gray[200], alignItems: 'center', justifyContent: 'center' },
+    cancelBtnText: { color: colors.gray[600], fontSize: 14, fontWeight: '700' },
+    cancelBtnCharged: { borderColor: 'rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)' },
+    cancelBtnTextCharged: { color: '#ef4444', fontSize: 13 },
+    activateBtn: { flex: 2, height: 44, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+    activateBtnText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
+    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
+    emptyEmoji: { fontSize: 48, marginBottom: 16 },
+    emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 6 },
+    emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center', paddingHorizontal: 32 },
+  });
+}

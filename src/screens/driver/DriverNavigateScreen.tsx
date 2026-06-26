@@ -7,9 +7,10 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
-import { Colors } from '../../constants/colors';
+import { useTheme } from '../../hooks/useTheme';
+import { AppTheme } from '../../constants/theme';
 import { Button } from '../../components/common/Button';
-import { useDriverRide } from '../../hooks/useRide';
+import { useDriverRide, notifyPassengerRideCompleted } from '../../hooks/useRide';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
@@ -51,12 +52,12 @@ function maneuverArrow(type: string, modifier?: string): string {
   }
 }
 
-function maneuverColor(type: string, modifier?: string): string {
-  if (type === 'arrive') return Colors.success;
+function maneuverColor(type: string, modifier: string | undefined, colors: AppTheme): string {
+  if (type === 'arrive') return colors.success;
   if (type === 'roundabout' || type === 'rotary') return '#7C3AED';
   if (modifier === 'left' || modifier === 'sharp left' || modifier === 'slight left') return '#2563EB';
   if (modifier === 'right' || modifier === 'sharp right' || modifier === 'slight right') return '#2563EB';
-  return Colors.primary;
+  return colors.primary;
 }
 
 function maneuverInstruction(type: string, modifier?: string, name?: string): { action: string; street: string } {
@@ -93,9 +94,10 @@ function formatStepDist(meters: number): string {
 export function DriverNavigateScreen({ navigation, route }: Props) {
   const { ride } = route.params;
   const { profile } = useAuth();
+  const { colors } = useTheme();
   // watch: true → posição contínua durante a navegação
   const { location } = useLocation({ watch: true });
-  const { updateRideStatus } = useDriverRide(profile?.id);
+  const { updateRideStatus, refundRide } = useDriverRide(profile?.id);
   const lastUploadedCoord = useRef<{ lat: number; lng: number } | null>(null);
   const isFocused = useIsFocused();
   const [phase, setPhase] = useState<Phase>('pickup');
@@ -103,6 +105,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // Mantém o snapshot do marcador ligado por um instante a cada movimento,
   // para o ícone do carro pintar e acompanhar a posição no iOS.
   const [tracksCar, setTracksCar] = useState(true);
+
+  const styles = makeStyles(colors);
 
   useChatAlert(ride.id, profile?.id, isFocused, 'Passageiro');
 
@@ -176,8 +180,6 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     : null;
 
   // ── Grava posição + ETA na própria corrida ────────────────────────────────
-  // O passageiro lê esses campos (RLS garante acesso à própria corrida) e exibe
-  // os mesmos números de tempo/distância que o motorista vê.
   const lastTelemetry = useRef<{ lat: number; lng: number; etaMin?: number } | null>(null);
   useEffect(() => {
     if (!location || !ride.id) {
@@ -221,12 +223,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   }, [ride.id]);
 
   function handleCancel() {
-    Alert.alert('Cancelar corrida', 'Tem certeza? O passageiro será avisado.', [
+    Alert.alert('Cancelar corrida', 'Tem certeza? O passageiro será reembolsado automaticamente.', [
       { text: 'Não', style: 'cancel' },
       {
         text: 'Sim, cancelar',
         style: 'destructive',
         onPress: async () => {
+          // Extorna o pagamento antes de cancelar
+          await refundRide(ride.id);
           await updateRideStatus(ride.id, 'cancelled' as RideStatus);
           navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
         },
@@ -243,6 +247,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       lastRouteCoord.current = null;
     } else {
       await updateRideStatus(ride.id, 'completed' as RideStatus);
+      // Notifica o passageiro (push remoto para app em background)
+      notifyPassengerRideCompleted(ride.passenger_id, ride.price);
       Alert.alert('Corrida concluída!', `Valor: ${formatCurrency(ride.price)}`, [
         { text: 'OK', onPress: () => navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] }) },
       ]);
@@ -254,7 +260,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   // Instrução atual
   const arrow       = currentStep ? maneuverArrow(currentStep.maneuver.type, currentStep.maneuver.modifier) : '↑';
-  const arrowBg     = currentStep ? maneuverColor(currentStep.maneuver.type, currentStep.maneuver.modifier) : Colors.primary;
+  const arrowBg     = currentStep ? maneuverColor(currentStep.maneuver.type, currentStep.maneuver.modifier, colors) : colors.primary;
   const instruction = currentStep
     ? maneuverInstruction(currentStep.maneuver.type, currentStep.maneuver.modifier, currentStep.name)
     : { action: phase === 'pickup' ? 'Indo buscar o passageiro' : 'Levando ao destino', street: target.address };
@@ -312,7 +318,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
                 { latitude: target.lat, longitude: target.lng },
               ]
             }
-            strokeColor={Colors.accent}
+            strokeColor={colors.accent}
             strokeWidth={path ? 4 : 3}
             lineDashPattern={path ? undefined : [6, 3]}
           />
@@ -367,7 +373,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             >
               {upcomingSteps.map((s, i) => {
                 const a = maneuverArrow(s.maneuver.type, s.maneuver.modifier);
-                const bg = maneuverColor(s.maneuver.type, s.maneuver.modifier);
+                const bg = maneuverColor(s.maneuver.type, s.maneuver.modifier, colors);
                 return (
                   <View key={i} style={styles.upcomingChip}>
                     <View style={[styles.upcomingArrowBox, { backgroundColor: bg }]}>
@@ -455,282 +461,284 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-  overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1 },
+    map: { flex: 1 },
+    overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
 
-  // Instruction banner
-  instructionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    margin: 12,
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 12,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  arrowBox: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  arrowText: {
-    fontSize: 26,
-    color: Colors.white,
-    fontWeight: '900',
-  },
-  instructionInfo: {
-    flex: 1,
-  },
-  instructionDist: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: Colors.accent,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 1,
-  },
-  instructionAction: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: Colors.primary,
-    lineHeight: 19,
-  },
-  instructionStreet: {
-    fontSize: 12,
-    color: Colors.gray[500],
-    marginTop: 1,
-  },
-  etaBadge: {
-    alignItems: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    flexShrink: 0,
-  },
-  etaBadgeMin: {
-    color: Colors.accent,
-    fontSize: 18,
-    fontWeight: '900',
-    lineHeight: 20,
-  },
-  etaBadgeUnit: {
-    color: Colors.gray[400],
-    fontSize: 10,
-    fontWeight: '700',
-  },
+    // Instruction banner
+    instructionBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      margin: 12,
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 12,
+      gap: 12,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.2,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    arrowBox: {
+      width: 52,
+      height: 52,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    arrowText: {
+      fontSize: 26,
+      color: colors.white,
+      fontWeight: '900',
+    },
+    instructionInfo: {
+      flex: 1,
+    },
+    instructionDist: {
+      fontSize: 11,
+      fontWeight: '800',
+      color: colors.accent,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 1,
+    },
+    instructionAction: {
+      fontSize: 15,
+      fontWeight: '800',
+      color: colors.text,
+      lineHeight: 19,
+    },
+    instructionStreet: {
+      fontSize: 12,
+      color: colors.gray[500],
+      marginTop: 1,
+    },
+    etaBadge: {
+      alignItems: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 10,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      flexShrink: 0,
+    },
+    etaBadgeMin: {
+      color: colors.accent,
+      fontSize: 18,
+      fontWeight: '900',
+      lineHeight: 20,
+    },
+    etaBadgeUnit: {
+      color: colors.gray[400],
+      fontSize: 10,
+      fontWeight: '700',
+    },
 
-  // Bottom sheet
-  bottomSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 8,
-    paddingHorizontal: 20,
-    paddingBottom: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: Colors.gray[300],
-    alignSelf: 'center',
-    marginBottom: 14,
-  },
+    // Bottom sheet
+    bottomSheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingTop: 8,
+      paddingHorizontal: 20,
+      paddingBottom: 32,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 16,
+    },
+    handle: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.gray[300],
+      alignSelf: 'center',
+      marginBottom: 14,
+    },
 
-  // Upcoming steps
-  upcomingSection: {
-    marginBottom: 14,
-  },
-  upcomingTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: Colors.gray[400],
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 8,
-  },
-  upcomingList: {
-    gap: 8,
-  },
-  upcomingChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.gray[100],
-    borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    gap: 8,
-    maxWidth: 180,
-  },
-  upcomingArrowBox: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  upcomingArrow: {
-    fontSize: 16,
-    color: Colors.white,
-    fontWeight: '700',
-  },
-  upcomingChipInfo: {
-    flex: 1,
-  },
-  upcomingChipName: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  upcomingChipDist: {
-    fontSize: 11,
-    color: Colors.gray[500],
-    marginTop: 1,
-  },
+    // Upcoming steps
+    upcomingSection: {
+      marginBottom: 14,
+    },
+    upcomingTitle: {
+      fontSize: 11,
+      fontWeight: '800',
+      color: colors.gray[400],
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+      marginBottom: 8,
+    },
+    upcomingList: {
+      gap: 8,
+    },
+    upcomingChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.gray[100],
+      borderRadius: 12,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      gap: 8,
+      maxWidth: 180,
+    },
+    upcomingArrowBox: {
+      width: 30,
+      height: 30,
+      borderRadius: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    upcomingArrow: {
+      fontSize: 16,
+      color: colors.white,
+      fontWeight: '700',
+    },
+    upcomingChipInfo: {
+      flex: 1,
+    },
+    upcomingChipName: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    upcomingChipDist: {
+      fontSize: 11,
+      color: colors.gray[500],
+      marginTop: 1,
+    },
 
-  // ETA card (dropoff)
-  etaCard: {
-    backgroundColor: Colors.primary,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 14,
-    alignItems: 'center',
-  },
-  etaMain: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 6,
-    marginBottom: 6,
-  },
-  etaMinutes: {
-    fontSize: 48,
-    fontWeight: '900',
-    color: Colors.white,
-    letterSpacing: -2,
-  },
-  etaUnit: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.accent,
-    marginBottom: 4,
-  },
-  etaSep: {
-    width: 1,
-    height: 32,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    marginHorizontal: 8,
-  },
-  etaDist: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.gray[300],
-  },
-  etaArrival: {
-    fontSize: 13,
-    color: Colors.gray[400],
-    fontWeight: '600',
-  },
+    // ETA card (dropoff)
+    etaCard: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 14,
+      alignItems: 'center',
+    },
+    etaMain: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: 6,
+      marginBottom: 6,
+    },
+    etaMinutes: {
+      fontSize: 48,
+      fontWeight: '900',
+      color: colors.white,
+      letterSpacing: -2,
+    },
+    etaUnit: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: colors.accent,
+      marginBottom: 4,
+    },
+    etaSep: {
+      width: 1,
+      height: 32,
+      backgroundColor: 'rgba(255,255,255,0.2)',
+      marginHorizontal: 8,
+    },
+    etaDist: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: colors.gray[300],
+    },
+    etaArrival: {
+      fontSize: 13,
+      color: colors.gray[400],
+      fontWeight: '600',
+    },
 
-  // Address card
-  addressCard: {
-    backgroundColor: Colors.gray[100],
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
-  },
-  addressLabel: {
-    fontSize: 11,
-    color: Colors.gray[400],
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  addressText: {
-    fontSize: 15,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
+    // Address card
+    addressCard: {
+      backgroundColor: colors.gray[100],
+      borderRadius: 12,
+      padding: 14,
+      marginBottom: 14,
+    },
+    addressLabel: {
+      fontSize: 11,
+      color: colors.gray[400],
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 4,
+    },
+    addressText: {
+      fontSize: 15,
+      color: colors.text,
+      fontWeight: '600',
+    },
 
-  // Passenger row
-  passengerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  passengerAvatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: Colors.gray[200],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  passengerAvatarText: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.gray[600],
-  },
-  passengerInfo: { flex: 1 },
-  passengerName: { fontSize: 15, fontWeight: '600', color: Colors.primary },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  star: { color: Colors.accent, fontSize: 13, marginRight: 2 },
-  ratingText: { fontSize: 12, color: Colors.gray[500] },
-  actions: { flexDirection: 'row', gap: 8 },
-  actionBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: Colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btn: {},
-  cancelBtn: {
-    marginTop: 12,
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  cancelBtnText: {
-    color: Colors.error,
-    fontSize: 15,
-    fontWeight: '700',
-  },
+    // Passenger row
+    passengerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 18,
+    },
+    passengerAvatar: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      backgroundColor: colors.gray[200],
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+    },
+    passengerAvatarText: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.gray[600],
+    },
+    passengerInfo: { flex: 1 },
+    passengerName: { fontSize: 15, fontWeight: '600', color: colors.text },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+    star: { color: colors.accent, fontSize: 13, marginRight: 2 },
+    ratingText: { fontSize: 12, color: colors.gray[500] },
+    actions: { flexDirection: 'row', gap: 8 },
+    actionBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: colors.gray[100],
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    btn: {},
+    cancelBtn: {
+      marginTop: 12,
+      alignItems: 'center',
+      paddingVertical: 10,
+    },
+    cancelBtnText: {
+      color: colors.error,
+      fontSize: 15,
+      fontWeight: '700',
+    },
 
-  // Markers
-  markerPickup: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: Colors.accent,
-    borderWidth: 2,
-    borderColor: Colors.white,
-  },
-  markerDropoff: {
-    width: 14,
-    height: 14,
-    borderRadius: 3,
-    backgroundColor: Colors.primary,
-    borderWidth: 2,
-    borderColor: Colors.white,
-  },
-});
+    // Markers
+    markerPickup: {
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      backgroundColor: colors.accent,
+      borderWidth: 2,
+      borderColor: colors.white,
+    },
+    markerDropoff: {
+      width: 14,
+      height: 14,
+      borderRadius: 3,
+      backgroundColor: colors.primary,
+      borderWidth: 2,
+      borderColor: colors.white,
+    },
+  });
+}
 
 // ─── Utilitário ──────────────────────────────────────────────────────────────
 
