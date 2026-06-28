@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../types';
@@ -28,6 +28,7 @@ export function RegisterScreen({ navigation, route }: Props) {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [avatarUri, setAvatarUri] = useState('');
   const [selectedLang, setSelectedLang] = useState<Lang>(lang);
   const [loading, setLoading] = useState(false);
@@ -41,12 +42,16 @@ export function RegisterScreen({ navigation, route }: Props) {
   }
 
   async function handleRegister() {
-    if (!fullName || !phone || !email || !password) {
+    if (!fullName || !phone || !email || !password || !confirmPassword) {
       Alert.alert(t('common.attention'), t('register.fillAll'));
       return;
     }
     if (password.length < 6) {
       Alert.alert(t('common.attention'), t('register.passwordShort'));
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert(t('common.attention'), t('register.passwordMismatch'));
       return;
     }
     if (isDriver && !avatarUri) {
@@ -64,8 +69,12 @@ export function RegisterScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        enableOnAndroid
+        extraScrollHeight={20}
+      >
           <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
             <Text style={styles.backText}>← {t('common.back')}</Text>
           </TouchableOpacity>
@@ -122,6 +131,13 @@ export function RegisterScreen({ navigation, route }: Props) {
               placeholder={t('register.passwordPh')}
               secureTextEntry
             />
+            <Input
+              label={t('register.confirmPassword')}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              placeholder={t('register.passwordPh')}
+              secureTextEntry
+            />
           </View>
 
           <Button title={t('register.create')} onPress={handleRegister} loading={loading} />
@@ -132,8 +148,7 @@ export function RegisterScreen({ navigation, route }: Props) {
               <Text style={styles.loginLink}>{t('login.signIn')}</Text>
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }

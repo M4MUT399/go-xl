@@ -35,8 +35,8 @@ export function AvatarPicker({
   const [uploading, setUploading] = useState(false);
   const styles = makeStyles(colors, size);
 
-  async function handlePick() {
-    const uri = await pickImage({ aspect: [1, 1] });
+  async function pickAndApply(fromCamera: boolean) {
+    const uri = await pickImage({ aspect: [1, 1], fromCamera });
     if (!uri) return;
     if (local) {
       onChange(uri); // upload adiado (ex.: no cadastro, após criar a conta)
@@ -51,6 +51,19 @@ export function AvatarPicker({
     } finally {
       setUploading(false);
     }
+  }
+
+  function handlePick() {
+    Alert.alert(
+      'Foto de rosto',
+      'Como você quer adicionar a foto?',
+      [
+        { text: 'Tirar foto', onPress: () => pickAndApply(true) },
+        { text: 'Escolher da galeria', onPress: () => pickAndApply(false) },
+        { text: 'Cancelar', style: 'cancel' },
+      ],
+      { cancelable: true }
+    );
   }
 
   return (

@@ -68,11 +68,11 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderRadius: 12,
       borderWidth: 1.5,
       borderColor: colors.gray[200],
-      backgroundColor: colors.white,
+      backgroundColor: 'transparent',
     },
     optionActive: {
       borderColor: colors.accent,
-      backgroundColor: 'rgba(201,168,76,0.12)',
+      backgroundColor: colors.white,
     },
     flag: { fontSize: 16 },
     optionText: { fontSize: 13, fontWeight: '600', color: colors.gray[600] },

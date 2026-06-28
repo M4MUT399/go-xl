@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput,
-  KeyboardAvoidingView, Platform, ScrollView, Keyboard, Alert, ActivityIndicator,
+  Keyboard, Alert, ActivityIndicator,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../types';
@@ -123,14 +124,12 @@ export function RateRideScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-      <ScrollView
+      <KeyboardAwareScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        enableOnAndroid
+        extraScrollHeight={20}
       >
         {/* ── Ícone de sucesso ── */}
         <View style={styles.successIcon}>
@@ -280,8 +279,7 @@ export function RateRideScreen({ navigation, route }: Props) {
           )}
           <Button title="Pular" onPress={handleSkip} variant="ghost" />
         </View>
-      </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }

@@ -175,8 +175,15 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const currentStep   = steps[0] ?? null;
   const upcomingSteps = steps.slice(1, 4).filter((s) => s.maneuver.type !== 'arrive');
 
-  const etaTime = path?.durationMin
-    ? new Date(Date.now() + path.durationMin * 60 * 1000)
+  // Fallback: enquanto a rota local (OSRM) ainda não carregou, usa o ETA já
+  // calculado no momento do aceite (acceptRide) — assim o motorista vê o tempo
+  // estimado imediatamente ao abrir a tela, em vez de esperar o GPS+rota.
+  const fallbackEtaMin = phase === 'pickup' ? (ride.driver_eta_min ?? null) : null;
+  const fallbackEtaKm  = phase === 'pickup' ? (ride.driver_eta_km ?? null) : null;
+  const etaMinDisplay = path?.durationMin ?? fallbackEtaMin;
+  const etaKmDisplay  = path?.distanceKm ?? fallbackEtaKm;
+  const etaTime = etaMinDisplay
+    ? new Date(Date.now() + etaMinDisplay * 60 * 1000)
     : null;
 
   // ── Grava posição + ETA na própria corrida ────────────────────────────────
@@ -349,9 +356,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           </View>
 
           {/* ETA */}
-          {path && (
+          {etaMinDisplay != null && (
             <View style={styles.etaBadge}>
-              <Text style={styles.etaBadgeMin}>{path.durationMin}</Text>
+              <Text style={styles.etaBadgeMin}>{etaMinDisplay}</Text>
               <Text style={styles.etaBadgeUnit}>min</Text>
             </View>
           )}
@@ -393,13 +400,17 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         )}
 
         {/* ETA card (pickup e dropoff) */}
-        {path && (
+        {etaMinDisplay != null && (
           <View style={styles.etaCard}>
             <View style={styles.etaMain}>
-              <Text style={styles.etaMinutes}>{path.durationMin}</Text>
+              <Text style={styles.etaMinutes}>{etaMinDisplay}</Text>
               <Text style={styles.etaUnit}>min</Text>
-              <View style={styles.etaSep} />
-              <Text style={styles.etaDist}>{formatDistance(path.distanceKm)}</Text>
+              {etaKmDisplay != null && (
+                <>
+                  <View style={styles.etaSep} />
+                  <Text style={styles.etaDist}>{formatDistance(etaKmDisplay)}</Text>
+                </>
+              )}
             </View>
             {etaTime && (
               <Text style={styles.etaArrival}>

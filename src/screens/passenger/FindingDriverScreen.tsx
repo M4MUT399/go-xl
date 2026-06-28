@@ -58,13 +58,17 @@ export function FindingDriverScreen({ navigation, route }: Props) {
     const goActive = (ride: typeof initialRide) => {
       if (done) return;
       done = true;
-      // Notifica o passageiro que a cobrança foi realizada ao aceitar
+      // Notifica o passageiro que a cobrança foi realizada ao aceitar, já com o
+      // tempo estimado até o embarque (calculado pelo motorista no momento do aceite).
       const price = ride.price ? formatCurrency(ride.price) : '';
+      const etaPhrase = ride.driver_eta_min
+        ? ` Chegando em ${ride.driver_eta_min} min.`
+        : ' Seu motorista está a caminho!';
       Alert.alert(
         '💳 Cobrança realizada!',
         price
-          ? `${price} debitado do seu cartão. Seu motorista está a caminho!`
-          : 'Pagamento processado. Seu motorista está a caminho!',
+          ? `${price} debitado do seu cartão.${etaPhrase}`
+          : `Pagamento processado.${etaPhrase}`,
         [{ text: 'OK', onPress: () => navigation.replace('ActiveRide', { ride }) }],
       );
     };

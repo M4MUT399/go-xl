@@ -4,6 +4,7 @@ import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
+import { getRoute } from '../lib/routing';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
 
@@ -142,7 +143,7 @@ async function broadcastToDriver(driverId: string, ride: object) {
   });
 }
 
-async function notifyPassenger(passengerId: string, price?: number) {
+async function notifyPassenger(passengerId: string, price?: number, etaMin?: number | null) {
   const { data } = await supabase
     .from('profiles')
     .select('push_token')
@@ -151,9 +152,10 @@ async function notifyPassenger(passengerId: string, price?: number) {
 
   const token = (data as { push_token: string | null })?.push_token;
   if (token) {
+    const etaPhrase = etaMin ? ` Chegando em ${etaMin} min.` : ' Motorista a caminho!';
     const body = price
-      ? `${formatCurrency(price)} cobrado do seu cartão. Motorista a caminho!`
-      : 'Seu Executive XL foi confirmado e está indo até você.';
+      ? `${formatCurrency(price)} cobrado do seu cartão.${etaPhrase}`
+      : `Seu Executive XL foi confirmado.${etaPhrase}`;
     await sendPushAsync([
       {
         to: token,
@@ -644,7 +646,10 @@ export function useDriverRide(driverId: string | undefined) {
     return () => { supabase.removeChannel(channel); };
   }, [driverId]);
 
-  const acceptRide = useCallback(async (rideId: string): Promise<Ride | null | 'payment_error'> => {
+  const acceptRide = useCallback(async (
+    rideId: string,
+    driverLocation?: { lat: number; lng: number } | null
+  ): Promise<Ride | null | 'payment_error'> => {
     // 0) Cobra o cartão do passageiro ANTES de aceitar.
     //    Se o pagamento falhar, o motorista vê o erro e a corrida permanece em 'requesting'.
     const charge = await chargeRide(rideId);
@@ -681,13 +686,35 @@ export function useDriverRide(driverId: string | undefined) {
       return null;
     }
 
-    const ride = data as Ride;
+    let ride = data as Ride;
+
+    // 3) Calcula o ETA até o embarque JÁ no momento do aceite (não espera o motorista
+    //    abrir a tela de navegação) e grava em rides — assim o passageiro já recebe o
+    //    tempo estimado junto com o aviso de "motorista a caminho".
+    if (driverLocation && ride.origin_lat != null && ride.origin_lng != null) {
+      try {
+        const path = await getRoute(driverLocation, { lat: ride.origin_lat, lng: ride.origin_lng });
+        if (path) {
+          const telemetry = {
+            driver_lat: driverLocation.lat,
+            driver_lng: driverLocation.lng,
+            driver_eta_min: path.durationMin,
+            driver_eta_km: path.distanceKm,
+          };
+          await supabase.from('rides').update(telemetry).eq('id', rideId);
+          ride = { ...ride, ...telemetry };
+        }
+      } catch {
+        // Sem ETA inicial — DriverNavigateScreen ainda vai calcular e gravar o seu.
+      }
+    }
+
     setActiveRide(ride);
     setPendingRide(null);
 
     // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback
     broadcastRideAccepted(ride.passenger_id, ride);
-    notifyPassenger(ride.passenger_id, ride.price);
+    notifyPassenger(ride.passenger_id, ride.price, ride.driver_eta_min);
 
     return ride;
   }, [driverId]);

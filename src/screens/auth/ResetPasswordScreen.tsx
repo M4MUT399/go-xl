@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, Alert,
-  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useTheme } from '../../hooks/useTheme';
@@ -50,37 +50,40 @@ export function ResetPasswordScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
-            <Text style={styles.title}>{t('resetPassword.title')}</Text>
-            <Text style={styles.subtitle}>{t('resetPassword.subtitle')}</Text>
-          </View>
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        enableOnAndroid
+        extraScrollHeight={20}
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>{t('resetPassword.title')}</Text>
+          <Text style={styles.subtitle}>{t('resetPassword.subtitle')}</Text>
+        </View>
 
-          <View style={styles.form}>
-            <Input
-              label={t('resetPassword.newPassword')}
-              value={password}
-              onChangeText={setPassword}
-              placeholder="••••••••"
-              secureTextEntry
-            />
-            <Input
-              label={t('resetPassword.confirmPassword')}
-              value={confirm}
-              onChangeText={setConfirm}
-              placeholder="••••••••"
-              secureTextEntry
-            />
-          </View>
+        <View style={styles.form}>
+          <Input
+            label={t('resetPassword.newPassword')}
+            value={password}
+            onChangeText={setPassword}
+            placeholder="••••••••"
+            secureTextEntry
+          />
+          <Input
+            label={t('resetPassword.confirmPassword')}
+            value={confirm}
+            onChangeText={setConfirm}
+            placeholder="••••••••"
+            secureTextEntry
+          />
+        </View>
 
-          <Button title={t('resetPassword.save')} onPress={handleSave} loading={loading} />
+        <Button title={t('resetPassword.save')} onPress={handleSave} loading={loading} />
 
-          <Text style={styles.signOutLink} onPress={() => { clearRecovery(); signOut(); }}>
-            {t('common.cancel')}
-          </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        <Text style={styles.signOutLink} onPress={() => { clearRecovery(); signOut(); }}>
+          {t('common.cancel')}
+        </Text>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }

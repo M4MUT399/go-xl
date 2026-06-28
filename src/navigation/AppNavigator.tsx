@@ -7,6 +7,7 @@ import {
   Animated, TouchableOpacity, SafeAreaView, Image,
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 
 import { RootStackParamList } from '../types';
@@ -117,11 +118,17 @@ function NotificationBanner({
 // ─── Tab navigators ───────────────────────────────────────────────────────────
 function PassengerTabs() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: colors.primary, borderTopColor: 'rgba(255,255,255,0.08)', height: 60 },
+        tabBarStyle: {
+          backgroundColor: colors.primary,
+          borderTopColor: 'rgba(255,255,255,0.08)',
+          height: 60 + insets.bottom,
+          paddingBottom: insets.bottom,
+        },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.gray[500],
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginBottom: 4 },
@@ -148,11 +155,17 @@ function PassengerTabs() {
 
 function DriverTabs() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: colors.primary, borderTopColor: 'rgba(255,255,255,0.08)', height: 60 },
+        tabBarStyle: {
+          backgroundColor: colors.primary,
+          borderTopColor: 'rgba(255,255,255,0.08)',
+          height: 60 + insets.bottom,
+          paddingBottom: insets.bottom,
+        },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.gray[500],
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginBottom: 4 },

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { Button } from '../../components/common/Button';
@@ -53,31 +53,34 @@ export function ForgotPasswordScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-            <Text style={styles.backText}>← {t('common.back')}</Text>
-          </TouchableOpacity>
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        enableOnAndroid
+        extraScrollHeight={20}
+      >
+        <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
+          <Text style={styles.backText}>← {t('common.back')}</Text>
+        </TouchableOpacity>
 
-          <View style={styles.header}>
-            <Text style={styles.title}>{t('forgotPassword.title')}</Text>
-            <Text style={styles.subtitle}>{t('forgotPassword.subtitle')}</Text>
-          </View>
+        <View style={styles.header}>
+          <Text style={styles.title}>{t('forgotPassword.title')}</Text>
+          <Text style={styles.subtitle}>{t('forgotPassword.subtitle')}</Text>
+        </View>
 
-          <View style={styles.form}>
-            <Input
-              label={t('forgotPassword.email')}
-              value={email}
-              onChangeText={setEmail}
-              placeholder="seu@email.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
+        <View style={styles.form}>
+          <Input
+            label={t('forgotPassword.email')}
+            value={email}
+            onChangeText={setEmail}
+            placeholder="seu@email.com"
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+        </View>
 
-          <Button title={t('forgotPassword.send')} onPress={handleSend} loading={loading} />
-        </ScrollView>
-      </KeyboardAvoidingView>
+        <Button title={t('forgotPassword.send')} onPress={handleSend} loading={loading} />
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }

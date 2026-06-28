@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
@@ -65,8 +65,12 @@ export function EditProfileScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        enableOnAndroid
+        extraScrollHeight={20}
+      >
           <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
             <Text style={styles.backText}>← {t('common.back')}</Text>
           </TouchableOpacity>
@@ -109,8 +113,7 @@ export function EditProfileScreen({ navigation }: Props) {
           </View>
 
           <Button title={t('common.saveChanges')} onPress={handleSave} loading={saving} />
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }

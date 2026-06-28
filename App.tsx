@@ -3,6 +3,7 @@ import React from 'react';
 import { LogBox } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { I18nProvider } from './src/i18n';
 import { AuthProvider } from './src/contexts/AuthContext';
@@ -24,12 +25,14 @@ if (__DEV__) {
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <I18nProvider>
-        <AuthProvider>
-          <StatusBar style="light" />
-          <AppNavigator />
-        </AuthProvider>
-      </I18nProvider>
+      <SafeAreaProvider>
+        <I18nProvider>
+          <AuthProvider>
+            <StatusBar style="light" />
+            <AppNavigator />
+          </AuthProvider>
+        </I18nProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

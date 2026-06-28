@@ -73,7 +73,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   async function handleAccept() {
     if (!pendingRide) return;
     setAccepting(true);
-    const ride = await acceptRide(pendingRide.id);
+    const ride = await acceptRide(pendingRide.id, location ? { lat: location.lat, lng: location.lng } : null);
     setAccepting(false);
     if (ride === 'payment_error') {
       Alert.alert(
