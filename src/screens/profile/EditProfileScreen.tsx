@@ -13,10 +13,13 @@ import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
 
+const SUPABASE_URL        = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const DELETE_ACCOUNT_URL  = `${SUPABASE_URL}/functions/v1/delete-account`;
+
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'EditProfile'> };
 
 export function EditProfileScreen({ navigation }: Props) {
-  const { profile, refreshProfile } = useAuth();
+  const { profile, refreshProfile, signOut } = useAuth();
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
@@ -25,6 +28,7 @@ export function EditProfileScreen({ navigation }: Props) {
   const [emergencyName, setEmergencyName] = useState(profile?.emergency_contact_name ?? '');
   const [emergencyPhone, setEmergencyPhone] = useState(profile?.emergency_contact_phone ?? '');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const isDriver = profile?.type === 'driver';
   const styles = makeStyles(colors);
@@ -60,6 +64,52 @@ export function EditProfileScreen({ navigation }: Props) {
       Alert.alert(t('common.done'), t('edit.updated'), [
         { text: t('common.ok'), onPress: () => navigation.goBack() },
       ]);
+    }
+  }
+
+  function confirmDeleteAccount() {
+    Alert.alert(
+      t('edit.deleteTitle'),
+      t('edit.deleteWarning'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('edit.deleteConfirm'), style: 'destructive', onPress: confirmDeleteAccountFinal },
+      ]
+    );
+  }
+
+  function confirmDeleteAccountFinal() {
+    // Segunda confirmação — ação irreversível.
+    Alert.alert(
+      t('edit.deleteFinalTitle'),
+      t('edit.deleteFinalWarning'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('edit.deleteConfirm'), style: 'destructive', onPress: handleDeleteAccount },
+      ]
+    );
+  }
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(DELETE_ACCOUNT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json() as { ok?: boolean; error?: string };
+      if (!json.ok) throw new Error(json.error ?? 'Falha ao excluir conta.');
+      await signOut();
+      // Após o signOut, o AppNavigator detecta a ausência de sessão e volta
+      // para a tela de Welcome automaticamente — nenhuma navegação manual necessária.
+    } catch (e: any) {
+      setDeleting(false);
+      Alert.alert(t('common.error'), e?.message ?? t('edit.deleteError'));
     }
   }
 
@@ -113,6 +163,16 @@ export function EditProfileScreen({ navigation }: Props) {
           </View>
 
           <Button title={t('common.saveChanges')} onPress={handleSave} loading={saving} />
+
+          <TouchableOpacity
+            style={styles.deleteAccountLink}
+            onPress={confirmDeleteAccount}
+            disabled={deleting}
+          >
+            <Text style={styles.deleteAccountText}>
+              {deleting ? t('edit.deleting') : t('edit.deleteAccount')}
+            </Text>
+          </TouchableOpacity>
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
@@ -136,5 +196,10 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
     readonlyLabel: { fontSize: 12, fontWeight: '700', color: colors.gray[500], marginBottom: 6, letterSpacing: 0.5 },
     readonlyValue: { fontSize: 15, color: colors.gray[700] },
     readonlyHint: { fontSize: 12, color: colors.gray[400], marginTop: 4 },
+    deleteAccountLink: {
+      marginTop: 28, alignItems: 'center',
+      borderTopWidth: 1, borderTopColor: colors.gray[200], paddingTop: 20,
+    },
+    deleteAccountText: { color: '#E03131', fontSize: 14, fontWeight: '700' },
   });
 }
