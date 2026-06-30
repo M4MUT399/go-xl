@@ -61,6 +61,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isRecovery, setIsRecovery] = useState(false);
 
   useEffect(() => {
+    let settled = false;
+
+    // ── Failsafe: a splash NUNCA pode ficar presa ─────────────────────────────
+    // Qualquer ponto da inicialização (getSession, fetchProfile) pode pendurar
+    // em rede ruim ou num lock interno do gotrue que não libera. Sem um limite,
+    // `loading` ficaria true para sempre e o app congelaria na tela de carregar
+    // (o sintoma exato relatado na build da App Store). Após 8s liberamos a
+    // navegação de qualquer forma: sem sessão o usuário cai no login, que é um
+    // estado seguro e recuperável — bem melhor do que travar indefinidamente.
+    const failsafe = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        setLoading(false);
+      }
+    }, 8000);
+
     supabase.auth
       .getSession()
       .then(async ({ data: { session }, error }) => {
@@ -68,17 +84,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await clearStaleSession();
           setSession(null);
           setProfile(null);
+          settled = true;
           setLoading(false);
           return;
         }
         setSession(session);
         if (session) await fetchProfile(session.user.id);
         else setLoading(false);
+        settled = true;
       })
       .catch(async (err) => {
         if (isInvalidRefreshTokenError(err)) await clearStaleSession();
         setSession(null);
         setProfile(null);
+        settled = true;
         setLoading(false);
       });
 
@@ -98,7 +117,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      clearTimeout(failsafe);
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function fetchProfile(userId: string) {
