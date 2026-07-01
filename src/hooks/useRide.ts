@@ -523,6 +523,19 @@ export function useDriverRide(driverId: string | undefined) {
     pendingRideIdRef.current = pendingRide?.id ?? null;
   }, [pendingRide?.id]);
 
+  // Descarta o popup de agendamento automaticamente quando o horário passa
+  useEffect(() => {
+    if (!pendingScheduledRide?.scheduled_for) return;
+    const scheduledAt = new Date(pendingScheduledRide.scheduled_for).getTime();
+    const msUntilExpiry = scheduledAt - Date.now();
+    if (msUntilExpiry <= 0) {
+      setPendingScheduledRide(null);
+      return;
+    }
+    const timer = setTimeout(() => setPendingScheduledRide(null), msUntilExpiry);
+    return () => clearTimeout(timer);
+  }, [pendingScheduledRide?.scheduled_for]);
+
   // ─── Fetch inicial ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!driverId) return;
@@ -538,18 +551,24 @@ export function useDriverRide(driverId: string | undefined) {
         if (data) setPendingRide(data as Ride);
       });
 
-    // Corrida agendada disponível
-    supabase
-      .from('rides')
-      .select('*')
-      .eq('status', 'scheduled')
-      .is('driver_id', null)
-      .order('scheduled_for', { ascending: true })
-      .limit(1)
-      .single()
-      .then(({ data }) => {
-        if (data) setPendingScheduledRide(data as Ride);
-      });
+    // Corrida agendada disponível — apenas dentro da janela de 1h
+    {
+      const now = new Date();
+      const windowEnd = new Date(now.getTime() + 60 * 60 * 1000);
+      supabase
+        .from('rides')
+        .select('*')
+        .eq('status', 'scheduled')
+        .is('driver_id', null)
+        .gte('scheduled_for', now.toISOString())
+        .lte('scheduled_for', windowEnd.toISOString())
+        .order('scheduled_for', { ascending: true })
+        .limit(1)
+        .single()
+        .then(({ data }) => {
+          if (data) setPendingScheduledRide(data as Ride);
+        });
+    }
   }, [driverId]);
 
   // ─── Polling: verifica corrida QR a cada 4s ─────────────────────────────────
@@ -595,7 +614,7 @@ export function useDriverRide(driverId: string | undefined) {
           }
         }
       )
-      // Nova corrida agendada — aparece como card de pedido para o motorista aceitar
+      // Nova corrida agendada — aparece como card de pedido apenas se estiver na janela de 1h
       .on(
         'postgres_changes',
         {
@@ -606,7 +625,12 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          if (!ride.driver_id) setPendingScheduledRide(ride);
+          if (!ride.driver_id && ride.scheduled_for) {
+            const now = Date.now();
+            const scheduledAt = new Date(ride.scheduled_for).getTime();
+            const inWindow = scheduledAt >= now && scheduledAt <= now + 60 * 60 * 1000;
+            if (inWindow) setPendingScheduledRide(ride);
+          }
         }
       )
       // Corridas agendadas ativadas chegam como UPDATE (scheduled→requesting)

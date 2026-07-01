@@ -60,6 +60,7 @@ export interface DriverLocation {
 export interface Coordinates {
   lat: number;
   lng: number;
+  heading?: number;
 }
 
 export interface Location extends Coordinates {
@@ -88,6 +89,7 @@ export interface Ride {
   // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
   driver_lat?: number;
   driver_lng?: number;
+  driver_heading?: number;
   driver_eta_min?: number;
   driver_eta_km?: number;
   created_at: string;

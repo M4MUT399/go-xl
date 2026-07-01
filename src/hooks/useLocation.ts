@@ -4,6 +4,11 @@ import type { Coordinates } from '../types';
 
 export type LocationStatus = 'loading' | 'ready' | 'denied' | 'error';
 
+// expo-location retorna -1 (ou null) quando o sentido do movimento é desconhecido.
+function validHeading(heading: number | null | undefined): number | undefined {
+  return heading != null && heading >= 0 ? heading : undefined;
+}
+
 interface UseLocationOptions {
   /** Quando true, inicia watchPositionAsync e atualiza a posição continuamente. */
   watch?: boolean;
@@ -34,7 +39,7 @@ export function useLocation(options?: UseLocationOptions) {
           maxAge: 60000,
           requiredAccuracy: 100,
         });
-        if (last) setLocation({ lat: last.coords.latitude, lng: last.coords.longitude });
+        if (last) setLocation({ lat: last.coords.latitude, lng: last.coords.longitude, heading: validHeading(last.coords.heading) });
       } catch {
         // ignora — segue para a posição precisa
       }
@@ -43,7 +48,7 @@ export function useLocation(options?: UseLocationOptions) {
       const loc = await ExpoLocation.getCurrentPositionAsync({
         accuracy: ExpoLocation.Accuracy.High,
       });
-      setLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+      setLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading) });
       setStatus('ready');
     } catch {
       setErrorMsg('Não foi possível obter sua localização');
@@ -78,7 +83,7 @@ export function useLocation(options?: UseLocationOptions) {
           timeInterval: 5000,     // ou a cada 5 s (o que vier primeiro)
         },
         (pos) => {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, heading: validHeading(pos.coords.heading) });
           setStatus('ready');
         }
       ).then((sub) => {
@@ -102,7 +107,7 @@ export function useLocation(options?: UseLocationOptions) {
       const loc = await ExpoLocation.getCurrentPositionAsync({
         accuracy: ExpoLocation.Accuracy.High,
       });
-      const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading) };
       setLocation(coords);
       return coords;
     } catch {

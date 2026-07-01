@@ -86,9 +86,9 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // driver_locations (que pode ser bloqueado por RLS/realtime no Expo Go).
   useEffect(() => {
     if (ride.driver_lat != null && ride.driver_lng != null) {
-      setDriverLoc({ lat: ride.driver_lat, lng: ride.driver_lng });
+      setDriverLoc({ lat: ride.driver_lat, lng: ride.driver_lng, heading: ride.driver_heading ?? undefined });
     }
-  }, [ride.driver_lat, ride.driver_lng]);
+  }, [ride.driver_lat, ride.driver_lng, ride.driver_heading]);
 
   // Polling da linha da corrida (realtime é instável no Expo Go) → mantém a
   // telemetria do motorista sempre fresca para o passageiro.
@@ -104,7 +104,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     async function fetchTelemetry() {
       const { data } = await supabase
         .from('rides')
-        .select('driver_lat,driver_lng,driver_eta_min,driver_eta_km,status,driver_id')
+        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,status,driver_id')
         .eq('id', ride.id)
         .maybeSingle();
       if (data) setRide((prev) => ({ ...prev, ...data }));
@@ -198,27 +198,54 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     ? new Date(Date.now() + etaMin! * 60 * 1000)
     : null;
 
-  // Polyline exibida no mapa
-  const path = fullPath;
+  // Polyline ativa: trecho que o motorista ainda vai percorrer
+  //   • accepted / driver_en_route → motorista a caminho do embarque
+  //   • in_progress               → percurso restante até o destino (IGUAL à tela do motorista)
+  const activePolyline =
+    ride.status === 'in_progress' ? remainingPath :
+    (ride.status === 'accepted' || ride.status === 'driver_en_route') ? toPickupPath :
+    null;
 
-  // Recentraliza o mapa: driver + embarque (a caminho) ou driver + embarque + destino (em andamento)
+  // Recentraliza o mapa conforme fase da corrida:
+  //   • a caminho do embarque → motorista + ponto de embarque
+  //   • in_progress (corrida em andamento) → motorista + destino final
   useEffect(() => {
     if (!driverLoc || !mapRef.current) return;
-    const base = [
-      { latitude: driverLoc.lat, longitude: driverLoc.lng },
-      { latitude: origin.lat, longitude: origin.lng },
-    ];
     const coords = ride.status === 'in_progress'
-      ? [...base, { latitude: dest.lat, longitude: dest.lng }]
-      : base;
+      ? [
+          { latitude: driverLoc.lat, longitude: driverLoc.lng },
+          { latitude: dest.lat, longitude: dest.lng },
+        ]
+      : [
+          { latitude: driverLoc.lat, longitude: driverLoc.lng },
+          { latitude: origin.lat, longitude: origin.lng },
+        ];
     mapRef.current.fitToCoordinates(coords, {
       edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
       animated: true,
     });
   }, [driverLoc, ride.status]);
 
+  function recenter() {
+    if (!driverLoc || !mapRef.current) return;
+    const coords = ride.status === 'in_progress'
+      ? [
+          { latitude: driverLoc.lat, longitude: driverLoc.lng },
+          { latitude: dest.lat, longitude: dest.lng },
+        ]
+      : [
+          { latitude: driverLoc.lat, longitude: driverLoc.lng },
+          { latitude: origin.lat, longitude: origin.lng },
+        ];
+    mapRef.current.fitToCoordinates(coords, {
+      edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
+      animated: true,
+    });
+  }
+
   return (
     <View style={styles.container}>
+      <View style={styles.mapArea}>
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -230,8 +257,22 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           longitudeDelta: Math.abs(origin.lng - dest.lng) * 2 + 0.02,
         }}
       >
-        {path && (
-          <Polyline coordinates={path.coordinates} strokeColor={colors.accent} strokeWidth={4} />
+        {/* Rota completa em plano de fundo — contexto visual da viagem */}
+        {fullPath && (
+          <Polyline
+            coordinates={fullPath.coordinates}
+            strokeColor="rgba(120,140,200,0.30)"
+            strokeWidth={3}
+            lineDashPattern={[5, 4]}
+          />
+        )}
+        {/* Rota ativa: motorista a caminho do embarque ou do destino */}
+        {(activePolyline ?? fullPath) && (
+          <Polyline
+            coordinates={(activePolyline ?? fullPath)!.coordinates}
+            strokeColor={colors.accent}
+            strokeWidth={5}
+          />
         )}
         <Marker coordinate={{ latitude: origin.lat, longitude: origin.lng }}>
           <View style={styles.markerOrigin} />
@@ -244,12 +285,20 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             rotation={driverLoc.heading ?? 0}
+            flat
             tracksViewChanges={tracksCar}
           >
             <CarMarker scale={0.75} />
           </Marker>
         )}
       </MapView>
+
+      {driverLoc && (
+        <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
+          <Text style={styles.recenterIcon}>◎</Text>
+        </TouchableOpacity>
+      )}
+      </View>
 
       <View style={styles.bottomSheet}>
         <View style={styles.handle} />
@@ -333,7 +382,25 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
     container: { flex: 1 },
+    mapArea: { flex: 1 },
     map: { flex: 1 },
+    recenterBtn: {
+      position: 'absolute',
+      right: 16,
+      bottom: 16,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
+    recenterIcon: { fontSize: 22, color: colors.primary },
 
     // ── Bottom sheet ──────────────────────────────────────────────────────────
     bottomSheet: {

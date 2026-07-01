@@ -14,12 +14,28 @@ export function CarMarker({ scale = 1 }: { scale?: number }) {
   const container = 46 * scale;
   const shadow = 36 * scale;
   const circle = 38 * scale;
+  const arrowSize = 13 * scale;
 
   return (
     <View
       collapsable={false}
       style={[styles.container, { width: container, height: container }]}
     >
+      {/* Seta de sentido — fica no topo do marcador; a rotação do <Marker> pai
+          gira tudo junto, então a ponta passa a apontar para onde o veículo
+          está se movendo (heading do GPS). */}
+      <View
+        style={[
+          styles.arrow,
+          {
+            borderLeftWidth: arrowSize * 0.7,
+            borderRightWidth: arrowSize * 0.7,
+            borderBottomWidth: arrowSize,
+            borderBottomColor: colors.accent,
+            top: -2 * scale,
+          },
+        ]}
+      />
       <View
         style={[
           styles.shadow,
@@ -55,6 +71,16 @@ const styles = StyleSheet.create({
   shadow: {
     position: 'absolute',
     backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  arrow: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    zIndex: 1,
   },
   circle: {
     alignItems: 'center',

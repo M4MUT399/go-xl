@@ -86,6 +86,23 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [profile?.id, refresh]);
 
+  // Broadcast: notifica o passageiro quando um agendamento expira sem motorista
+  useEffect(() => {
+    if (!profile?.id) return;
+    const channel = supabase
+      .channel(`pax-notify-${profile.id}`)
+      .on('broadcast', { event: 'schedule_expired' }, () => {
+        refresh();
+        Alert.alert(
+          '⏰ Agendamento não confirmado',
+          'Nenhum motorista aceitou seu agendamento a tempo.\n\nVocê pode solicitar uma nova corrida ou agendar novamente.',
+          [{ text: 'OK', style: 'default' }]
+        );
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [profile?.id, refresh]);
+
   async function handleActivate(ride: RideRecord) {
     const activated = await activate(ride.id);
     if (!activated) {

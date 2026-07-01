@@ -3,8 +3,12 @@ import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
 import type { RideRecord } from '../types';
 
+/** Janela de visibilidade: agendamentos aparecem apenas 1h antes do horário. */
+const WINDOW_MS = 60 * 60 * 1000; // 1 hora em ms
+
+// ─── Notificações ─────────────────────────────────────────────────────────────
+
 async function notifyPassengerDriverReleased(passengerId: string, rideId: string) {
-  // Push (best-effort — precisa de EAS token)
   const { data } = await supabase
     .from('profiles')
     .select('push_token')
@@ -21,7 +25,6 @@ async function notifyPassengerDriverReleased(passengerId: string, rideId: string
     }]);
   }
 
-  // Broadcast direto — funciona sem permissão de push
   const ch = supabase.channel(`pax-notify-${passengerId}`);
   await new Promise<void>((resolve) => {
     ch.subscribe((status) => {
@@ -35,8 +38,77 @@ async function notifyPassengerDriverReleased(passengerId: string, rideId: string
   });
 }
 
+/** Notifica o passageiro que o horário do agendamento passou sem aceite de motorista. */
+async function notifyPassengerScheduleExpired(passengerId: string, rideId: string) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', passengerId)
+    .single();
+
+  const token = (data as { push_token: string | null } | null)?.push_token;
+  if (token) {
+    await sendPushAsync([{
+      to: token,
+      title: '⏰ Agendamento não confirmado',
+      body: 'Nenhum motorista aceitou seu agendamento a tempo. Solicite uma nova corrida.',
+      data: { type: 'schedule_expired', rideId },
+    }]);
+  }
+
+  // Broadcast direto — funciona sem push token (passageiro com app aberto)
+  const ch = supabase.channel(`pax-notify-${passengerId}`);
+  await new Promise<void>((resolve) => {
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        ch.send({ type: 'broadcast', event: 'schedule_expired', payload: { rideId } })
+          .then(() => { supabase.removeChannel(ch); resolve(); })
+          .catch(() => { supabase.removeChannel(ch); resolve(); });
+      }
+    });
+    setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
+  });
+}
+
+/**
+ * Cancela rides agendadas que já passaram do horário sem ter motorista.
+ * Notifica cada passageiro afetado.
+ * Idempotente — pode ser chamada com frequência sem efeitos colaterais.
+ */
+async function expireOldScheduledRides() {
+  const now = new Date().toISOString();
+
+  const { data: expired } = await supabase
+    .from('rides')
+    .select('id, passenger_id')
+    .eq('status', 'scheduled')
+    .is('driver_id', null)
+    .lt('scheduled_for', now);
+
+  if (!expired || expired.length === 0) return;
+
+  const rides = expired as { id: string; passenger_id: string }[];
+  const ids = rides.map((r) => r.id);
+
+  // Cancela em batch — condição dupla garante idempotência
+  await supabase
+    .from('rides')
+    .update({ status: 'cancelled' })
+    .in('id', ids)
+    .eq('status', 'scheduled')
+    .is('driver_id', null)
+    .lt('scheduled_for', now);
+
+  // Notifica cada passageiro (fire-and-forget)
+  for (const ride of rides) {
+    notifyPassengerScheduleExpired(ride.passenger_id, ride.id);
+  }
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
+
 export function useDriverScheduledRides(driverId: string | undefined) {
-  const [available, setAvailable] = useState<RideRecord[]>([]);   // sem motorista
+  const [available, setAvailable] = useState<RideRecord[]>([]);   // sem motorista, dentro da janela
   const [claimed, setClaimed] = useState<RideRecord[]>([]);       // confirmadas por mim
   const [loading, setLoading] = useState(true);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
@@ -45,12 +117,21 @@ export function useDriverScheduledRides(driverId: string | undefined) {
     if (!driverId) return;
     setLoading(true);
 
+    // 1) Expira rides vencidos antes de atualizar a lista
+    await expireOldScheduledRides();
+
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + WINDOW_MS);
+
     const [{ data: avail }, { data: mine }] = await Promise.all([
       supabase
         .from('rides')
         .select('*')
         .eq('status', 'scheduled')
         .is('driver_id', null)
+        // Janela de 1h: já passou? não mostra. Mais de 1h de antecedência? também não.
+        .gte('scheduled_for', now.toISOString())
+        .lte('scheduled_for', windowEnd.toISOString())
         .order('scheduled_for', { ascending: true }),
       supabase
         .from('rides')
@@ -67,7 +148,13 @@ export function useDriverScheduledRides(driverId: string | undefined) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Atualiza quando corridas agendadas mudam (nova disponível ou alguém confirmou)
+  // Verifica expiração a cada 60s — garante que rides que vencem enquanto a tela está aberta desapareçam
+  useEffect(() => {
+    const interval = setInterval(() => { refresh(); }, 60_000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
+  // Realtime — recarrega quando qualquer ride agendada muda
   useEffect(() => {
     if (!driverId) return;
     const channel = supabase
@@ -80,7 +167,6 @@ export function useDriverScheduledRides(driverId: string | undefined) {
   }, [driverId, refresh]);
 
   const release = useCallback(async (rideId: string): Promise<boolean> => {
-    // Fetch passenger before releasing so we can notify them
     const { data: rideData } = await supabase
       .from('rides')
       .select('passenger_id')

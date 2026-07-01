@@ -18,7 +18,7 @@ import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { RouteStep } from '../../lib/routing';
-import { CarMarker } from '../../components/common/CarMarker';
+import { NavChevron } from '../../components/common/NavChevron';
 import { supabase } from '../../lib/supabase';
 
 type Props = {
@@ -115,7 +115,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     setTracksCar(true);
     const t = setTimeout(() => setTracksCar(false), 1000);
     return () => clearTimeout(t);
-  }, [location?.lat, location?.lng]);
+  }, [location?.lat, location?.lng, location?.heading]);
 
   const origin = rideOrigin(ride);
   const dest   = rideDestination(ride);
@@ -135,6 +135,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       driver_id: profile.id,
       lat: location.lat,
       lng: location.lng,
+      heading: location.heading ?? null,
       is_online: true,
       updated_at: new Date().toISOString(),
     }).then(({ error }) => {
@@ -148,6 +149,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     location ? { lat: location.lat, lng: location.lng } : null
   );
   const mapRef = useRef<MapView>(null);
+  const lastCameraUpdate = useRef(0);
 
   useEffect(() => {
     if (!location) return;
@@ -162,6 +164,23 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       setRouteOrigin({ lat: location.lat, lng: location.lng });
     }
   }, [location?.lat, location?.lng]);
+
+  // ── Modo navegação: câmera segue posição + heading (mapa gira como GPS real) ─
+  useEffect(() => {
+    if (!location || !mapRef.current) return;
+    const now = Date.now();
+    if (now - lastCameraUpdate.current < 1500) return;
+    lastCameraUpdate.current = now;
+    mapRef.current.animateCamera(
+      {
+        center: { latitude: location.lat, longitude: location.lng },
+        heading: location.heading ?? 0,
+        zoom: 17,
+        pitch: 20,
+      },
+      { duration: 800 },
+    );
+  }, [location?.lat, location?.lng, location?.heading]);
 
   const { route: path } = useRideRoute(
     routeOrigin,
@@ -204,6 +223,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     supabase.from('rides').update({
       driver_lat: location.lat,
       driver_lng: location.lng,
+      driver_heading: location.heading ?? null,
       driver_eta_min: etaMin,
       driver_eta_km: etaKm,
     }).eq('id', ride.id).then(({ error }) => {
@@ -273,20 +293,41 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     : { action: phase === 'pickup' ? 'Indo buscar o passageiro' : 'Levando ao destino', street: target.address };
   const distLabel   = currentStep ? formatStepDist(currentStep.distance) : '';
 
-  // Ajusta câmera para mostrar motorista + destino quando a rota carrega
+  // Visão geral ao trocar de fase (embarque → destino); depois a câmera de
+  // navegação retoma o controle automaticamente no próximo update de posição.
   useEffect(() => {
-    if (!path || !location || !mapRef.current) return;
-    mapRef.current.fitToCoordinates(
-      [
-        { latitude: location.lat, longitude: location.lng },
-        { latitude: target.lat, longitude: target.lng },
-      ],
-      { edgePadding: { top: 160, right: 60, bottom: 320, left: 60 }, animated: true }
+    if (!mapRef.current) return;
+    const coords = location
+      ? [
+          { latitude: location.lat, longitude: location.lng },
+          { latitude: target.lat, longitude: target.lng },
+        ]
+      : [{ latitude: target.lat, longitude: target.lng }];
+    lastCameraUpdate.current = 0; // força re-engajamento do modo navegação logo em seguida
+    mapRef.current.fitToCoordinates(coords, {
+      edgePadding: { top: 160, right: 60, bottom: 320, left: 60 },
+      animated: true,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  function recenter() {
+    if (!location || !mapRef.current) return;
+    lastCameraUpdate.current = 0; // força update imediato no próximo ciclo
+    mapRef.current.animateCamera(
+      {
+        center: { latitude: location.lat, longitude: location.lng },
+        heading: location.heading ?? 0,
+        zoom: 17,
+        pitch: 20,
+      },
+      { duration: 300 },
     );
-  }, [path?.distanceKm, phase]);
+  }
 
   return (
     <View style={styles.container}>
+      <View style={styles.mapArea}>
       <MapView
         ref={mapRef}
         style={styles.map}
@@ -297,7 +338,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           latitudeDelta: 0.02,
           longitudeDelta: 0.02,
         }}
-        showsUserLocation
+        showsUserLocation={false}
         showsMyLocationButton={false}
         followsUserLocation={false}
       >
@@ -312,9 +353,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           <Marker
             coordinate={{ latitude: location.lat, longitude: location.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
+            rotation={location.heading ?? 0}
+            flat
             tracksViewChanges={tracksCar}
           >
-            <CarMarker scale={0.75} />
+            <NavChevron scale={0.95} />
           </Marker>
         )}
         {location && (
@@ -331,6 +374,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           />
         )}
       </MapView>
+
+      {location && (
+        <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
+          <Text style={styles.recenterIcon}>◎</Text>
+        </TouchableOpacity>
+      )}
+      </View>
 
       {/* ── Banner de instrução de navegação ── */}
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
@@ -475,8 +525,26 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
     container: { flex: 1 },
+    mapArea: { flex: 1 },
     map: { flex: 1 },
     overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
+    recenterBtn: {
+      position: 'absolute',
+      right: 16,
+      bottom: 16,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
+    recenterIcon: { fontSize: 22, color: colors.primary },
 
     // Instruction banner
     instructionBanner: {
