@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { I18nProvider } from './src/i18n';
 import { AuthProvider } from './src/contexts/AuthContext';
+import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
 import { installNetworkErrorGuard } from './src/lib/networkErrorGuard';
 
 // Engole rejeições de promise de rede transitórias (auto-refresh de sessão /
@@ -26,12 +27,14 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <I18nProvider>
-          <AuthProvider>
-            <StatusBar style="light" />
-            <AppNavigator />
-          </AuthProvider>
-        </I18nProvider>
+        <AppErrorBoundary>
+          <I18nProvider>
+            <AuthProvider>
+              <StatusBar style="light" />
+              <AppNavigator />
+            </AuthProvider>
+          </I18nProvider>
+        </AppErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
