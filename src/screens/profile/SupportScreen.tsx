@@ -6,7 +6,7 @@ import { useTheme } from '../../hooks/useTheme';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Support'> };
 
-const SUPPORT_EMAIL = 'suporte@goxl.app';
+const SUPPORT_EMAIL = 'support@goxl.app';
 const SUPPORT_PHONE = '+1 (407) 000-0000';
 
 const FAQ = [

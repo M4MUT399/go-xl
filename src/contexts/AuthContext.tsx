@@ -176,7 +176,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Mesmo se a chamada de rede falhar (ex.: sessão já expirada no servidor),
+      // garantimos o logout local abaixo — o usuário nunca deve ficar preso
+      // numa sessão que parece ativa mas não consegue mais ser usada.
+    } finally {
+      setSession(null);
+      setProfile(null);
+      setLoading(false);
+    }
   }
 
   function markRecovery() {

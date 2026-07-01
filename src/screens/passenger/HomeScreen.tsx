@@ -5,6 +5,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { CarMarker } from '../../components/common/CarMarker';
+import { CrosshairIcon } from '../../components/common/CrosshairIcon';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList, Location } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
@@ -166,7 +167,7 @@ export function HomeScreen({ navigation }: Props) {
               </Text>
             </View>
             <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
-              <Text style={styles.recenterIcon}>◎</Text>
+              <CrosshairIcon size={27.5} color={colors.primary} />
             </TouchableOpacity>
           </View>
 
@@ -230,6 +231,10 @@ function makeStyles(colors: AppTheme) {
       alignItems: 'center',
       paddingHorizontal: 20,
       paddingTop: 8,
+      paddingBottom: 14,
+      // Navy 50% translúcido — mantém nome, calendário e ícones legíveis
+      // sobre o mapa em qualquer condição de navegação.
+      backgroundColor: 'rgba(26,26,46,0.5)',
     },
     greeting: {},
     greetingText: { fontSize: 20, fontWeight: '700', color: colors.white },
@@ -306,9 +311,10 @@ function makeStyles(colors: AppTheme) {
     statusOffline: { backgroundColor: colors.gray[400] },
     driversStatusText: { color: colors.white, fontSize: 13, fontWeight: '600' },
     recenterBtn: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
+      // 25% maior que o botão original (44 → 55) e com visual de mira.
+      width: 55,
+      height: 55,
+      borderRadius: 27.5,
       backgroundColor: colors.card,
       alignItems: 'center',
       justifyContent: 'center',
@@ -318,7 +324,6 @@ function makeStyles(colors: AppTheme) {
       shadowRadius: 6,
       elevation: 5,
     },
-    recenterIcon: { fontSize: 22, color: colors.primary },
 
     searchContainer: {
       paddingHorizontal: 16,

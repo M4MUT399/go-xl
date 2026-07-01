@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -13,6 +13,8 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
+import { CarMarker } from '../../components/common/CarMarker';
+import { CrosshairIcon } from '../../components/common/CrosshairIcon';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -28,8 +30,28 @@ export function DriverHomeScreen({ navigation }: Props) {
   const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const mapRef = useRef<MapView>(null);
+  // Mantém o marcador "ligado" por um instante a cada movimento, para o
+  // ícone do carro repintar e acompanhar a posição/rotação no iOS.
+  const [tracksCar, setTracksCar] = useState(true);
 
   const styles = makeStyles(colors);
+
+  useEffect(() => {
+    if (!location) return;
+    setTracksCar(true);
+    const t = setTimeout(() => setTracksCar(false), 1000);
+    return () => clearTimeout(t);
+  }, [location?.lat, location?.lng, location?.heading]);
+
+  function recenter() {
+    if (location && mapRef.current) {
+      mapRef.current.animateCamera(
+        { center: { latitude: location.lat, longitude: location.lng }, zoom: 16 },
+        { duration: 300 }
+      );
+    }
+  }
 
   // Carrega o status online salvo ao montar (persiste entre sessões)
   useEffect(() => {
@@ -46,6 +68,7 @@ export function DriverHomeScreen({ navigation }: Props) {
       driver_id: profile.id,
       lat: location.lat,
       lng: location.lng,
+      heading: location.heading ?? null,
       is_online: isOnline,
       updated_at: new Date().toISOString(),
     });
@@ -107,6 +130,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         initialRegion={{
@@ -115,9 +139,26 @@ export function DriverHomeScreen({ navigation }: Props) {
           latitudeDelta: 0.015,
           longitudeDelta: 0.015,
         }}
-        showsUserLocation
         customMapStyle={darkMapStyle}
-      />
+      >
+        {location && (
+          <Marker
+            coordinate={{ latitude: location.lat, longitude: location.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            rotation={location.heading ?? 0}
+            flat
+            tracksViewChanges={tracksCar}
+          >
+            <CarMarker scale={0.85} />
+          </Marker>
+        )}
+      </MapView>
+
+      {location && (
+        <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
+          <CrosshairIcon size={27.5} color={colors.primary} />
+        </TouchableOpacity>
+      )}
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.topBar}>
@@ -297,6 +338,23 @@ function makeStyles(colors: AppTheme) {
     container: { flex: 1 },
     map: { flex: 1 },
     overlay: { position: 'absolute', top: 0, left: 0, right: 0 },
+    recenterBtn: {
+      position: 'absolute',
+      right: 16,
+      bottom: 16,
+      // 25% maior que o botão original (44 → 55) e com visual de mira.
+      width: 55,
+      height: 55,
+      borderRadius: 27.5,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
     topBar: {
       flexDirection: 'row',
       justifyContent: 'space-between',

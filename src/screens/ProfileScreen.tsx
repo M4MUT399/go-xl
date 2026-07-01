@@ -120,9 +120,14 @@ function ProfileCreditCard({ profile, stats, initial, isDriver, t }: CreditCardP
           </Text>
 
           <View style={cc.rolePill}>
-            <Text style={cc.roleText}>
-              {isDriver ? '🚗  EXECUTIVE DRIVER' : '🧳  PASSENGER'}
-            </Text>
+            {isDriver ? (
+              <View style={cc.rolePillRow}>
+                <Image source={require('../../assets/icon.png')} style={cc.roleLogo} />
+                <Text style={cc.roleText}>EXECUTIVE DRIVER</Text>
+              </View>
+            ) : (
+              <Text style={cc.roleText}>🧳  PASSENGER</Text>
+            )}
           </View>
 
           <View style={cc.statsRow}>
@@ -149,7 +154,7 @@ function ProfileCreditCard({ profile, stats, initial, isDriver, t }: CreditCardP
               <Image source={{ uri: profile.avatar_url }} style={cc.photo} />
             ) : (
               <View style={cc.photoFallback}>
-                <Text style={cc.photoInitial}>{initial}</Text>
+                <Image source={require('../../assets/icon.png')} style={cc.photoFallbackLogo} />
               </View>
             )}
           </View>
@@ -382,6 +387,9 @@ const cc = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 1.6,
   },
+  rolePillRow: { flexDirection: 'row', alignItems: 'center' },
+  // Logo GoXL no lugar do emoji de carro — ~25% maior que o emoji que substituiu.
+  roleLogo: { width: 14, height: 14, borderRadius: 3.5, marginRight: 5 },
   statsRow: { flexDirection: 'row', alignItems: 'center' },
   statBlock: {},
   statVal: { color: WHITE, fontSize: 16, fontWeight: '800' },
@@ -410,7 +418,9 @@ const cc = StyleSheet.create({
     backgroundColor: GOLD,
     alignItems: 'center', justifyContent: 'center',
   },
-  photoInitial: { fontSize: 30, fontWeight: '900', color: '#0A0D1C' },
+  // Logo GoXL como placeholder — 25% maior que o tamanho-base de um ícone
+  // discreto (56px), preenchendo bem o círculo sem tocar a borda dourada.
+  photoFallbackLogo: { width: 70, height: 70, borderRadius: 18 },
 
   // Bottom strip
   bottomRow: {

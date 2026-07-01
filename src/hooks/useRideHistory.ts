@@ -7,7 +7,13 @@ export function useRideHistory(userId: string | undefined, userType: UserType) {
   const [loading, setLoading] = useState(true);
 
   const fetchHistory = useCallback(async () => {
-    if (!userId) return;
+    // Sem userId ainda (ex.: profile do AuthContext não terminou de carregar) —
+    // não há o que buscar, mas o spinner precisa ser liberado mesmo assim, senão
+    // fica preso em "loading" para sempre até um userId chegar.
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const column = userType === 'driver' ? 'driver_id' : 'passenger_id';
     const { data } = await supabase
@@ -48,7 +54,10 @@ export function useDriverStats(driverId: string | undefined) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    if (!driverId) return;
+    if (!driverId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const { data } = await supabase
       .from('rides')
@@ -78,7 +87,10 @@ export function useDriverEarnings(driverId: string | undefined) {
   const [loading, setLoading] = useState(true);
 
   const fetchEarnings = useCallback(async () => {
-    if (!driverId) return;
+    if (!driverId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const { data } = await supabase
       .from('rides')
