@@ -5,6 +5,7 @@ import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
 import { getRoute } from '../lib/routing';
+import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
 
@@ -212,6 +213,34 @@ async function broadcastRideAccepted(passengerId: string, ride: object) {
           type: 'broadcast',
           event: 'ride_accepted',
           payload: { ride },
+        }).then(() => {
+          supabase.removeChannel(ch);
+          resolve();
+        }).catch(() => {
+          supabase.removeChannel(ch);
+          resolve();
+        });
+      }
+    });
+    setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
+  });
+}
+
+/**
+ * Avisa TODOS os motoristas online que uma corrida foi aceita, para que o
+ * overlay de chamada saia da tela dos outros (a corrida "some da fila").
+ * Canal compartilhado `ride-offers`; o motorista que aceitou vai no payload
+ * (`by`) para não se auto-limpar/duplicar log.
+ */
+async function broadcastRideTaken(rideId: string, by: string | undefined) {
+  const ch = supabase.channel('ride-offers');
+  await new Promise<void>((resolve) => {
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        ch.send({
+          type: 'broadcast',
+          event: 'ride_taken',
+          payload: { rideId, by },
         }).then(() => {
           supabase.removeChannel(ch);
           resolve();
@@ -670,6 +699,30 @@ export function useDriverRide(driverId: string | undefined) {
     return () => { supabase.removeChannel(channel); };
   }, [driverId]);
 
+  // ─── Broadcast "corrida aceita por outro motorista" ──────────────────────────
+  // Modelo de dispatch em leque: a mesma corrida em 'requesting' aparece para
+  // todos os motoristas online. Quando um aceita, os postgres_changes filtrados
+  // por driver_id NÃO disparam para os demais (a corrida agora pertence a outro),
+  // então o overlay ficaria preso. Este canal compartilhado resolve isso: ao
+  // aceitar, broadcastRideTaken avisa todos; quem tiver essa corrida como
+  // pendente limpa o overlay na hora.
+  useEffect(() => {
+    if (!driverId) return;
+    const ch = supabase
+      .channel('ride-offers')
+      .on('broadcast', { event: 'ride_taken' }, ({ payload }) => {
+        const rideId = payload?.rideId as string | undefined;
+        const by = payload?.by as string | undefined;
+        if (!rideId || by === driverId) return; // ignora o próprio aceite
+        if (rideId === pendingRideIdRef.current) {
+          setPendingRide(null);
+          logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'broadcast' });
+        }
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [driverId]);
+
   const acceptRide = useCallback(async (
     rideId: string,
     driverLocation?: { lat: number; lng: number } | null
@@ -679,6 +732,7 @@ export function useDriverRide(driverId: string | undefined) {
     const charge = await chargeRide(rideId);
     if (!charge.ok) {
       console.error('[acceptRide] cobrança falhou:', charge.error);
+      logRideOfferEvent(rideId, driverId, 'failed', { reason: 'payment_error' });
       return 'payment_error';
     }
 
@@ -693,6 +747,7 @@ export function useDriverRide(driverId: string | undefined) {
 
     if (updateError) {
       console.error('[acceptRide] erro no UPDATE:', JSON.stringify(updateError));
+      logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'update_error' });
       return null;
     }
 
@@ -707,6 +762,7 @@ export function useDriverRide(driverId: string | undefined) {
 
     if (selectError || !data) {
       console.error('[acceptRide] erro no SELECT:', JSON.stringify(selectError));
+      logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'select_failed' });
       return null;
     }
 
@@ -735,6 +791,12 @@ export function useDriverRide(driverId: string | undefined) {
 
     setActiveRide(ride);
     setPendingRide(null);
+
+    // Auditoria: aceite confirmado.
+    logRideOfferEvent(rideId, driverId, 'accepted');
+
+    // Remove a chamada da fila dos OUTROS motoristas online.
+    broadcastRideTaken(rideId, driverId);
 
     // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback
     broadcastRideAccepted(ride.passenger_id, ride);

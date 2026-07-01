@@ -15,6 +15,9 @@ import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
 import { CarMarker } from '../../components/common/CarMarker';
 import { CrosshairIcon } from '../../components/common/CrosshairIcon';
+import { IncomingRideCall } from '../../components/driver/IncomingRideCall';
+import { getConfig, getConfigDefault } from '../../lib/systemConfig';
+import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -30,6 +33,10 @@ export function DriverHomeScreen({ navigation }: Props) {
   const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Timeout da chamada de corrida (s) — configurável via system_config (P1).
+  const [callTimeout, setCallTimeout] = useState<number>(getConfigDefault('ride_offer_timeout_seconds'));
+  // Evita registrar o evento 'received' mais de uma vez para a mesma chamada.
+  const loggedReceivedRef = useRef<string | null>(null);
   const mapRef = useRef<MapView>(null);
   // Mantém o marcador "ligado" por um instante a cada movimento, para o
   // ícone do carro repintar e acompanhar a posição/rotação no iOS.
@@ -74,6 +81,21 @@ export function DriverHomeScreen({ navigation }: Props) {
     });
   }, [location, isOnline, profile?.id, onlineLoaded]);
 
+  // Carrega o timeout configurável da chamada de corrida (fallback local seguro).
+  useEffect(() => {
+    getConfig('ride_offer_timeout_seconds').then(setCallTimeout).catch(() => {});
+  }, []);
+
+  // Registra 'received' assim que uma nova chamada aparece para este motorista.
+  useEffect(() => {
+    const id = pendingRide?.id;
+    if (id && loggedReceivedRef.current !== id) {
+      loggedReceivedRef.current = id;
+      logRideOfferEvent(id, profile?.id, 'received');
+    }
+    if (!id) loggedReceivedRef.current = null;
+  }, [pendingRide?.id, profile?.id]);
+
   // Alterna online/offline e persiste a escolha.
   // Só permite ficar online se a verificação (selfie + documento) já tiver
   // sido aprovada pela equipe — duplo grau de conferência antes de aceitar corridas.
@@ -110,6 +132,16 @@ export function DriverHomeScreen({ navigation }: Props) {
       Alert.alert('Ops', 'Corrida já foi aceita por outro motorista.');
       setPendingRide(null);
     }
+  }
+
+  function handleReject() {
+    if (pendingRide) logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
+    setPendingRide(null);
+  }
+
+  function handleExpire() {
+    if (pendingRide) logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
+    setPendingRide(null);
   }
 
   async function handleConfirmScheduled() {
@@ -261,66 +293,16 @@ export function DriverHomeScreen({ navigation }: Props) {
       )}
 
       {pendingRide && (isOnline || !!pendingRide.driver_id) && (
-        <View style={styles.rideRequestSheet}>
-          <View style={styles.requestHandle} />
-          {pendingRide.driver_id ? (
-            <View style={styles.qrRideBadge}>
-              <Text style={styles.qrRideBadgeText}>📲 Corrida via QR Code — reservada para você</Text>
-            </View>
-          ) : null}
-          <Text style={styles.requestTitle}>Nova corrida!</Text>
-
-          <View style={styles.requestDetails}>
-            <View style={styles.requestRow}>
-              <Text style={styles.requestIcon}>📍</Text>
-              <View>
-                <Text style={styles.requestLabel}>Origem</Text>
-                <Text style={styles.requestAddr} numberOfLines={1}>{rideOrigin(pendingRide).address}</Text>
-              </View>
-            </View>
-            <View style={styles.requestDivider} />
-            <View style={styles.requestRow}>
-              <Text style={styles.requestIcon}>🏁</Text>
-              <View>
-                <Text style={styles.requestLabel}>Destino</Text>
-                <Text style={styles.requestAddr} numberOfLines={1}>{rideDestination(pendingRide).address}</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.requestMeta}>
-            <View style={styles.metaItem}>
-              <Text style={styles.metaValue}>{formatDistance(pendingRide.distance_km)}</Text>
-              <Text style={styles.metaLabel}>Distância</Text>
-            </View>
-            <View style={styles.metaDivider} />
-            <View style={styles.metaItem}>
-              <Text style={styles.metaValue}>{pendingRide.duration_min} min</Text>
-              <Text style={styles.metaLabel}>Duração est.</Text>
-            </View>
-            <View style={styles.metaDivider} />
-            <View style={styles.metaItem}>
-              <Text style={[styles.metaValue, styles.priceValue]}>{formatCurrency(pendingRide.price)}</Text>
-              <Text style={styles.metaLabel}>Valor</Text>
-            </View>
-          </View>
-
-          <View style={styles.requestActions}>
-            <TouchableOpacity
-              style={styles.declineBtn}
-              onPress={() => setPendingRide(null)}
-            >
-              <Text style={styles.declineText}>Recusar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.acceptBtn, accepting && { opacity: 0.7 }]}
-              onPress={handleAccept}
-              disabled={accepting}
-            >
-              <Text style={styles.acceptText}>{accepting ? 'Aceitando...' : 'Aceitar'}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <IncomingRideCall
+          ride={pendingRide}
+          driverLocation={location ? { lat: location.lat, lng: location.lng } : null}
+          timeoutSeconds={callTimeout}
+          accepting={accepting}
+          isQrLocked={!!pendingRide.driver_id}
+          onAccept={handleAccept}
+          onReject={handleReject}
+          onExpire={handleExpire}
+        />
       )}
     </View>
   );
