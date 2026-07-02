@@ -17,6 +17,20 @@ const SUPABASE_URL   = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SETUP_CARD_URL = `${SUPABASE_URL}/functions/v1/setup-card`;
 const SYNC_CARD_URL  = `${SUPABASE_URL}/functions/v1/sync-card`;
 
+/** fetch COM timeout — o fetch do React Native NÃO tem timeout nativo. Sem isto,
+ *  uma Edge Function lenta ou sem resposta deixa a tela "carregando" para sempre
+ *  (o sintoma relatado no iOS e no Android). Ao estourar o prazo, aborta e o
+ *  chamador cai num erro tratável em vez de congelar. */
+async function fetchWithTimeout(url: string, opts: RequestInit, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const GOLD       = '#C9A84C';
 const GOLD_DIM   = 'rgba(201,168,76,0.7)';
 const GOLD_FAINT = 'rgba(201,168,76,0.15)';
@@ -161,13 +175,28 @@ function ConfirmedScreen({ info }: { info: CardInfo }) {
 
 // ─── Tela de processamento ────────────────────────────────────────────────────
 
-function ProcessingScreen() {
+function ProcessingScreen({ onEscape }: { onEscape?: () => void }) {
   const { colors } = useTheme();
+  const [showEscape, setShowEscape] = useState(false);
+
+  // Se depois de 15s ainda estiver processando, oferece uma saída manual para
+  // o usuário nunca ficar preso sem ação (rede muito lenta, etc).
+  useEffect(() => {
+    const t = setTimeout(() => setShowEscape(true), 15000);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
-    <SafeAreaView style={[suc.container, { justifyContent: 'center', alignItems: 'center' }]}>
+    <SafeAreaView style={[suc.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
       <Image source={require('../../../assets/icon.png')} style={suc.procLogo} />
       <ActivityIndicator size="large" color={colors.accent} style={{ marginTop: 28 }} />
       <Text style={suc.procText}>Confirmando seu cartão…</Text>
+      <Text style={suc.procHint}>Isso pode levar alguns segundos.</Text>
+      {showEscape && onEscape && (
+        <Text style={suc.procEscape} onPress={onEscape}>
+          Está demorando? Toque para voltar
+        </Text>
+      )}
     </SafeAreaView>
   );
 }
@@ -205,20 +234,36 @@ export function AddCardOnboardingScreen() {
 
   /** Consulta o Stripe DIRETO (via Edge Function sync-card) e grava o cartão no
    *  perfil. Determinístico: não depende do webhook ter chegado. */
+  /** Token de acesso SEM re-chamar getSession() à toa: usa a sessão que já está
+   *  no contexto (instantâneo e sem risco do lock interno do gotrue travar no
+   *  iOS de produção). Só consulta o gotrue como fallback — e mesmo assim com
+   *  timeout de 4s para nunca pendurar. */
+  async function getAccessToken(): Promise<string | null> {
+    if (session?.access_token) return session.access_token;
+    try {
+      return await Promise.race([
+        supabase.auth.getSession().then(({ data }) => data.session?.access_token ?? null),
+        new Promise<null>((res) => setTimeout(() => res(null), 4000)),
+      ]);
+    } catch {
+      return null;
+    }
+  }
+
   async function syncCard(): Promise<CardUpdates | null> {
     if (!userId) return null;
-    const { data: { session: s } } = await supabase.auth.getSession();
-    if (!s) return null;
+    const token = await getAccessToken();
+    if (!token) return null;
 
     try {
-      const res = await fetch(SYNC_CARD_URL, {
+      const res = await fetchWithTimeout(SYNC_CARD_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${s.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({}),
-      });
+      }, 12000);
       const json = await res.json() as {
         found?: boolean;
         payment_method_id?: string;
@@ -249,7 +294,9 @@ export function AddCardOnboardingScreen() {
   /** Tenta sincronizar algumas vezes — cobre o caso do cartão levar 1-2s para
    *  ser anexado ao Customer no Stripe após o submit do formulário. */
   async function pollForCard(): Promise<CardUpdates | null> {
-    for (let i = 0; i < 8; i++) {
+    // Prazo total limitado (30s) — nunca deixa o usuário preso indefinidamente.
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
       const updates = await syncCard();
       if (updates) return updates;
       await new Promise<void>((r) => setTimeout(r, 1500));
@@ -288,21 +335,21 @@ export function AddCardOnboardingScreen() {
   async function handleAddCard() {
     setLoading(true);
     try {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (!s) {
+      const token = await getAccessToken();
+      if (!token) {
         Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
         setLoading(false);
         return;
       }
 
-      const res = await fetch(SETUP_CARD_URL, {
+      const res = await fetchWithTimeout(SETUP_CARD_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${s.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({}),
-      });
+      }, 20000);
 
       const json = await res.json() as { url?: string; error?: string };
       if (!json.url) {
@@ -394,7 +441,7 @@ export function AddCardOnboardingScreen() {
   }
 
   if (phase === 'confirmed') return <ConfirmedScreen info={cardInfo} />;
-  if (phase === 'processing') return <ProcessingScreen />;
+  if (phase === 'processing') return <ProcessingScreen onEscape={() => { setPhase('idle'); setLoading(false); }} />;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -565,6 +612,8 @@ const suc = StyleSheet.create({
   // processing
   procLogo: { width: 120, height: 120, borderRadius: 28 },
   procText:  { marginTop: 16, fontSize: 15, color: '#6B7280' },
+  procHint:  { marginTop: 6, fontSize: 13, color: '#9AA1AC', textAlign: 'center' },
+  procEscape:{ marginTop: 28, fontSize: 14, fontWeight: '600', color: GOLD_DIM, textAlign: 'center' },
 });
 
 // ─── Onboarding styles ────────────────────────────────────────────────────────
