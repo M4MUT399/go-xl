@@ -5,6 +5,8 @@ import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverStats, CompletedRide } from '../../hooks/useRideHistory';
 import { usePayouts } from '../../hooks/usePayouts';
+import { useWaybillConfig } from '../../hooks/useWaybillConfig';
+import { generateAndShareWaybill } from '../../lib/waybillExport';
 import { formatCurrency, formatDistance, kmToMiles } from '../../lib/format';
 import { DRIVER_SHARE } from '../../lib/split';
 
@@ -37,6 +39,7 @@ export function EarningsScreen() {
   const { colors } = useTheme();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
   const { payouts, pendingBalance, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
+  const waybill = useWaybillConfig();
   const [period, setPeriod] = useState<Period>('week');
   const [requestingPayout, setRequestingPayout] = useState(false);
 
@@ -234,7 +237,14 @@ export function EarningsScreen() {
         ) : (
           <View style={styles.historyList}>
             {filtered.slice(0, 20).map((ride) => (
-              <EarningRow key={ride.id} ride={ride} styles={styles} />
+              <EarningRow
+                key={ride.id}
+                ride={ride}
+                styles={styles}
+                showWaybill={waybill.enabled}
+                driverName={profile?.full_name ?? null}
+                accent={colors.accent}
+              />
             ))}
           </View>
         )}
@@ -243,8 +253,32 @@ export function EarningsScreen() {
   );
 }
 
-function EarningRow({ ride, styles }: { ride: CompletedRide; styles: ReturnType<typeof makeStyles> }) {
+function EarningRow({
+  ride,
+  styles,
+  showWaybill,
+  driverName,
+  accent,
+}: {
+  ride: CompletedRide;
+  styles: ReturnType<typeof makeStyles>;
+  showWaybill: boolean;
+  driverName: string | null;
+  accent: string;
+}) {
   const date = new Date(ride.completed_at);
+  const [generating, setGenerating] = useState(false);
+
+  async function handleWaybill() {
+    if (generating) return;
+    setGenerating(true);
+    const result = await generateAndShareWaybill(ride.id, { driverName });
+    setGenerating(false);
+    if (!result.ok && result.error !== 'disabled') {
+      Alert.alert('Recibo indisponível', 'Não foi possível gerar o recibo desta corrida. Tente novamente.');
+    }
+  }
+
   return (
     <View style={styles.row}>
       <View style={styles.rowIcon}>
@@ -256,7 +290,23 @@ function EarningRow({ ride, styles }: { ride: CompletedRide; styles: ReturnType<
           {date.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })} • {formatDistance(ride.distance_km)}
         </Text>
       </View>
-      <Text style={styles.rowPrice}>+ {formatCurrency(ride.price)}</Text>
+      <View style={styles.rowRight}>
+        <Text style={styles.rowPrice}>+ {formatCurrency(ride.price)}</Text>
+        {showWaybill && (
+          <TouchableOpacity
+            style={styles.waybillBtn}
+            onPress={handleWaybill}
+            disabled={generating}
+            accessibilityRole="button"
+            accessibilityLabel="Gerar recibo da corrida"
+          >
+            {generating
+              ? <ActivityIndicator size="small" color={accent} />
+              : <Text style={styles.waybillBtnText}>Recibo</Text>
+            }
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }
@@ -326,7 +376,19 @@ function makeStyles(colors: AppTheme) {
     rowInfo: { flex: 1 },
     rowAddr: { fontSize: 14, fontWeight: '600', color: colors.gray[800] },
     rowDate: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+    rowRight: { alignItems: 'flex-end' },
     rowPrice: { fontSize: 15, fontWeight: '800', color: colors.success },
+    waybillBtn: {
+      marginTop: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      minWidth: 62,
+      alignItems: 'center',
+    },
+    waybillBtnText: { fontSize: 11, fontWeight: '700', color: colors.accent },
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyEmoji: { fontSize: 44, marginBottom: 12 },
     emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center' },
