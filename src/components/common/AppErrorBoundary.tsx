@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
+import { reportError } from '../../lib/errorReporting';
 
 /**
  * Rede de segurança contra crashes de renderização.
@@ -36,9 +37,11 @@ export class AppErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: unknown, info: unknown) {
-    // Vai para os logs nativos do dispositivo (e para qualquer crash reporter
-    // que seja plugado no futuro, ex.: Sentry). Mantido simples de propósito.
-    console.error('[AppErrorBoundary] erro de renderização capturado:', error, info);
+    // Costura única de telemetria: vai para os logs nativos hoje e para o crash
+    // reporter (ex.: Sentry) assim que for plugado via setErrorReporter — sem
+    // mudar este call-site. O contexto passa por scrubPII antes de sair.
+    const componentStack = (info as { componentStack?: string })?.componentStack;
+    reportError(error, { boundary: 'AppErrorBoundary', componentStack });
   }
 
   private handleRetry = () => {

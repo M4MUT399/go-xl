@@ -9,9 +9,11 @@
  * vermelho no rodapé da tela.
  *
  * Este módulo intercepta o rastreador de rejeições do RN e engole APENAS os
- * erros de rede benignos, deixando todos os outros seguirem o fluxo normal de
- * log. Não altera a semântica das requisições — apenas evita o ruído visual.
+ * erros de rede benignos, deixando todos os outros seguirem para a costura de
+ * telemetria (reportWarning). Não altera a semântica das requisições — apenas
+ * evita o ruído visual e centraliza o log.
  */
+import { reportWarning } from './errorReporting';
 
 function isBenignNetworkError(error: unknown): boolean {
   if (!error) return false;
@@ -32,8 +34,8 @@ export function installNetworkErrorGuard(): void {
       allRejections: true,
       onUnhandled: (id: number, error: unknown) => {
         if (isBenignNetworkError(error)) return; // ignora ruído de rede
-        // Mantém o comportamento padrão para erros reais.
-        console.warn(`Possible Unhandled Promise Rejection (id: ${id}):`, error);
+        // Erros reais seguem para a costura de telemetria (com PII removida).
+        reportWarning(error, { source: 'unhandledRejection', id });
       },
       onHandled: () => {},
     });
