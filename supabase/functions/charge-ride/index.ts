@@ -13,6 +13,7 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+const SUPABASE_ANON_KEY    = Deno.env.get('SUPABASE_ANON_KEY')         ?? '';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -36,7 +37,24 @@ Deno.serve(async (req) => {
     const { rideId } = await req.json();
     if (!rideId) return json({ error: 'rideId obrigatório' }, 400);
 
+    // ── Autenticação: exige JWT válido de um MOTORISTA ───────────────────────
+    // A cobrança acontece no aceite, ANTES do driver_id ser gravado na corrida,
+    // então não dá pra amarrar ao motorista daquela corrida específica. Mas
+    // restringir a usuários do tipo 'driver' fecha o buraco de "qualquer usuário
+    // logado cobra qualquer corrida".
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const { data: { user }, error: authErr } = await createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    }).auth.getUser();
+    if (authErr || !user) return json({ error: 'Não autorizado' }, 401);
+
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+    const { data: caller } = await admin
+      .from('profiles').select('type').eq('id', user.id).single();
+    if ((caller as { type?: string } | null)?.type !== 'driver') {
+      return json({ error: 'Apenas motoristas podem iniciar a cobrança da corrida.' }, 403);
+    }
 
     // ── Busca dados da corrida ───────────────────────────────────────────────
     const { data: ride, error: rideErr } = await admin
@@ -82,6 +100,11 @@ Deno.serve(async (req) => {
       confirm: true,
       metadata: { rideId },
       description: 'Go XL — Executive XL',
+    }, {
+      // Idempotência no lado do Stripe: duas chamadas rápidas para a mesma
+      // corrida não geram duas cobranças (protege contra corrida antes do
+      // flag `paid` gravar no banco).
+      idempotencyKey: `charge_${rideId}`,
     });
 
     if (paymentIntent.status === 'succeeded') {

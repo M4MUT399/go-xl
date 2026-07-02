@@ -12,6 +12,11 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+const SUPABASE_ANON_KEY    = Deno.env.get('SUPABASE_ANON_KEY')         ?? '';
+
+// Teto de gorjeta (proteção contra abuso/cobrança de valor arbitrário).
+// Configurável por env; default $200.
+const MAX_TIP_CENTS = Number(Deno.env.get('MAX_TIP_CENTS') ?? '20000') || 20000;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -36,6 +41,18 @@ Deno.serve(async (req) => {
     if (!rideId)      return json({ error: 'rideId obrigatório' }, 400);
     if (!amountCents || amountCents < 50)
       return json({ error: 'Valor mínimo de gorjeta: $0.50' }, 400);
+    if (amountCents > MAX_TIP_CENTS)
+      return json({ error: `Gorjeta acima do máximo permitido ($${(MAX_TIP_CENTS / 100).toFixed(2)}).` }, 400);
+
+    // ── Autenticação do passageiro ───────────────────────────────────────────
+    // Esta função é deployada com --no-verify-jwt, então a verificação precisa
+    // acontecer AQUI no código (senão o endpoint fica aberto para cobrar o
+    // cartão salvo de qualquer passageiro por quem souber o rideId).
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const { data: { user }, error: authErr } = await createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    }).auth.getUser();
+    if (authErr || !user) return json({ error: 'Não autorizado' }, 401);
 
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -49,6 +66,11 @@ Deno.serve(async (req) => {
     if (rideErr || !ride) return json({ error: 'Corrida não encontrada' }, 404);
 
     const r = ride as { passenger_id: string; status: string; tip_amount?: number };
+
+    // Autorização: só o passageiro DAQUELA corrida pode dar a gorjeta.
+    if (user.id !== r.passenger_id) {
+      return json({ error: 'Não autorizado a dar gorjeta nesta corrida.' }, 403);
+    }
 
     // Idempotência: gorjeta já registrada
     if (r.tip_amount && r.tip_amount > 0) {
@@ -81,6 +103,8 @@ Deno.serve(async (req) => {
       confirm: true,
       metadata: { rideId, type: 'tip' },
       description: 'Go XL — Gorjeta Executive XL',
+    }, {
+      idempotencyKey: `tip_${rideId}`,
     });
 
     if (paymentIntent.status === 'succeeded') {

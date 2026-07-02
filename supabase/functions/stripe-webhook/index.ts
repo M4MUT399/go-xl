@@ -17,6 +17,9 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
 });
 
 const webhookSecret       = Deno.env.get('STRIPE_WEBHOOK_SECRET')     ?? '';
+// Em produção o STRIPE_WEBHOOK_SECRET é OBRIGATÓRIO. Para DEV local sem secret,
+// setar ALLOW_UNSIGNED_WEBHOOK=true para aceitar eventos não assinados.
+const ALLOW_UNSIGNED       = (Deno.env.get('ALLOW_UNSIGNED_WEBHOOK') ?? '') === 'true';
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
@@ -30,9 +33,16 @@ Deno.serve(async (req) => {
 
   let event: Stripe.Event;
   try {
-    event = webhookSecret
-      ? stripe.webhooks.constructEvent(body, sig, webhookSecret)
-      : (JSON.parse(body) as Stripe.Event);
+    if (webhookSecret) {
+      event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
+    } else if (ALLOW_UNSIGNED) {
+      // DEV local apenas (opt-in explícito).
+      event = JSON.parse(body) as Stripe.Event;
+    } else {
+      // Fail-closed: sem o secret não há como confiar no corpo — qualquer um
+      // poderia forjar um evento e marcar corridas como pagas / anexar cartões.
+      return new Response('Webhook secret não configurado', { status: 400 });
+    }
   } catch (e) {
     return new Response(`Webhook error: ${e}`, { status: 400 });
   }
