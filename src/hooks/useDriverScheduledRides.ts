@@ -1,10 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
+import { getConfig } from '../lib/systemConfig';
 import type { RideRecord } from '../types';
-
-/** Janela de visibilidade: agendamentos aparecem apenas 1h antes do horário. */
-const WINDOW_MS = 60 * 60 * 1000; // 1 hora em ms
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
 
@@ -120,8 +118,10 @@ export function useDriverScheduledRides(driverId: string | undefined) {
     // 1) Expira rides vencidos antes de atualizar a lista
     await expireOldScheduledRides();
 
+    // Antecedência dinâmica (min) — configurável por jurisdição, fallback 60.
+    const leadMinutes = await getConfig('scheduled_ride_lead_minutes');
     const now = new Date();
-    const windowEnd = new Date(now.getTime() + WINDOW_MS);
+    const windowEnd = new Date(now.getTime() + leadMinutes * 60_000);
 
     const [{ data: avail }, { data: mine }] = await Promise.all([
       supabase
@@ -129,7 +129,7 @@ export function useDriverScheduledRides(driverId: string | undefined) {
         .select('*')
         .eq('status', 'scheduled')
         .is('driver_id', null)
-        // Janela de 1h: já passou? não mostra. Mais de 1h de antecedência? também não.
+        // Janela dinâmica: já passou? não mostra. Além da antecedência? também não.
         .gte('scheduled_for', now.toISOString())
         .lte('scheduled_for', windowEnd.toISOString())
         .order('scheduled_for', { ascending: true }),

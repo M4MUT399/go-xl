@@ -16,8 +16,11 @@ import { useTranslation } from '../../i18n';
 import { CarMarker } from '../../components/common/CarMarker';
 import { CrosshairIcon } from '../../components/common/CrosshairIcon';
 import { IncomingRideCall } from '../../components/driver/IncomingRideCall';
+import { ScheduledRideBanner } from '../../components/driver/ScheduledRideBanner';
 import { getConfig, getConfigDefault } from '../../lib/systemConfig';
 import { logRideOfferEvent } from '../../lib/rideOfferEvents';
+import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
+import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -29,6 +32,9 @@ export function DriverHomeScreen({ navigation }: Props) {
   // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m)
   const { location } = useLocation({ watch: isOnline });
   const { pendingRide, pendingScheduledRide, setPendingRide, setPendingScheduledRide, acceptRide, confirmScheduledRide } = useDriverRide(profile?.id);
+  // P2: próxima corrida agendada confirmada por mim → banner fixo + alerta sonoro.
+  const upcoming = useUpcomingScheduledRide(profile?.id);
+  useScheduledReminderAlert(upcoming.imminent, upcoming.ride?.id ?? null);
   // true após carregar o valor persistido — evita gravar is_online=false no banco antes de ler o AsyncStorage
   const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -217,6 +223,15 @@ export function DriverHomeScreen({ navigation }: Props) {
               {t('driver.activateOnline')}
             </Text>
           </View>
+        )}
+
+        {upcoming.showBanner && upcoming.ride && !pendingRide && (
+          <ScheduledRideBanner
+            ride={upcoming.ride}
+            minutesUntil={upcoming.minutesUntil}
+            imminent={upcoming.imminent}
+            onPress={() => navigation.navigate('DriverScheduledRides')}
+          />
         )}
 
       </SafeAreaView>

@@ -14,6 +14,15 @@ import { supabase } from './supabase';
 export const CONFIG_DEFAULTS = {
   // P1: por quantos segundos a tela de chamada de corrida toca antes de expirar.
   ride_offer_timeout_seconds: 30,
+  // P2: antecedência (min) com que uma corrida agendada SEM motorista aparece
+  // na lista de disponíveis para os motoristas. "Antecedência dinâmica".
+  scheduled_ride_lead_minutes: 60,
+  // P2: antecedência (min) com que o banner fixo da corrida agendada JÁ
+  // confirmada por mim começa a aparecer no mapa do motorista.
+  scheduled_ride_banner_minutes: 120,
+  // P2: antecedência (min) em que a agendada confirmada vira "iminente" —
+  // dispara o alerta sonoro e o destaque de urgência no banner.
+  scheduled_ride_reminder_minutes: 15,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
