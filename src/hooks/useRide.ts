@@ -8,6 +8,7 @@ import { estimateTollAmount } from '../lib/tolls';
 import { estimateAirportFees } from '../lib/airportFees';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
+import { reportError } from '../lib/errorReporting';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
 
@@ -404,7 +405,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       .insert(insertPayload);
 
     if (insertError) {
-      console.error('[requestRide] erro no INSERT:', JSON.stringify(insertError));
+      reportError(insertError, { op: 'requestRide.insert', passengerId });
       return null;
     }
 
@@ -419,7 +420,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       .single();
 
     if (selectError || !data) {
-      console.error('[requestRide] erro no SELECT:', JSON.stringify(selectError));
+      reportError(selectError, { op: 'requestRide.select', passengerId });
       return null;
     }
 
@@ -767,7 +768,7 @@ export function useDriverRide(driverId: string | undefined) {
     //    Se o pagamento falhar, o motorista vê o erro e a corrida permanece em 'requesting'.
     const charge = await chargeRide(rideId);
     if (!charge.ok) {
-      console.error('[acceptRide] cobrança falhou:', charge.error);
+      reportError(charge.error, { op: 'acceptRide.charge', rideId });
       logRideOfferEvent(rideId, driverId, 'failed', { reason: 'payment_error' });
       return 'payment_error';
     }
@@ -782,7 +783,7 @@ export function useDriverRide(driverId: string | undefined) {
       .or(`driver_id.is.null,driver_id.eq.${driverId}`);
 
     if (updateError) {
-      console.error('[acceptRide] erro no UPDATE:', JSON.stringify(updateError));
+      reportError(updateError, { op: 'acceptRide.update', rideId });
       logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'update_error' });
       return null;
     }
@@ -797,7 +798,7 @@ export function useDriverRide(driverId: string | undefined) {
       .single();
 
     if (selectError || !data) {
-      console.error('[acceptRide] erro no SELECT:', JSON.stringify(selectError));
+      reportError(selectError, { op: 'acceptRide.select', rideId });
       logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'select_failed' });
       return null;
     }

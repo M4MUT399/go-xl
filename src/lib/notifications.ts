@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import { reportError } from './errorReporting';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -83,7 +84,7 @@ export async function showLocalNotification(
       trigger: null,
     });
   } catch (e) {
-    console.error('[Notifications] Erro ao disparar notificação:', e);
+    reportError(e, { op: 'scheduleLocalNotification' });
   }
 }
 
