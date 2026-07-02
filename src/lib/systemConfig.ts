@@ -29,6 +29,17 @@ export const CONFIG_DEFAULTS = {
   rest_required_hours: 6,
   // P3: antecedência (min) do limite em que o motorista começa a ser avisado.
   driving_warn_minutes: 30,
+  // P5: liga/desliga a cobrança de pedágio no preço. Desligado por padrão →
+  // preserva o comportamento atual (pedágio = 0) até o admin habilitar.
+  tolls_enabled: false,
+  // P5: qual provider de pedágio usar ('mock' | 'google'). O mock calcula um
+  // valor determinístico a partir dos parâmetros abaixo; 'google' fica como
+  // stub até integrarmos a Routes API com toll info.
+  toll_provider: 'mock',
+  // P5: taxa fixa (USD) somada quando o pedágio está habilitado (provider mock).
+  mock_toll_flat: 0,
+  // P5: taxa por km (USD) somada quando o pedágio está habilitado (provider mock).
+  mock_toll_per_km: 0,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;

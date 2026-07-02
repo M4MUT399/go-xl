@@ -85,6 +85,7 @@ export interface Ride {
   price?: number;
   distance_km?: number;
   duration_min?: number;
+  toll_amount?: number;
   scheduled_for?: string;
   // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
   driver_lat?: number;

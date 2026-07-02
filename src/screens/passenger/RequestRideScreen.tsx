@@ -16,6 +16,7 @@ import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide, estimatePrice, estimateDuration, SurgeInfo } from '../../hooks/useRide';
 import { getSurgeInfo } from '../../lib/surge';
+import { estimateTollAmount } from '../../lib/tolls';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
@@ -46,6 +47,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [showPicker, setShowPicker] = useState(false);
   const [scheduledDate, setScheduledDate] = useState<Date>(() => new Date(Date.now() + 30 * 60 * 1000));
   const [surgeInfo, setSurgeInfo] = useState<SurgeInfo>({ multiplier: 1.0, label: null });
+  const [tollAmount, setTollAmount] = useState<number>(0);
 
   const debouncedQuery = useDebounce(destinationText, 450);
 
@@ -87,11 +89,32 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   // Preço exibível: usa o calculado ou o mínimo como fallback (evita botão preso)
   const MIN_PRICE_FALLBACK = 15.0;
   const displayPrice = estimatedPrice ?? (selectedDest ? MIN_PRICE_FALLBACK : null);
+  // Total mostrado ao passageiro inclui o pedágio (P5). Sem pedágio → total = tarifa.
+  const displayTotal = displayPrice != null
+    ? Math.round((displayPrice + tollAmount) * 100) / 100
+    : null;
 
   useEffect(() => {
     if (!selectedDest) return;
     getSurgeInfo().then(setSurgeInfo);
   }, [selectedDest]);
+
+  // Pedágio (P5): estima quando há destino + distância. Desligado → 0, sem UI.
+  useEffect(() => {
+    if (!selectedDest || !location || !distanceKm) {
+      setTollAmount(0);
+      return;
+    }
+    let cancelled = false;
+    estimateTollAmount({
+      origin: { lat: location.lat, lng: location.lng },
+      destination: { lat: selectedDest.lat, lng: selectedDest.lng },
+      distanceKm,
+    }).then((q) => {
+      if (!cancelled) setTollAmount(q.amount);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDest, location, distanceKm]);
 
   async function handleRequest() {
     if (!selectedDest) {
@@ -255,15 +278,22 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                     <ActivityIndicator size="small" color={colors.accent} style={{ alignSelf: 'flex-start', marginTop: 2 }} />
                   )}
                 </View>
-                {displayPrice ? (
+                {displayTotal ? (
                   <Text style={styles.price}>
-                    {formatCurrency(displayPrice)}
+                    {formatCurrency(displayTotal)}
                     {!estimatedPrice && <Text style={styles.priceMin}> mín.</Text>}
                   </Text>
                 ) : (
                   <ActivityIndicator size="small" color={colors.accent} />
                 )}
               </View>
+
+              {tollAmount > 0 && displayPrice != null && (
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>Pedágio incluído</Text>
+                  <Text style={styles.breakdownValue}>{formatCurrency(tollAmount)}</Text>
+                </View>
+              )}
 
               {surgeInfo.label && (
                 <View style={styles.surgeBadge}>
@@ -505,6 +535,17 @@ function makeStyles(colors: AppTheme) {
     categoryDesc: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
     price: { fontSize: 20, fontWeight: '800', color: colors.text },
     priceMin: { fontSize: 12, fontWeight: '500', color: colors.gray[500] },
+    breakdownRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: 1,
+      borderTopColor: colors.gray[100],
+    },
+    breakdownLabel: { fontSize: 12, color: colors.gray[500] },
+    breakdownValue: { fontSize: 12, fontWeight: '700', color: colors.text },
     markerOrigin: {
       width: 12,
       height: 12,

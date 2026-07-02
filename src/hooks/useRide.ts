@@ -4,6 +4,7 @@ import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
+import { estimateTollAmount } from '../lib/tolls';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
@@ -357,9 +358,19 @@ export function usePassengerRide(passengerId: string | undefined) {
       { lat: destination.lat, lng: destination.lng }
     );
     const { multiplier } = await getSurgeInfo();
-    const price = estimatePrice(distanceKm, multiplier);
+    const fare = estimatePrice(distanceKm, multiplier);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
-    const { driverAmount, platformFee } = calculateSplit(price);
+    // Pedágio (P5): 0 por padrão. Repassado integralmente ao motorista — o split
+    // 80/20 incide só sobre a tarifa, então toll=0 mantém o comportamento atual.
+    const { amount: toll } = await estimateTollAmount({
+      origin: { lat: origin.lat, lng: origin.lng },
+      destination: { lat: destination.lat, lng: destination.lng },
+      distanceKm,
+    });
+    const price = Math.round((fare + toll) * 100) / 100;
+    const split = calculateSplit(fare);
+    const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
+    const platformFee = split.platformFee;
 
     const insertPayload = {
       passenger_id: passengerId,
@@ -373,6 +384,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       price,
       distance_km: distanceKm,
       duration_min: duration,
+      toll_amount: toll,
       driver_amount: driverAmount,
       platform_fee: platformFee,
       // QR: pré-vincula o motorista; ele ainda precisa aceitar
@@ -427,9 +439,18 @@ export function usePassengerRide(passengerId: string | undefined) {
       { lat: origin.lat, lng: origin.lng },
       { lat: destination.lat, lng: destination.lng }
     );
-    const price = estimatePrice(distanceKm);
+    const fare = estimatePrice(distanceKm);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
-    const { driverAmount, platformFee } = calculateSplit(price);
+    // Pedágio (P5): mesma regra do requestRide — pass-through ao motorista, 0 por padrão.
+    const { amount: toll } = await estimateTollAmount({
+      origin: { lat: origin.lat, lng: origin.lng },
+      destination: { lat: destination.lat, lng: destination.lng },
+      distanceKm,
+    });
+    const price = Math.round((fare + toll) * 100) / 100;
+    const split = calculateSplit(fare);
+    const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
+    const platformFee = split.platformFee;
 
     const { data, error } = await supabase
       .from('rides')
@@ -445,6 +466,7 @@ export function usePassengerRide(passengerId: string | undefined) {
         price,
         distance_km: distanceKm,
         duration_min: duration,
+        toll_amount: toll,
         scheduled_for: scheduledFor.toISOString(),
         driver_amount: driverAmount,
         platform_fee: platformFee,
