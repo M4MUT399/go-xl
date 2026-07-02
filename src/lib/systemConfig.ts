@@ -23,6 +23,12 @@ export const CONFIG_DEFAULTS = {
   // P2: antecedência (min) em que a agendada confirmada vira "iminente" —
   // dispara o alerta sonoro e o destaque de urgência no banner.
   scheduled_ride_reminder_minutes: 15,
+  // P3: horas de direção acumuladas que exigem descanso obrigatório.
+  driving_limit_hours: 12,
+  // P3: horas de descanso contínuo que zeram o acúmulo de direção.
+  rest_required_hours: 6,
+  // P3: antecedência (min) do limite em que o motorista começa a ser avisado.
+  driving_warn_minutes: 30,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;

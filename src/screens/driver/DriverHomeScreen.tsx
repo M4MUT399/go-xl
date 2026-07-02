@@ -17,10 +17,12 @@ import { CarMarker } from '../../components/common/CarMarker';
 import { CrosshairIcon } from '../../components/common/CrosshairIcon';
 import { IncomingRideCall } from '../../components/driver/IncomingRideCall';
 import { ScheduledRideBanner } from '../../components/driver/ScheduledRideBanner';
+import { DutyStatusBanner } from '../../components/driver/DutyStatusBanner';
 import { getConfig, getConfigDefault } from '../../lib/systemConfig';
 import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
 import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
+import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -35,6 +37,8 @@ export function DriverHomeScreen({ navigation }: Props) {
   // P2: próxima corrida agendada confirmada por mim → banner fixo + alerta sonoro.
   const upcoming = useUpcomingScheduledRide(profile?.id);
   useScheduledReminderAlert(upcoming.imminent, upcoming.ride?.id ?? null);
+  // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
+  const duty = useDrivingLimit(profile?.id);
   // true após carregar o valor persistido — evita gravar is_online=false no banco antes de ler o AsyncStorage
   const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -102,6 +106,30 @@ export function DriverHomeScreen({ navigation }: Props) {
     if (!id) loggedReceivedRef.current = null;
   }, [pendingRide?.id, profile?.id]);
 
+  // P3: se o limite de direção estourar enquanto online, força offline e avisa
+  // uma única vez por episódio de descanso. Só acontece na home (idle) — corrida
+  // em andamento vive na tela de navegação, então não interrompe viagem.
+  const forcedRestRef = useRef(false);
+  useEffect(() => {
+    if (isOnline && duty.status.mustRest) {
+      if (!forcedRestRef.current) {
+        forcedRestRef.current = true;
+        const until = duty.status.restUntil
+          ? duty.status.restUntil.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          : '';
+        Alert.alert(
+          t('duty.restTitle', 'Mandatory rest'),
+          `${t('duty.limitReachedBody', 'You reached the driving limit and are now offline. Back online at')} ${until}`
+        );
+      }
+      setIsOnline(false);
+      AsyncStorage.setItem('driver_is_online', 'false');
+      duty.endSession();
+    }
+    if (!duty.status.mustRest) forcedRestRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, duty.status.mustRest]);
+
   // Alterna online/offline e persiste a escolha.
   // Só permite ficar online se a verificação (selfie + documento) já tiver
   // sido aprovada pela equipe — duplo grau de conferência antes de aceitar corridas.
@@ -117,8 +145,22 @@ export function DriverHomeScreen({ navigation }: Props) {
       );
       return;
     }
+    // P3: bloqueia ficar online enquanto o descanso obrigatório não terminar.
+    if (val && duty.status.mustRest) {
+      const until = duty.status.restUntil
+        ? duty.status.restUntil.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      Alert.alert(
+        t('duty.restTitle', 'Mandatory rest'),
+        `${t('duty.restBody', 'Driving limit reached. Back online at')} ${until}`
+      );
+      return;
+    }
     setIsOnline(val);
     AsyncStorage.setItem('driver_is_online', val ? 'true' : 'false');
+    // Abre/fecha a sessão de serviço que alimenta o cálculo do limite (P3).
+    if (val) duty.startSession();
+    else duty.endSession();
   }
 
   async function handleAccept() {
@@ -233,6 +275,8 @@ export function DriverHomeScreen({ navigation }: Props) {
             onPress={() => navigation.navigate('DriverScheduledRides')}
           />
         )}
+
+        {!pendingRide && <DutyStatusBanner status={duty.status} warn={duty.warn} />}
 
       </SafeAreaView>
 
