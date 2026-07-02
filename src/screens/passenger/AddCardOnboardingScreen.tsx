@@ -179,10 +179,10 @@ function ProcessingScreen({ onEscape }: { onEscape?: () => void }) {
   const { colors } = useTheme();
   const [showEscape, setShowEscape] = useState(false);
 
-  // Se depois de 15s ainda estiver processando, oferece uma saída manual para
+  // Se depois de 5s ainda estiver processando, oferece uma saída manual para
   // o usuário nunca ficar preso sem ação (rede muito lenta, etc).
   useEffect(() => {
-    const t = setTimeout(() => setShowEscape(true), 15000);
+    const t = setTimeout(() => setShowEscape(true), 5000);
     return () => clearTimeout(t);
   }, []);
 
