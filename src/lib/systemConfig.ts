@@ -91,6 +91,48 @@ export async function getConfig<K extends ConfigKey>(
   }
 }
 
+/**
+ * Lê uma chave de configuração ESTRUTURADA (objeto/lista em jsonb) que não faz
+ * parte do mapa escalar CONFIG_DEFAULTS. Usa a mesma resolução "jurisdição
+ * específica → global" e sempre devolve um valor: o configurado ou o `fallback`.
+ *
+ * Motivação: features como geofences de taxas (P6) guardam uma LISTA de zonas
+ * em system_config. Manter isso fora de CONFIG_DEFAULTS evita poluir a tipagem
+ * escalar e permite fallback tipado explícito por chamada.
+ */
+export async function getConfigValue<T>(
+  key: string,
+  fallback: T,
+  jurisdiction: string = 'global'
+): Promise<T> {
+  const cacheKey = `${jurisdiction}:${key}`;
+  const hit = cache.get(cacheKey);
+  if (hit && Date.now() - hit.at < TTL_MS) {
+    return hit.value as T;
+  }
+
+  try {
+    const jurisdictions = jurisdiction === 'global' ? ['global'] : [jurisdiction, 'global'];
+    const { data, error } = await supabase
+      .from('system_config')
+      .select('jurisdiction, value')
+      .eq('key', key)
+      .in('jurisdiction', jurisdictions);
+
+    if (error || !data || data.length === 0) return fallback;
+
+    const specific = data.find((r) => r.jurisdiction === jurisdiction);
+    const global = data.find((r) => r.jurisdiction === 'global');
+    const row = specific ?? global;
+    const value = (row?.value ?? fallback) as T;
+
+    cache.set(cacheKey, { value, at: Date.now() });
+    return value;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Limpa o cache de config (ex.: após o admin salvar uma alteração). */
 export function clearConfigCache() {
   cache.clear();

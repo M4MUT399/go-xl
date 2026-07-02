@@ -17,6 +17,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { usePassengerRide, estimatePrice, estimateDuration, SurgeInfo } from '../../hooks/useRide';
 import { getSurgeInfo } from '../../lib/surge';
 import { estimateTollAmount } from '../../lib/tolls';
+import { estimateAirportFees } from '../../lib/airportFees';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
@@ -48,6 +49,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [scheduledDate, setScheduledDate] = useState<Date>(() => new Date(Date.now() + 30 * 60 * 1000));
   const [surgeInfo, setSurgeInfo] = useState<SurgeInfo>({ multiplier: 1.0, label: null });
   const [tollAmount, setTollAmount] = useState<number>(0);
+  const [venueFee, setVenueFee] = useState<number>(0);
 
   const debouncedQuery = useDebounce(destinationText, 450);
 
@@ -89,9 +91,10 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   // Preço exibível: usa o calculado ou o mínimo como fallback (evita botão preso)
   const MIN_PRICE_FALLBACK = 15.0;
   const displayPrice = estimatedPrice ?? (selectedDest ? MIN_PRICE_FALLBACK : null);
-  // Total mostrado ao passageiro inclui o pedágio (P5). Sem pedágio → total = tarifa.
+  // Total mostrado ao passageiro inclui pedágio (P5) e taxa de aeroporto/porto
+  // (P6). Sem taxas → total = tarifa (comportamento atual).
   const displayTotal = displayPrice != null
-    ? Math.round((displayPrice + tollAmount) * 100) / 100
+    ? Math.round((displayPrice + tollAmount + venueFee) * 100) / 100
     : null;
 
   useEffect(() => {
@@ -115,6 +118,22 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     });
     return () => { cancelled = true; };
   }, [selectedDest, location, distanceKm]);
+
+  // Taxa de aeroporto/porto (P6): estima por geofence. Sem zonas → 0, sem UI.
+  useEffect(() => {
+    if (!selectedDest || !location) {
+      setVenueFee(0);
+      return;
+    }
+    let cancelled = false;
+    estimateAirportFees(
+      { lat: location.lat, lng: location.lng },
+      { lat: selectedDest.lat, lng: selectedDest.lng },
+    ).then((r) => {
+      if (!cancelled) setVenueFee(r.total);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDest, location]);
 
   async function handleRequest() {
     if (!selectedDest) {
@@ -292,6 +311,13 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 <View style={styles.breakdownRow}>
                   <Text style={styles.breakdownLabel}>Pedágio incluído</Text>
                   <Text style={styles.breakdownValue}>{formatCurrency(tollAmount)}</Text>
+                </View>
+              )}
+
+              {venueFee > 0 && displayPrice != null && (
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>Taxa de aeroporto/porto</Text>
+                  <Text style={styles.breakdownValue}>{formatCurrency(venueFee)}</Text>
                 </View>
               )}
 
