@@ -40,6 +40,13 @@ export const CONFIG_DEFAULTS = {
   mock_toll_flat: 0,
   // P5: taxa por km (USD) somada quando o pedágio está habilitado (provider mock).
   mock_toll_per_km: 0,
+  // P7: exige background check aprovado para o motorista ficar online. Desligado
+  // por padrão → não muda o gate de disponibilidade atual.
+  background_check_required: false,
+  // P7: qual provider de background check usar ('mock' | 'stripe_identity').
+  background_check_provider: 'mock',
+  // P7: validade (dias) de um background check aprovado antes de exigir renovação.
+  background_check_valid_days: 365,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;

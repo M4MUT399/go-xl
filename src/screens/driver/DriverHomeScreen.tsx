@@ -23,6 +23,7 @@ import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
 import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
 import { useDrivingLimit } from '../../hooks/useDrivingLimit';
+import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -39,6 +40,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   useScheduledReminderAlert(upcoming.imminent, upcoming.ride?.id ?? null);
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
   const duty = useDrivingLimit(profile?.id);
+  const bgCheck = useBackgroundCheck(profile?.id);
   // true após carregar o valor persistido — evita gravar is_online=false no banco antes de ler o AsyncStorage
   const [onlineLoaded, setOnlineLoaded] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -142,6 +144,15 @@ export function DriverHomeScreen({ navigation }: Props) {
           { text: t('common.cancel'), style: 'cancel' },
           { text: t('driver.verificationGo'), onPress: () => navigation.navigate('DriverVerification') },
         ]
+      );
+      return;
+    }
+    // P7: exige background check aprovado e válido, quando a jurisdição pedir.
+    // required=false (padrão) → canGoOnline sempre true, sem mudança de fluxo.
+    if (val && !bgCheck.canGoOnline) {
+      Alert.alert(
+        t('bgcheck.requiredTitle', 'Background check required'),
+        t('bgcheck.requiredBody', 'Your background check must be approved before you can go online.')
       );
       return;
     }
