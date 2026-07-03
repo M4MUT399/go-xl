@@ -221,6 +221,13 @@ export function EarningsScreen() {
           </TouchableOpacity>
         </View>
 
+        {connect.payoutsEnabled && (
+          <Text style={styles.autoPayoutNote}>
+            O repasse também é feito automaticamente toda segunda-feira. Você pode
+            adiantar quando quiser pelo botão acima.
+          </Text>
+        )}
+
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{formatCurrency(stats.avg)}</Text>
@@ -391,6 +398,7 @@ function makeStyles(colors: AppTheme) {
     balanceValue: { fontSize: 26, fontWeight: '900', color: colors.text },
     balanceSub: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
     balanceOk: { fontSize: 11, color: colors.success, fontWeight: '700', marginTop: 4 },
+    autoPayoutNote: { fontSize: 11, color: colors.gray[400], lineHeight: 15, marginTop: -6, marginBottom: 14, paddingHorizontal: 4 },
     connectBanner: {
       backgroundColor: colors.primary,
       borderRadius: 16,
