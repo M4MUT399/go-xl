@@ -239,11 +239,9 @@ export function DriverHomeScreen({ navigation }: Props) {
           <Marker
             coordinate={{ latitude: location.lat, longitude: location.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
-            rotation={location.heading ?? 0}
-            flat
             tracksViewChanges={tracksCar}
           >
-            <CarMarker scale={0.85} />
+            <CarMarker scale={0.85} heading={location.heading ?? 0} />
           </Marker>
         )}
       </MapView>

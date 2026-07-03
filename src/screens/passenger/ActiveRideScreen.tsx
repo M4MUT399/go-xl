@@ -284,11 +284,9 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           <Marker
             coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
-            rotation={driverLoc.heading ?? 0}
-            flat
             tracksViewChanges={tracksCar}
           >
-            <CarMarker scale={0.75} />
+            <CarMarker scale={0.75} heading={driverLoc.heading ?? 0} />
           </Marker>
         )}
       </MapView>

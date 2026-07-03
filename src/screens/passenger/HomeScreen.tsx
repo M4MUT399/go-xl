@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Linking,
 } from 'react-native';
@@ -39,6 +39,18 @@ export function HomeScreen({ navigation }: Props) {
   );
   const mapRef = useRef<MapView>(null);
   const [destination, setDestination] = useState('');
+
+  // Os marcadores de motorista renderizam uma <Image> (logo GoXL). Com
+  // tracksViewChanges=false o mapa "fotografa" o marcador uma vez — se a imagem
+  // ainda não pintou, o círculo sai vazio. Então rastreamos por ~1,2s sempre
+  // que a lista muda (tempo de a logo carregar) e depois desligamos, por
+  // performance. Mesmo padrão já usado em ActiveRide/DriverHome.
+  const [tracksDrivers, setTracksDrivers] = useState(true);
+  useEffect(() => {
+    setTracksDrivers(true);
+    const t = setTimeout(() => setTracksDrivers(false), 1200);
+    return () => clearTimeout(t);
+  }, [drivers]);
 
   const firstName = profile?.full_name?.split(' ')[0] ?? 'Olá';
 
@@ -101,10 +113,9 @@ export function HomeScreen({ navigation }: Props) {
               key={d.driver_id}
               coordinate={{ latitude: d.lat, longitude: d.lng }}
               anchor={{ x: 0.5, y: 0.5 }}
-              rotation={d.heading ?? 0}
-              tracksViewChanges={false}
+              tracksViewChanges={tracksDrivers}
             >
-              <CarMarker />
+              <CarMarker heading={d.heading ?? 0} />
             </Marker>
           ))}
         </MapView>
