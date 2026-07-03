@@ -20,9 +20,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const FALLBACK_SUPABASE_URL = 'https://zukydkodafdmhaulhxeh.supabase.co';
 const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_Tu3TmYgQa6gOII2X-AbDLg_A0eLlIbd';
 
-const supabaseUrl =
+// Exportadas para reuso em chamadas `fetch` cruas (upload de foto, PATCH de
+// perfil). O caminho de escrita/upload interno do supabase-js trava no
+// dispositivo (corpo ArrayBuffer / caminho autenticado), então algumas telas
+// replicam o padrão comprovado do edgeFunction.ts: getSession() fresco + fetch.
+export const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() || FALLBACK_SUPABASE_URL;
-const supabaseAnonKey =
+export const supabaseAnonKey =
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim() || FALLBACK_SUPABASE_ANON_KEY;
 
 if (__DEV__ && !process.env.EXPO_PUBLIC_SUPABASE_URL) {

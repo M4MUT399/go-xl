@@ -1,12 +1,63 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { decode } from 'base64-arraybuffer';
 import { Alert } from 'react-native';
-import { supabase } from './supabase';
+import { supabase, supabaseUrl, supabaseAnonKey } from './supabase';
 import { withTimeout } from './withTimeout';
 
 export type StorageBucket = 'avatars' | 'vehicles';
 export type PrivateStorageBucket = 'driver-verification';
+
+/**
+ * Faz o upload de um arquivo local para o Storage via `fetch` cru + FormData.
+ *
+ * Por que NÃO usamos `supabase.storage.upload()`:
+ *   No React Native, o caminho de upload do supabase-js envia o corpo como
+ *   ArrayBuffer (`decode(base64)`), o que TRAVA de forma intermitente no
+ *   dispositivo (bug conhecido de RN/iOS com corpos binários). O envio via
+ *   FormData com `{ uri, name, type }` faz o streaming nativo do arquivo direto
+ *   do disco — sem ArrayBuffer, sem base64 — e é o padrão que funciona.
+ *
+ * Replica a mesma abordagem comprovada do `edgeFunction.ts`: pega um token
+ * fresco com `getSession()` e dispara um `fetch` manual (com timeout).
+ */
+async function uploadToStorage(
+  bucket: string,
+  fileName: string,
+  fileUri: string,
+): Promise<void> {
+  const { data: { session } } = await withTimeout(
+    supabase.auth.getSession(),
+    10000,
+    'Não foi possível validar sua sessão. Tente novamente.',
+  );
+  const token = session?.access_token;
+  if (!token) throw new Error('Sessão expirada. Faça login novamente.');
+
+  const form = new FormData();
+  // O cast é necessário: o tipo DOM de FormData não conhece o formato
+  // { uri, name, type } que o React Native usa para streaming de arquivo.
+  form.append('file', { uri: fileUri, name: fileName, type: 'image/jpeg' } as unknown as Blob);
+
+  const res = await withTimeout(
+    fetch(`${supabaseUrl}/storage/v1/object/${bucket}/${fileName}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: supabaseAnonKey,
+        'x-upsert': 'true',
+        // NÃO definir Content-Type: o fetch injeta o boundary do multipart.
+      },
+      body: form,
+    }),
+    20000,
+    'O envio da foto demorou demais. Verifique sua conexão e tente novamente.',
+  );
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Falha no upload (${res.status}). ${detail}`.trim());
+  }
+}
 
 /**
  * Abre a galeria (ou câmera) e devolve um URI local já comprimido.
@@ -64,39 +115,24 @@ export async function uploadImage(
   uri: string,
   pathPrefix: string
 ): Promise<string> {
-  // Redimensiona para no máx. 1080px de largura e converte para JPEG (base64).
+  // Redimensiona para no máx. 1080px de largura e converte para JPEG.
   // Com timeout: sem isso, uma manipulação presa (raro, mas acontece em
   // arquivos HEIC grandes) deixava o spinner de upload girando para sempre.
   const manipulated = await withTimeout(
     ImageManipulator.manipulateAsync(
       uri,
       [{ resize: { width: 1080 } }],
-      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
     ),
     15000,
     'Não foi possível processar a imagem a tempo. Tente novamente.'
   );
 
-  if (!manipulated.base64) throw new Error('Falha ao processar a imagem.');
-
   const fileName = `${pathPrefix}/${Date.now()}-${Math.random()
     .toString(36)
     .slice(2, 8)}.jpg`;
 
-  // Com timeout: o upload para o Storage é a chamada de rede mais pesada
-  // desse fluxo — sem prazo, rede lenta/instável travava a tela indefinidamente.
-  const { error } = await withTimeout(
-    supabase.storage
-      .from(bucket)
-      .upload(fileName, decode(manipulated.base64), {
-        contentType: 'image/jpeg',
-        upsert: true,
-      }),
-    20000,
-    'O envio da foto demorou demais. Verifique sua conexão e tente novamente.'
-  );
-
-  if (error) throw error;
+  await uploadToStorage(bucket, fileName, manipulated.uri);
 
   const { data } = supabase.storage.from(bucket).getPublicUrl(fileName);
   return data.publicUrl;
@@ -117,30 +153,18 @@ export async function uploadPrivateImage(
     ImageManipulator.manipulateAsync(
       uri,
       [{ resize: { width: 1080 } }],
-      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
     ),
     15000,
     'Não foi possível processar a imagem a tempo. Tente novamente.'
   );
 
-  if (!manipulated.base64) throw new Error('Falha ao processar a imagem.');
-
   const fileName = `${pathPrefix}/${Date.now()}-${Math.random()
     .toString(36)
     .slice(2, 8)}.jpg`;
 
-  const { error } = await withTimeout(
-    supabase.storage
-      .from(bucket)
-      .upload(fileName, decode(manipulated.base64), {
-        contentType: 'image/jpeg',
-        upsert: true,
-      }),
-    20000,
-    'O envio da foto demorou demais. Verifique sua conexão e tente novamente.'
-  );
+  await uploadToStorage(bucket, fileName, manipulated.uri);
 
-  if (error) throw error;
   return fileName;
 }
 

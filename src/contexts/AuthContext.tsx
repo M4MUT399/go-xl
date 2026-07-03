@@ -12,6 +12,7 @@
  */
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase, isInvalidRefreshTokenError, clearStaleSession } from '../lib/supabase';
+import { withTimeout } from '../lib/withTimeout';
 import { uploadImage } from '../lib/storage';
 import type { Profile, UserType } from '../types';
 import type { Session, AuthError } from '@supabase/supabase-js';
@@ -124,13 +125,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function fetchProfile(userId: string) {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-    setProfile(data);
-    setLoading(false);
+    // Com timeout defensivo: se a leitura pendurar (rede ruim ou caminho interno
+    // do supabase-js travado), NUNCA deixamos `loading` preso — o finally
+    // sempre libera a navegação. Sem isso, o app poderia congelar na splash.
+    try {
+      const { data } = await withTimeout(
+        supabase.from('profiles').select('*').eq('id', userId).single(),
+        10000,
+        'Tempo esgotado ao carregar o perfil.',
+      );
+      setProfile(data);
+    } catch {
+      // Mantém o profile atual (pode ser null no primeiro load); o usuário
+      // ainda consegue usar telas que não dependem do perfil e tentar de novo.
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function signIn(email: string, password: string) {

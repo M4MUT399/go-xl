@@ -10,17 +10,16 @@ import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { AvatarPicker } from '../../components/common/AvatarPicker';
 import { useAuth } from '../../hooks/useAuth';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseUrl, supabaseAnonKey } from '../../lib/supabase';
 import { withTimeout } from '../../lib/withTimeout';
 import { useTranslation } from '../../i18n';
 
-const SUPABASE_URL        = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const DELETE_ACCOUNT_URL  = `${SUPABASE_URL}/functions/v1/delete-account`;
+const DELETE_ACCOUNT_URL  = `${supabaseUrl}/functions/v1/delete-account`;
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'EditProfile'> };
 
 export function EditProfileScreen({ navigation }: Props) {
-  const { profile, refreshProfile, signOut } = useAuth();
+  const { profile, patchProfile, signOut } = useAuth();
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
@@ -47,26 +46,57 @@ export function EditProfileScreen({ navigation }: Props) {
 
     setSaving(true);
     try {
-      // Com timeout: sem isso, rede lenta/instável deixava o botão "Salvar"
-      // preso em loading para sempre (mesmo bug já corrigido no cartão/fotos).
-      const { error } = await withTimeout(
-        supabase
-          .from('profiles')
-          .update({
-            full_name: fullName.trim(),
-            phone: phone.trim(),
-            avatar_url: avatarUrl || null,
-            emergency_contact_name: emergencyName.trim() || null,
-            emergency_contact_phone: emergencyPhone.trim() || null,
-          })
-          .eq('id', profile.id),
+      // PATCH cru no PostgREST em vez de `supabase.from().update()`.
+      // Motivo: no dispositivo, o caminho de escrita autenticada do supabase-js
+      // TRAVA de forma intermitente (o botão "Salvar" ficava girando para
+      // sempre, em WiFi e 4G). Replicamos o padrão comprovado do edgeFunction.ts
+      // e do upload de foto: token fresco via getSession() + fetch manual.
+      const patch = {
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+        avatar_url: avatarUrl || null,
+        emergency_contact_name: emergencyName.trim() || null,
+        emergency_contact_phone: emergencyPhone.trim() || null,
+      };
+
+      const { data: { session } } = await withTimeout(
+        supabase.auth.getSession(),
+        10000,
+        'Não foi possível validar sua sessão. Tente novamente.'
+      );
+      const token = session?.access_token;
+      if (!token) throw new Error('Sessão expirada. Faça login novamente.');
+
+      const res = await withTimeout(
+        fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${profile.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify(patch),
+        }),
         15000,
         'Não foi possível salvar. Verifique sua conexão e tente novamente.'
       );
 
-      if (error) throw error;
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || `Falha ao salvar (${res.status}).`);
+      }
 
-      await refreshProfile?.();
+      // Atualiza o estado local imediatamente (sem nova query, que também
+      // poderia travar) para que a UI reflita as mudanças ao voltar.
+      patchProfile({
+        full_name: patch.full_name,
+        phone: patch.phone,
+        avatar_url: patch.avatar_url ?? undefined,
+        emergency_contact_name: patch.emergency_contact_name ?? undefined,
+        emergency_contact_phone: patch.emergency_contact_phone ?? undefined,
+      });
+
       Alert.alert(t('common.done'), t('edit.updated'), [
         { text: t('common.ok'), onPress: () => navigation.goBack() },
       ]);
