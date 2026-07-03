@@ -13,11 +13,12 @@ import * as Haptics from 'expo-haptics';
  * desmontar (nunca deixa som tocando órfão).
  *
  * O toque (assets/ride_call.wav) é um arco de sino que sobe e desce (crescente/
- * decrescente) com um silêncio no fim — em loop soa clássico e intermitente. A
- * vibração é sincronizada ao ciclo (~2.46s) para pulsar junto com cada toque.
+ * decrescente), rápido e marcante, com um silêncio curto no fim — em loop soa
+ * clássico, urgente e intermitente. A vibração é sincronizada ao ciclo (~1.55s)
+ * para pulsar junto com cada toque.
  */
-/** Duração de um ciclo do ride_call.wav (s) — mantém a vibração em sincronia. */
-const CALL_LOOP_MS = 2460;
+/** Duração de um ciclo do ride_call.wav (ms) — mantém a vibração em sincronia. */
+const CALL_LOOP_MS = 1550;
 export function useRideCallAlert(active: boolean) {
   const playerRef = useRef<AudioPlayer | null>(null);
   const hapticTimer = useRef<ReturnType<typeof setInterval> | null>(null);
