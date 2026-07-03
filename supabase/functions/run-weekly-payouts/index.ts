@@ -7,10 +7,11 @@
 //   conta Express habilitada e saldo pendente e cria um transfer por motorista.
 //
 // Quem chama:
-//   O agendador do Postgres (pg_cron + pg_net) — NÃO um cliente. Por isso a
-//   função é publicada com `--no-verify-jwt` e valida o próprio chamador
-//   exigindo o header Authorization: Bearer <SERVICE_ROLE_KEY> (só a nossa
-//   infraestrutura conhece essa chave). O agendador lê a chave do Vault.
+//   O agendador do Postgres (pg_cron + pg_net) — NÃO um cliente. A função é
+//   publicada COM verify_jwt: o gateway do Supabase valida a assinatura do
+//   token e, aqui dentro, exigimos que o papel seja 'service_role'
+//   (isServiceRole). O agendador manda a service-role key (lida do Vault) no
+//   header Authorization. Um passageiro logado (role 'authenticated') é barrado.
 //
 // Idempotência (idêntica ao request-payout, por motorista):
 //   1) cria payout 'processing' e VINCULA as corridas (payout_id) antes de
@@ -45,6 +46,26 @@ function json(body: unknown, status = 200) {
     status,
     headers: { ...CORS, 'Content-Type': 'application/json' },
   });
+}
+
+/**
+ * Confirma que o chamador porta a service-role key olhando o claim `role` do
+ * JWT. A função é publicada COM verify_jwt, então o gateway do Supabase já
+ * validou a ASSINATURA do token contra o segredo do projeto antes de chegar
+ * aqui — só falta garantir que não é um passageiro logado (role
+ * 'authenticated'). Não comparamos com nenhuma env de chave, então funciona
+ * tanto com a chave legada (eyJ…) quanto com o novo formato.
+ */
+function isServiceRole(token: string): boolean {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return false;
+    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const decoded = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')));
+    return decoded?.role === 'service_role';
+  } catch {
+    return false;
+  }
 }
 
 interface EligibleRide { id: string; driver_id: string; driver_amount: number }
@@ -135,10 +156,10 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  // ── Só a nossa infraestrutura pode disparar o repasse em lote ──────────────
+  // ── Só quem porta a service-role key pode disparar o repasse em lote ───────
   const auth = req.headers.get('Authorization') ?? '';
   const token = auth.replace(/^Bearer\s+/i, '').trim();
-  if (!SUPABASE_SERVICE_KEY || token !== SUPABASE_SERVICE_KEY) {
+  if (!isServiceRole(token)) {
     return json({ error: 'Não autorizado' }, 401);
   }
 
