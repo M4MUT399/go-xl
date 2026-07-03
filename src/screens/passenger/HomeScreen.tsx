@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { CarMarker } from '../../components/common/CarMarker';
 import { CrosshairIcon } from '../../components/common/CrosshairIcon';
@@ -20,11 +22,15 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Passen
 export function HomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { location, status, retry } = useLocation();
   const { drivers } = useNearbyDrivers(true);
   const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
 
   const styles = makeStyles(colors);
+  // Cobre o inset da status bar/notch (ignorado pela SafeAreaView) + a altura
+  // do topBar + uma margem para o degradê terminar suavemente em 0 de opacidade.
+  const topGradientHeight = insets.top + 150;
 
   // Recarrega o badge de mensagens toda vez que a tela entra em foco
   // (ex.: usuário volta do chat → AsyncStorage já atualizado → badge some)
@@ -130,6 +136,22 @@ export function HomeScreen({ navigation }: Props) {
         </View>
       )}
 
+      {/* Full-bleed: vai até a borda real da tela, ignorando o inset da
+          SafeAreaView (por baixo da status bar/notch) — degradê transparente,
+          25% mais escuro no topo, reduzindo até 0% após passar do cabeçalho
+          (saudação, categoria, calendário, chat e avatar). */}
+      <View pointerEvents="none" style={[styles.topGradient, { height: topGradientHeight }]}>
+        <Svg width="100%" height="100%">
+          <Defs>
+            <SvgLinearGradient id="topFade" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#1A1A2E" stopOpacity={0.25} />
+              <Stop offset="1" stopColor="#1A1A2E" stopOpacity={0} />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height="100%" fill="url(#topFade)" />
+        </Svg>
+      </View>
+
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.topBar}>
           <View style={styles.greeting}>
@@ -229,6 +251,14 @@ function makeStyles(colors: AppTheme) {
       bottom: 0,
       justifyContent: 'space-between',
     },
+    topGradient: {
+      // Sem zIndex: a ordem de montagem (antes da SafeAreaView) já garante
+      // que o degradê fica por baixo do conteúdo do cabeçalho.
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+    },
     topBar: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -236,9 +266,9 @@ function makeStyles(colors: AppTheme) {
       paddingHorizontal: 20,
       paddingTop: 8,
       paddingBottom: 14,
-      // Navy 50% translúcido — mantém nome, calendário e ícones legíveis
-      // sobre o mapa em qualquer condição de navegação.
-      backgroundColor: 'rgba(26,26,46,0.5)',
+      // O fundo (degradê escuro → transparente) vem do topGradient, que fica
+      // por baixo desta barra e se estende até a borda real da tela.
+      backgroundColor: 'transparent',
     },
     greeting: {},
     greetingText: { fontSize: 20, fontWeight: '700', color: colors.white },
