@@ -230,7 +230,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
         {location && selectedDest ? (
           <MapView
             style={[styles.miniMap, selectedDest && { height: 130 }]}
-            provider={undefined}
+            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+            // Força o mapa CLARO no Android; no iOS o Apple Maps já é claro.
+            customMapStyle={Platform.OS === 'android' ? [] : undefined}
             initialRegion={{
               latitude: (location.lat + selectedDest.lat) / 2,
               longitude: (location.lng + selectedDest.lng) / 2,
