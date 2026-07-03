@@ -9,6 +9,7 @@ import { estimateAirportFees } from '../lib/airportFees';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import { reportError } from '../lib/errorReporting';
+import { withTimeout } from '../lib/withTimeout';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
 
@@ -20,15 +21,25 @@ const TIP_RIDE_URL     = `${SUPABASE_URL}/functions/v1/tip-ride`;
 /** Cobra o cartão do passageiro via Edge Function (off-session). */
 async function chargeRide(rideId: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await fetch(CHARGE_RIDE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session?.access_token ?? ''}`,
-      },
-      body: JSON.stringify({ rideId }),
-    });
+    // getSession e fetch NÃO têm timeout nativo — sem os withTimeout abaixo, uma
+    // rede ruim deixava o aceite pendurado para sempre (tela travada no Android).
+    const { data: { session } } = await withTimeout(
+      supabase.auth.getSession(),
+      8000,
+      'Não foi possível validar sua sessão. Verifique a conexão.'
+    );
+    const res = await withTimeout(
+      fetch(CHARGE_RIDE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({ rideId }),
+      }),
+      20000,
+      'A cobrança demorou demais. Tente novamente.'
+    );
     const json = await res.json() as { success?: boolean; already_paid?: boolean; error?: string };
     if (json.success || json.already_paid) return { ok: true };
     return { ok: false, error: json.error ?? 'Pagamento recusado' };
@@ -774,13 +785,24 @@ export function useDriverRide(driverId: string | undefined) {
     }
 
     // 1) UPDATE (sem RETURNING — o .select().single() falha silenciosamente em alguns casos)
-    const { error: updateError } = await supabase
-      .from('rides')
-      .update({ driver_id: driverId, status: 'accepted' as RideStatus, accepted_at: new Date().toISOString() })
-      .eq('id', rideId)
-      .eq('status', 'requesting')
-      // Aceita apenas se a corrida não estiver travada para outro motorista
-      .or(`driver_id.is.null,driver_id.eq.${driverId}`);
+    //    withTimeout: a escrita do supabase-js pode ficar pendurada em rede instável.
+    let updateError: unknown = null;
+    try {
+      const res = await withTimeout(
+        supabase
+          .from('rides')
+          .update({ driver_id: driverId, status: 'accepted' as RideStatus, accepted_at: new Date().toISOString() })
+          .eq('id', rideId)
+          .eq('status', 'requesting')
+          // Aceita apenas se a corrida não estiver travada para outro motorista
+          .or(`driver_id.is.null,driver_id.eq.${driverId}`),
+        12000,
+        'A confirmação da corrida demorou demais.'
+      );
+      updateError = res.error;
+    } catch (e) {
+      updateError = e;
+    }
 
     if (updateError) {
       reportError(updateError, { op: 'acceptRide.update', rideId });
@@ -789,13 +811,25 @@ export function useDriverRide(driverId: string | undefined) {
     }
 
     // 2) SELECT separado para confirmar e obter a corrida atualizada
-    const { data, error: selectError } = await supabase
-      .from('rides')
-      .select('*')
-      .eq('id', rideId)
-      .eq('driver_id', driverId)
-      .eq('status', 'accepted')
-      .single();
+    let data: unknown = null;
+    let selectError: unknown = null;
+    try {
+      const res = await withTimeout(
+        supabase
+          .from('rides')
+          .select('*')
+          .eq('id', rideId)
+          .eq('driver_id', driverId)
+          .eq('status', 'accepted')
+          .single(),
+        12000,
+        'A confirmação da corrida demorou demais.'
+      );
+      data = res.data;
+      selectError = res.error;
+    } catch (e) {
+      selectError = e;
+    }
 
     if (selectError || !data) {
       reportError(selectError, { op: 'acceptRide.select', rideId });
@@ -808,9 +842,15 @@ export function useDriverRide(driverId: string | undefined) {
     // 3) Calcula o ETA até o embarque JÁ no momento do aceite (não espera o motorista
     //    abrir a tela de navegação) e grava em rides — assim o passageiro já recebe o
     //    tempo estimado junto com o aviso de "motorista a caminho".
+    //    IMPORTANTE: nada aqui pode BLOQUEAR a navegação/o aviso ao passageiro — por
+    //    isso getRoute tem timeout curto e a ESCRITA da telemetria é fire-and-forget.
     if (driverLocation && ride.origin_lat != null && ride.origin_lng != null) {
       try {
-        const path = await getRoute(driverLocation, { lat: ride.origin_lat, lng: ride.origin_lng });
+        const path = await withTimeout(
+          getRoute(driverLocation, { lat: ride.origin_lat, lng: ride.origin_lng }),
+          6000,
+          'route timeout'
+        );
         if (path) {
           const telemetry = {
             driver_lat: driverLocation.lat,
@@ -818,8 +858,14 @@ export function useDriverRide(driverId: string | undefined) {
             driver_eta_min: path.durationMin,
             driver_eta_km: path.distanceKm,
           };
-          await supabase.from('rides').update(telemetry).eq('id', rideId);
           ride = { ...ride, ...telemetry };
+          // Grava em background: se demorar/falhar, o DriverNavigateScreen recalcula
+          // e grava o próprio ETA. Nunca segura o fluxo de aceite.
+          withTimeout(
+            supabase.from('rides').update(telemetry).eq('id', rideId),
+            8000,
+            'telemetry timeout'
+          ).catch(() => {});
         }
       } catch {
         // Sem ETA inicial — DriverNavigateScreen ainda vai calcular e gravar o seu.

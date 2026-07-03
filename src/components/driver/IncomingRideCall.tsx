@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   Modal,
-  SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { useTranslation } from '../../i18n';
@@ -81,6 +81,7 @@ export function IncomingRideCall({
 }: Props) {
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
 
   // Som/vibração recorrentes enquanto a chamada estiver ativa (para ao aceitar).
@@ -167,7 +168,7 @@ export function IncomingRideCall({
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onReject} statusBarTranslucent>
       <View style={styles.backdrop}>
-        <SafeAreaView style={styles.safe}>
+        <View style={[styles.safe, { paddingTop: insets.top }]}>
           {/* Cabeçalho: contagem + título */}
           <View style={styles.header}>
             <View style={[styles.countPill, urgent && styles.countPillUrgent]}>
@@ -275,8 +276,9 @@ export function IncomingRideCall({
             </View>
           </ScrollView>
 
-          {/* Ações */}
-          <View style={styles.actions}>
+          {/* Ações — paddingBottom respeita a barra de navegação (Android) e o
+              home-indicator (iOS); mínimo de 12 para não colar na borda. */}
+          <View style={[styles.actions, { paddingBottom: Math.max(insets.bottom, 12) + 6 }]}>
             <TouchableOpacity
               style={styles.rejectBtn}
               onPress={onReject}
@@ -298,7 +300,7 @@ export function IncomingRideCall({
               )}
             </TouchableOpacity>
           </View>
-        </SafeAreaView>
+        </View>
       </View>
     </Modal>
   );
