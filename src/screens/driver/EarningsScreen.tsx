@@ -5,6 +5,7 @@ import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverStats, CompletedRide } from '../../hooks/useRideHistory';
 import { usePayouts } from '../../hooks/usePayouts';
+import { useConnectAccount } from '../../hooks/useConnectAccount';
 import { useWaybillConfig } from '../../hooks/useWaybillConfig';
 import { generateAndShareWaybill } from '../../lib/waybillExport';
 import { formatCurrency, formatDistance, kmToMiles } from '../../lib/format';
@@ -39,9 +40,23 @@ export function EarningsScreen() {
   const { colors } = useTheme();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
   const { payouts, pendingBalance, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
+  const { status: connect, loading: connectLoading, onboarding, refresh: refreshConnect, startOnboarding } = useConnectAccount(profile?.id);
   const waybill = useWaybillConfig();
   const [period, setPeriod] = useState<Period>('week');
   const [requestingPayout, setRequestingPayout] = useState(false);
+
+  const onRefresh = () => {
+    refresh();
+    refreshPayouts();
+    refreshConnect();
+  };
+
+  async function handleOnboard() {
+    const result = await startOnboarding();
+    if (!result.ok) {
+      Alert.alert('Erro', result.error ?? 'Não foi possível abrir o cadastro de recebimento.');
+    }
+  }
 
   const styles = makeStyles(colors);
 
@@ -81,7 +96,7 @@ export function EarningsScreen() {
             const result = await requestPayout();
             setRequestingPayout(false);
             if (result.ok) {
-              Alert.alert('Solicitação enviada!', 'Entraremos em contato para processar o pagamento.');
+              Alert.alert('Repasse enviado!', 'O valor foi transferido para sua conta e cairá no seu banco conforme o cronograma do Stripe.');
             } else {
               Alert.alert('Erro', result.error ?? 'Tente novamente.');
             }
@@ -119,7 +134,7 @@ export function EarningsScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} tintColor={colors.accent} />}
       >
         <Text style={styles.title}>Seus ganhos</Text>
 
@@ -155,6 +170,33 @@ export function EarningsScreen() {
           </View>
         </View>
 
+        {/* Banner de configuração de recebimento (Stripe Connect Express).
+            Aparece enquanto a conta não pode receber payouts. */}
+        {!connectLoading && !connect.payoutsEnabled && (
+          <View style={styles.connectBanner}>
+            <View style={styles.connectInfo}>
+              <Text style={styles.connectTitle}>
+                {connect.needsAttention ? 'Cadastro em análise' : 'Configure seu recebimento'}
+              </Text>
+              <Text style={styles.connectSub}>
+                {connect.needsAttention
+                  ? 'Faltam informações para liberar seus repasses. Toque para concluir.'
+                  : 'Cadastre sua conta bancária para receber os repasses das suas corridas.'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.connectBtn}
+              onPress={handleOnboard}
+              disabled={onboarding}
+            >
+              {onboarding
+                ? <ActivityIndicator size="small" color={colors.primary} />
+                : <Text style={styles.connectBtnText}>{connect.hasAccount ? 'Continuar' : 'Configurar'}</Text>
+              }
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Card de saldo disponível para repasse */}
         <View style={styles.balanceCard}>
           <View style={styles.balanceInfo}>
@@ -163,11 +205,14 @@ export function EarningsScreen() {
             {pendingRidesCount > 0 && (
               <Text style={styles.balanceSub}>{pendingRidesCount} corrida(s) pagas aguardando repasse</Text>
             )}
+            {connect.payoutsEnabled && (
+              <Text style={styles.balanceOk}>✓ Recebimento configurado</Text>
+            )}
           </View>
           <TouchableOpacity
-            style={[styles.payoutBtn, (pendingBalance <= 0 || requestingPayout) && styles.payoutBtnDisabled]}
+            style={[styles.payoutBtn, (pendingBalance <= 0 || requestingPayout || !connect.payoutsEnabled) && styles.payoutBtnDisabled]}
             onPress={handleRequestPayout}
-            disabled={pendingBalance <= 0 || requestingPayout}
+            disabled={pendingBalance <= 0 || requestingPayout || !connect.payoutsEnabled}
           >
             {requestingPayout
               ? <ActivityIndicator size="small" color={colors.white} />
@@ -345,6 +390,28 @@ function makeStyles(colors: AppTheme) {
     balanceLabel: { fontSize: 12, color: colors.gray[500], fontWeight: '600', marginBottom: 4 },
     balanceValue: { fontSize: 26, fontWeight: '900', color: colors.text },
     balanceSub: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
+    balanceOk: { fontSize: 11, color: colors.success, fontWeight: '700', marginTop: 4 },
+    connectBanner: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      padding: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    connectInfo: { flex: 1, paddingRight: 12 },
+    connectTitle: { fontSize: 15, fontWeight: '800', color: colors.white, marginBottom: 4 },
+    connectSub: { fontSize: 12, color: colors.gray[400], lineHeight: 16 },
+    connectBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minWidth: 92,
+    },
+    connectBtnText: { color: colors.primary, fontSize: 13, fontWeight: '800' },
     payoutBtn: {
       backgroundColor: colors.accent,
       borderRadius: 12,
