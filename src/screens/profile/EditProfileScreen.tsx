@@ -11,6 +11,7 @@ import { Input } from '../../components/common/Input';
 import { AvatarPicker } from '../../components/common/AvatarPicker';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { withTimeout } from '../../lib/withTimeout';
 import { useTranslation } from '../../i18n';
 
 const SUPABASE_URL        = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
@@ -45,25 +46,34 @@ export function EditProfileScreen({ navigation }: Props) {
     if (!profile?.id) return;
 
     setSaving(true);
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        full_name: fullName.trim(),
-        phone: phone.trim(),
-        avatar_url: avatarUrl || null,
-        emergency_contact_name: emergencyName.trim() || null,
-        emergency_contact_phone: emergencyPhone.trim() || null,
-      })
-      .eq('id', profile.id);
-    setSaving(false);
+    try {
+      // Com timeout: sem isso, rede lenta/instável deixava o botão "Salvar"
+      // preso em loading para sempre (mesmo bug já corrigido no cartão/fotos).
+      const { error } = await withTimeout(
+        supabase
+          .from('profiles')
+          .update({
+            full_name: fullName.trim(),
+            phone: phone.trim(),
+            avatar_url: avatarUrl || null,
+            emergency_contact_name: emergencyName.trim() || null,
+            emergency_contact_phone: emergencyPhone.trim() || null,
+          })
+          .eq('id', profile.id),
+        15000,
+        'Não foi possível salvar. Verifique sua conexão e tente novamente.'
+      );
 
-    if (error) {
-      Alert.alert('Erro', error.message);
-    } else {
+      if (error) throw error;
+
       await refreshProfile?.();
       Alert.alert(t('common.done'), t('edit.updated'), [
         { text: t('common.ok'), onPress: () => navigation.goBack() },
       ]);
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message ?? 'Não foi possível salvar as alterações.');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -93,15 +103,23 @@ export function EditProfileScreen({ navigation }: Props) {
   async function handleDeleteAccount() {
     setDeleting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(DELETE_ACCOUNT_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token ?? ''}`,
-        },
-        body: JSON.stringify({}),
-      });
+      const { data: { session } } = await withTimeout(
+        supabase.auth.getSession(),
+        10000,
+        'Não foi possível confirmar sua sessão. Tente novamente.'
+      );
+      const res = await withTimeout(
+        fetch(DELETE_ACCOUNT_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session?.access_token ?? ''}`,
+          },
+          body: JSON.stringify({}),
+        }),
+        15000,
+        'Não foi possível excluir a conta. Verifique sua conexão e tente novamente.'
+      );
       const json = await res.json() as { ok?: boolean; error?: string };
       if (!json.ok) throw new Error(json.error ?? 'Falha ao excluir conta.');
       await signOut();

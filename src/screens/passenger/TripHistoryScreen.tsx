@@ -20,7 +20,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 export function TripHistoryScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const { rides, loading, refresh } = useRideHistory(profile?.id, 'passenger');
+  const { rides, loading, error, refresh } = useRideHistory(profile?.id, 'passenger');
   const [filter, setFilter] = useState<Filter>('all');
 
   const styles = makeStyles(colors);
@@ -64,11 +64,22 @@ export function TripHistoryScreen() {
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>🚗</Text>
-              <Text style={styles.emptyTitle}>Nenhuma viagem</Text>
-              <Text style={styles.emptyText}>Suas corridas Executive XL aparecerão aqui</Text>
-            </View>
+            error ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyEmoji}>⚠️</Text>
+                <Text style={styles.emptyTitle}>Não foi possível carregar</Text>
+                <Text style={styles.emptyText}>{error}</Text>
+                <TouchableOpacity style={styles.retryButton} onPress={refresh}>
+                  <Text style={styles.retryButtonText}>Tentar novamente</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Text style={styles.emptyEmoji}>🚗</Text>
+                <Text style={styles.emptyTitle}>Nenhuma viagem</Text>
+                <Text style={styles.emptyText}>Suas corridas Executive XL aparecerão aqui</Text>
+              </View>
+            )
           }
           renderItem={({ item }) => <TripCard ride={item} styles={styles} colors={colors} />}
         />
@@ -197,5 +208,13 @@ function makeStyles(colors: AppTheme) {
     emptyEmoji: { fontSize: 48, marginBottom: 16 },
     emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 6 },
     emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center' },
+    retryButton: {
+      marginTop: 20,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderRadius: 10,
+      backgroundColor: colors.primary,
+    },
+    retryButtonText: { color: colors.white, fontSize: 14, fontWeight: '700' },
   });
 }

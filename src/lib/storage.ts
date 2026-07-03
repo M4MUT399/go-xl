@@ -3,6 +3,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { decode } from 'base64-arraybuffer';
 import { Alert } from 'react-native';
 import { supabase } from './supabase';
+import { withTimeout } from './withTimeout';
 
 export type StorageBucket = 'avatars' | 'vehicles';
 export type PrivateStorageBucket = 'driver-verification';
@@ -63,11 +64,17 @@ export async function uploadImage(
   uri: string,
   pathPrefix: string
 ): Promise<string> {
-  // Redimensiona para no máx. 1080px de largura e converte para JPEG (base64)
-  const manipulated = await ImageManipulator.manipulateAsync(
-    uri,
-    [{ resize: { width: 1080 } }],
-    { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+  // Redimensiona para no máx. 1080px de largura e converte para JPEG (base64).
+  // Com timeout: sem isso, uma manipulação presa (raro, mas acontece em
+  // arquivos HEIC grandes) deixava o spinner de upload girando para sempre.
+  const manipulated = await withTimeout(
+    ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 1080 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+    ),
+    15000,
+    'Não foi possível processar a imagem a tempo. Tente novamente.'
   );
 
   if (!manipulated.base64) throw new Error('Falha ao processar a imagem.');
@@ -76,12 +83,18 @@ export async function uploadImage(
     .toString(36)
     .slice(2, 8)}.jpg`;
 
-  const { error } = await supabase.storage
-    .from(bucket)
-    .upload(fileName, decode(manipulated.base64), {
-      contentType: 'image/jpeg',
-      upsert: true,
-    });
+  // Com timeout: o upload para o Storage é a chamada de rede mais pesada
+  // desse fluxo — sem prazo, rede lenta/instável travava a tela indefinidamente.
+  const { error } = await withTimeout(
+    supabase.storage
+      .from(bucket)
+      .upload(fileName, decode(manipulated.base64), {
+        contentType: 'image/jpeg',
+        upsert: true,
+      }),
+    20000,
+    'O envio da foto demorou demais. Verifique sua conexão e tente novamente.'
+  );
 
   if (error) throw error;
 
@@ -100,10 +113,14 @@ export async function uploadPrivateImage(
   uri: string,
   pathPrefix: string
 ): Promise<string> {
-  const manipulated = await ImageManipulator.manipulateAsync(
-    uri,
-    [{ resize: { width: 1080 } }],
-    { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+  const manipulated = await withTimeout(
+    ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 1080 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+    ),
+    15000,
+    'Não foi possível processar a imagem a tempo. Tente novamente.'
   );
 
   if (!manipulated.base64) throw new Error('Falha ao processar a imagem.');
@@ -112,12 +129,16 @@ export async function uploadPrivateImage(
     .toString(36)
     .slice(2, 8)}.jpg`;
 
-  const { error } = await supabase.storage
-    .from(bucket)
-    .upload(fileName, decode(manipulated.base64), {
-      contentType: 'image/jpeg',
-      upsert: true,
-    });
+  const { error } = await withTimeout(
+    supabase.storage
+      .from(bucket)
+      .upload(fileName, decode(manipulated.base64), {
+        contentType: 'image/jpeg',
+        upsert: true,
+      }),
+    20000,
+    'O envio da foto demorou demais. Verifique sua conexão e tente novamente.'
+  );
 
   if (error) throw error;
   return fileName;
