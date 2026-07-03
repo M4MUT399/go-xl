@@ -126,8 +126,25 @@ Deno.serve(async (req) => {
 
     const p = profile as { stripe_customer_id?: string; full_name?: string; email?: string } | null;
 
-    // ── Cria Customer no Stripe se ainda não existe ──────────────────────────
+    // ── Garante um Customer VÁLIDO no Stripe ─────────────────────────────────
+    // O customer_id salvo pode não existir NESTA conta/modo do Stripe — por
+    // exemplo, quando a chave é trocada entre live e test durante os testes.
+    // Nesse caso o Stripe responde "No such customer" ao abrir o Checkout.
+    // Então validamos o ID salvo e, se for inválido/deletado, recriamos o
+    // Customer e regravamos o vínculo (limpando também o payment_method órfão,
+    // que pertencia ao customer antigo e não pode mais ser cobrado).
     let customerId = p?.stripe_customer_id ?? '';
+    let stale = false;
+    if (customerId) {
+      try {
+        const existing = await stripe.customers.retrieve(customerId);
+        if ((existing as Stripe.DeletedCustomer).deleted) { customerId = ''; stale = true; }
+      } catch {
+        customerId = '';   // não existe nesta conta/modo — recria abaixo
+        stale = true;
+      }
+    }
+
     if (!customerId) {
       const customer = await stripe.customers.create({
         email: p?.email ?? user.email ?? '',
@@ -139,8 +156,14 @@ Deno.serve(async (req) => {
       // Persiste o customer_id. Se o perfil já existe, só atualiza o campo
       // (preservando o resto). Se NÃO existe — caso de cadastro incompleto —,
       // cria uma linha mínima via upsert para não perder o vínculo com o Stripe.
+      // Quando o customer anterior era inválido (stale), zera também os campos
+      // de cartão para não deixar um payment_method fantasma no perfil.
       if (p) {
-        await admin.from('profiles').update({ stripe_customer_id: customerId }).eq('id', user.id);
+        await admin.from('profiles').update(
+          stale
+            ? { stripe_customer_id: customerId, stripe_payment_method_id: null, card_last4: null, card_brand: null }
+            : { stripe_customer_id: customerId },
+        ).eq('id', user.id);
       } else {
         await admin.from('profiles').upsert({
           id:                 user.id,

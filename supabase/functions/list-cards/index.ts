@@ -60,6 +60,18 @@ Deno.serve(async (req) => {
 
     if (!customerId) return json({ cards: [] });
 
+    // O customer salvo pode não existir NESTA conta/modo do Stripe (ex.: troca
+    // de chave live↔test em testes). Nesse caso devolvemos lista vazia — o app
+    // cai no fluxo de adicionar cartão, que recria o customer em setup-card.
+    let customer: Stripe.Customer;
+    try {
+      const c = await stripe.customers.retrieve(customerId);
+      if ((c as Stripe.DeletedCustomer).deleted) return json({ cards: [] });
+      customer = c as Stripe.Customer;
+    } catch {
+      return json({ cards: [] });
+    }
+
     const pms = await stripe.paymentMethods.list({
       customer: customerId,
       type: 'card',
@@ -68,7 +80,6 @@ Deno.serve(async (req) => {
 
     // O "padrão" oficial vem do Customer no Stripe — é ele quem
     // charge-ride/tip-ride cobram via profiles.stripe_payment_method_id.
-    const customer = await stripe.customers.retrieve(customerId) as Stripe.Customer;
     const defaultId = (customer.invoice_settings?.default_payment_method as string)
       ?? p?.stripe_payment_method_id
       ?? '';
