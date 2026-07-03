@@ -230,7 +230,10 @@ export function DriverHomeScreen({ navigation }: Props) {
           latitudeDelta: 0.015,
           longitudeDelta: 0.015,
         }}
-        customMapStyle={darkMapStyle}
+        // Ver comentário equivalente em passenger/HomeScreen.tsx: o customMapStyle
+        // escuro renderiza como "modo noturno" no Google Maps (Android); usamos o
+        // estilo padrão (claro) nessa plataforma.
+        customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
       >
         {location && (
           <Marker

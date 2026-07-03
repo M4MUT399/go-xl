@@ -75,7 +75,11 @@ export function HomeScreen({ navigation }: Props) {
           }}
           showsUserLocation
           showsMyLocationButton={false}
-          customMapStyle={darkMapStyle}
+          // O estilo escuro (navy/gold) do Google Maps SDK no Android renderiza
+          // como "modo noturno" mesmo de dia — visualmente diferente do MapKit
+          // (iOS), que aplica o mesmo customMapStyle de forma mais suave. Por
+          // isso, no Android usamos o estilo padrão (claro) do Maps.
+          customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
         >
           <Marker
             coordinate={{ latitude: location.lat, longitude: location.lng }}
