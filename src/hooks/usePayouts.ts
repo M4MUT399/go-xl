@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { callEdgeFunction } from '../lib/edgeFunction';
 
 export interface Payout {
   id: string;
@@ -50,44 +51,27 @@ export function usePayouts(driverId: string | undefined) {
   useEffect(() => { refresh(); }, [refresh]);
 
   /**
-   * Solicita repasse do saldo disponível.
-   * Cria o payout e vincula todas as corridas elegíveis a ele.
+   * Solicita repasse REAL do saldo disponível.
+   *
+   * Antes isto só inseria uma linha no banco (livro-razão). Agora delega à
+   * Edge Function `request-payout`, que é quem move o dinheiro: valida a conta
+   * conectada, soma as corridas elegíveis e cria o transfer no Stripe. Mover
+   * dinheiro nunca pode depender do cliente — o app só dispara e reconsulta.
    */
   const requestPayout = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     if (!driverId) return { ok: false, error: 'Não autenticado' };
     if (pendingBalance <= 0) return { ok: false, error: 'Sem saldo disponível' };
 
-    // Busca IDs das corridas elegíveis
-    const { data: eligible } = await supabase
-      .from('rides')
-      .select('id, driver_amount')
-      .eq('driver_id', driverId)
-      .eq('paid', true)
-      .is('payout_id', null)
-      .not('driver_amount', 'is', null);
-
-    if (!eligible || eligible.length === 0) return { ok: false, error: 'Sem corridas pagas para repassar' };
-
-    const rows = eligible as { id: string; driver_amount: number }[];
-    const total = Math.round(rows.reduce((s, r) => s + Number(r.driver_amount), 0) * 100) / 100;
-
-    // Cria o payout
-    const { data: payout, error } = await supabase
-      .from('payouts')
-      .insert({ driver_id: driverId, amount: total, rides_count: rows.length })
-      .select()
-      .single();
-
-    if (error || !payout) return { ok: false, error: error?.message ?? 'Erro ao criar repasse' };
-
-    // Vincula as corridas ao payout
-    await supabase
-      .from('rides')
-      .update({ payout_id: (payout as Payout).id })
-      .in('id', rows.map((r) => r.id));
-
-    await refresh();
-    return { ok: true };
+    try {
+      await callEdgeFunction<{ ok?: boolean }>('request-payout');
+      await refresh();
+      return { ok: true };
+    } catch (e: any) {
+      // Reconsulta mesmo em falha: o servidor pode ter registrado um repasse
+      // 'failed' no histórico (e devolvido as corridas ao saldo).
+      await refresh();
+      return { ok: false, error: e?.message ?? 'Não foi possível solicitar o repasse.' };
+    }
   }, [driverId, pendingBalance, refresh]);
 
   return { payouts, pendingBalance, pendingRidesCount, loading, refresh, requestPayout };
