@@ -61,17 +61,28 @@ export function useRideCallAlert(active: boolean) {
     }
 
     // Som em loop desde o início.
-    try {
-      playerRef.current?.seekTo(0);
-      playerRef.current?.play();
-    } catch {
-      // ignora — a chamada ainda funciona sem som
-    }
+    const startPlayback = () => {
+      try {
+        playerRef.current?.seekTo(0);
+        playerRef.current?.play();
+      } catch {
+        // ignora — a chamada ainda funciona sem som
+      }
+    };
+    startPlayback();
 
     // Vibração imediata + uma por ciclo do toque (em sincronia com o swell).
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     hapticTimer.current = setInterval(() => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      // Watchdog: o alerta DEVE se repetir até o motorista aceitar ou recusar.
+      // Se o loop nativo parar por qualquer motivo, reinicia a reprodução —
+      // enquanto `active` for true, o som nunca fica em silêncio.
+      try {
+        if (!playerRef.current?.playing) startPlayback();
+      } catch {
+        // ignora
+      }
     }, CALL_LOOP_MS);
 
     return stop;
