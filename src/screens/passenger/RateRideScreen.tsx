@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput,
-  Keyboard, Alert, ActivityIndicator,
+  Keyboard, Alert, ActivityIndicator, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -14,7 +15,6 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { tipRide } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
-import { calculateSplit, DRIVER_SHARE } from '../../lib/split';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
@@ -27,6 +27,7 @@ export function RateRideScreen({ navigation, route }: Props) {
   const { ride } = route.params;
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [rating, setRating]     = useState(5);
   const [comment, setComment]   = useState('');
   const [loading, setLoading]   = useState(false);
@@ -39,8 +40,7 @@ export function RateRideScreen({ navigation, route }: Props) {
   const [customTip, setCustomTip]       = useState('');
   const [tipLoading, setTipLoading]     = useState(false);
 
-  const fare = Number(ride.price) || 0;
-  const split = calculateSplit(fare);
+  const farePrice = Number(ride.price) || 0;
 
   function selectPreset(amount: number) {
     setTipDollars(amount);
@@ -241,21 +241,19 @@ export function RateRideScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Total da corrida</Text>
-            <Text style={styles.summaryValue}>{formatCurrency(ride.price)}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>  Motorista ({Math.round(DRIVER_SHARE * 100)}%)</Text>
-            <Text style={styles.splitDriver}>{formatCurrency(split.driverAmount)}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>  Taxa Go XL ({Math.round((1 - DRIVER_SHARE) * 100)}%)</Text>
-            <Text style={styles.splitPlatform}>{formatCurrency(split.platformFee)}</Text>
+            <Text style={styles.summaryValue}>{formatCurrency(farePrice)}</Text>
           </View>
           {finalTip >= 0.5 && (
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>  Gorjeta</Text>
-              <Text style={styles.splitDriver}>{formatCurrency(finalTip)}</Text>
-            </View>
+            <>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Gorjeta</Text>
+                <Text style={styles.splitDriver}>{formatCurrency(finalTip)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Total com gorjeta</Text>
+                <Text style={styles.summaryValue}>{formatCurrency(farePrice + finalTip)}</Text>
+              </View>
+            </>
           )}
           <View style={[styles.summaryRow, styles.payRow]}>
             <Text style={styles.summaryLabel}>Pagamento</Text>
@@ -264,7 +262,7 @@ export function RateRideScreen({ navigation, route }: Props) {
         </View>
 
         {/* ── Botões ── */}
-        <View style={styles.footer}>
+        <View style={[styles.footer, Platform.OS === 'android' && { paddingBottom: 8 + insets.bottom }]}>
           {tipLoading ? (
             <View style={styles.tipLoadingBox}>
               <ActivityIndicator color={colors.accent} />
