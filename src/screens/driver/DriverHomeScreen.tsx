@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
@@ -22,6 +23,7 @@ import { getConfig, getConfigDefault } from '../../lib/systemConfig';
 import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
 import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
+import { useScheduledOfferAlert } from '../../hooks/useScheduledOfferAlert';
 import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
 
@@ -31,6 +33,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   const [isOnline, setIsOnline] = useState(false);
   // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m)
   const { location } = useLocation({ watch: isOnline });
@@ -38,6 +41,8 @@ export function DriverHomeScreen({ navigation }: Props) {
   // P2: próxima corrida agendada confirmada por mim → banner fixo + alerta sonoro.
   const upcoming = useUpcomingScheduledRide(profile?.id);
   useScheduledReminderAlert(upcoming.imminent, upcoming.ride?.id ?? null);
+  // Item #4: sinal sonoro DISTINTO (arpejo) quando um novo agendamento chega.
+  useScheduledOfferAlert(pendingScheduledRide?.id ?? null);
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
   const duty = useDrivingLimit(profile?.id);
   const bgCheck = useBackgroundCheck(profile?.id);
@@ -209,6 +214,10 @@ export function DriverHomeScreen({ navigation }: Props) {
     const ok = await confirmScheduledRide(pendingScheduledRide.id);
     setConfirming(false);
     if (ok) {
+      // Item #5: após confirmar, fecha o banner e volta para o mapa principal,
+      // deixando o motorista livre para aguardar novas corridas. A agendada
+      // confirmada reaparece no banner fixo (useUpcomingScheduledRide).
+      setPendingScheduledRide(null);
       Alert.alert('✅ Corrida confirmada!', 'O passageiro foi notificado que você irá buscá-lo.');
     } else {
       Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
@@ -293,7 +302,7 @@ export function DriverHomeScreen({ navigation }: Props) {
       </SafeAreaView>
 
       {pendingScheduledRide && !pendingRide && (
-        <View style={styles.rideRequestSheet}>
+        <View style={[styles.rideRequestSheet, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
           <View style={styles.requestHandle} />
 
           <View style={styles.scheduledHeader}>
