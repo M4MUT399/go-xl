@@ -810,6 +810,13 @@ export function useDriverRide(driverId: string | undefined) {
       return null;
     }
 
+    // 1b) A corrida agora é DEFINITIVAMENTE deste motorista: o UPDATE atômico
+    //     com .eq('status','requesting') garante um único vencedor. Avisa os
+    //     OUTROS motoristas AGORA para que o overlay de chamada — e o som —
+    //     parem imediatamente. Não espera o SELECT/telemetria abaixo, que
+    //     podem levar vários segundos e deixariam o alerta tocando nos demais.
+    broadcastRideTaken(rideId, driverId);
+
     // 2) SELECT separado para confirmar e obter a corrida atualizada
     let data: unknown = null;
     let selectError: unknown = null;

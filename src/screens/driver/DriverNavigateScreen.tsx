@@ -150,6 +150,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   );
   const mapRef = useRef<MapView>(null);
   const lastCameraUpdate = useRef(0);
+  // Último rumo VÁLIDO do GPS. Quando o curso é desconhecido (parado ou GPS sem
+  // heading) mantemos o anterior em vez de "pular" para o norte — é assim que
+  // Waze/Uber giram o mapa continuamente no sentido do deslocamento.
+  const lastHeadingRef = useRef(0);
 
   useEffect(() => {
     if (!location) return;
@@ -165,20 +169,23 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }
   }, [location?.lat, location?.lng]);
 
-  // ── Modo navegação: câmera segue posição + heading (mapa gira como GPS real) ─
+  // ── Modo navegação: câmera segue posição + rumo (mapa gira como Waze/Uber) ──
   useEffect(() => {
     if (!location || !mapRef.current) return;
     const now = Date.now();
-    if (now - lastCameraUpdate.current < 1500) return;
+    if (now - lastCameraUpdate.current < 1000) return;
     lastCameraUpdate.current = now;
+    // Só atualiza o rumo quando o GPS informa um curso válido; caso contrário
+    // mantém o último (não volta ao norte quando o motorista para no sinal).
+    if (location.heading != null) lastHeadingRef.current = location.heading;
     mapRef.current.animateCamera(
       {
         center: { latitude: location.lat, longitude: location.lng },
-        heading: location.heading ?? 0,
-        zoom: 17,
-        pitch: 20,
+        heading: lastHeadingRef.current,
+        zoom: 17.5,
+        pitch: 55,
       },
-      { duration: 800 },
+      { duration: 700 },
     );
   }, [location?.lat, location?.lng, location?.heading]);
 
@@ -314,12 +321,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   function recenter() {
     if (!location || !mapRef.current) return;
     lastCameraUpdate.current = 0; // força update imediato no próximo ciclo
+    if (location.heading != null) lastHeadingRef.current = location.heading;
     mapRef.current.animateCamera(
       {
         center: { latitude: location.lat, longitude: location.lng },
-        heading: location.heading ?? 0,
-        zoom: 17,
-        pitch: 20,
+        heading: lastHeadingRef.current,
+        zoom: 17.5,
+        pitch: 55,
       },
       { duration: 300 },
     );
@@ -357,11 +365,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           <Marker
             coordinate={{ latitude: location.lat, longitude: location.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
-            rotation={location.heading ?? 0}
+            rotation={location.heading ?? lastHeadingRef.current}
             flat
             tracksViewChanges={tracksCar}
           >
-            <NavChevron scale={0.95} />
+            <NavChevron scale={1.5} />
           </Marker>
         )}
         {location && (

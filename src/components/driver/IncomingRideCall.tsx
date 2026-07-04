@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../hooks/useTheme';
@@ -277,8 +278,20 @@ export function IncomingRideCall({
           </ScrollView>
 
           {/* Ações — paddingBottom respeita a barra de navegação (Android) e o
-              home-indicator (iOS); mínimo de 12 para não colar na borda. */}
-          <View style={[styles.actions, { paddingBottom: Math.max(insets.bottom, 12) + 6 }]}>
+              home-indicator (iOS). No Android, dentro do <Modal>, o inset pode
+              vir subestimado; por isso aplicamos um piso generoso para os botões
+              NUNCA ficarem sob a barra de navegação nativa. */}
+          <View
+            style={[
+              styles.actions,
+              {
+                paddingBottom:
+                  Platform.OS === 'android'
+                    ? Math.max(insets.bottom, 24) + 28
+                    : Math.max(insets.bottom, 12) + 6,
+              },
+            ]}
+          >
             <TouchableOpacity
               style={styles.rejectBtn}
               onPress={onReject}
