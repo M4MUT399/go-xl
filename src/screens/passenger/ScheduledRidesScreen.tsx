@@ -13,7 +13,6 @@ import { useAuth } from '../../hooks/useAuth';
 import { useScheduledRides } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
-import { showLocalNotification } from '../../lib/notifications';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'ScheduledRides'> };
 
@@ -61,7 +60,11 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     });
   }, [rides]);
 
-  // Realtime: detecta quando um motorista confirma uma corrida agendada
+  // Realtime: detecta quando um motorista confirma uma corrida agendada.
+  // Apenas atualiza a lista (para exibir o motorista confirmado) — o POPUP de
+  // confirmação é responsabilidade exclusiva do useNotifications (banner in-app
+  // em foreground + push em background). Disparar a notificação aqui também
+  // gerava avisos duplicados para o passageiro.
   useEffect(() => {
     if (!profile?.id) return;
     const channel = supabase
@@ -76,11 +79,6 @@ export function ScheduledRidesScreen({ navigation }: Props) {
             (updated.status === 'accepted' && updated.driver_id)
           ) {
             refresh();
-            showLocalNotification(
-              '🗓️ Motorista confirmado!',
-              'Um motorista aceitou seu agendamento. Confira os detalhes.',
-              { type: 'schedule_confirmed', rideId: updated.id }
-            );
           }
         }
       )

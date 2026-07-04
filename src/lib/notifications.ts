@@ -3,13 +3,33 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { reportError } from './errorReporting';
 
+/**
+ * Tipos de push que, EM FOREGROUND, já são exibidos pelo banner in-app do app
+ * (NotificationBanner). Mostrar também o banner do sistema geraria aviso em
+ * dobro — então suprimimos o banner/som do sistema apenas quando o app está
+ * aberto. Em BACKGROUND o handler não é consultado, e o sistema entrega o push
+ * normalmente (aviso único).
+ */
+const FOREGROUND_SILENT_TYPES = new Set(['schedule_confirmed', 'ride_accepted', 'driver_released']);
+
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    const type = (notification.request.content.data as { type?: string } | undefined)?.type;
+    if (type && FOREGROUND_SILENT_TYPES.has(type)) {
+      return {
+        shouldShowBanner: false,
+        shouldShowList: true,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
+    return {
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 /**

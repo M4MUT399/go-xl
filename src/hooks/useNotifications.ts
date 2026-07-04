@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase';
 import {
   ensureNotificationPermissions,
   registerForPushNotificationsAsync,
-  showLocalNotification,
 } from '../lib/notifications';
 import { activeChatRideId } from '../lib/activeChatRide';
 
@@ -32,6 +31,10 @@ export function useNotifications(
   /** Mensagem para o banner in-app */
   const [inAppMessage, setInAppMessage] = useState<InAppMessage | null>(null);
 
+  // Exibe SOMENTE o banner in-app (sem notificação do sistema). Em foreground o
+  // banner já é suficiente; o aviso do sistema/background é entregue por push
+  // remoto no lado do motorista. Disparar também showLocalNotification aqui
+  // causava banner duplicado (um dos "4 popups" reportados no aceite).
   const fireNotification = useCallback((
     title: string,
     body: string,
@@ -39,7 +42,6 @@ export function useNotifications(
     chatTitle?: string,
   ) => {
     setInAppMessage({ title, body, rideId, chatTitle });
-    showLocalNotification(title, body, { rideId });
   }, []);
 
   /**
