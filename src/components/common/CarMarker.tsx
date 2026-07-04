@@ -12,59 +12,57 @@ const LOGO = require('../../../assets/icon.png');
  *   ◆   ← seta de sentido em camadas (sombra + contorno branco + accent +
  *  (GX)    ápice escuro). Gira conforme o `heading` do GPS.
  *
- * Decisões de layout:
- *   - A LOGO fica SEMPRE em pé (logo girando/de cabeça pra baixo fica feia).
- *     Só a SETA gira — a rotação é aplicada num grupo próprio, NÃO via prop
- *     `rotation` do <Marker> (senão a logo giraria junto).
- *   - O `container` é DIMENSIONADO A PARTIR do alcance máximo da seta + margem.
- *     No Android o <Marker> rasteriza o filho num bitmap e RECORTA tudo que
- *     passa das bordas do container; por isso o container precisa conter o
- *     círculo, a sombra e a seta INTEIRA (em qualquer ângulo de rotação) com
- *     folga. Era essa a causa do "logo/círculo cortado" no Android.
+ * Lições aprendidas (Android):
+ *   - O <Marker> no Android rasteriza a view-filha num BITMAP. Se o container
+ *     for grande com o círculo pequeno no meio (muita área transparente), o
+ *     círculo "some"/fica minúsculo. Por isso o container é MODESTO (~74) e o
+ *     círculo OCUPA a maior parte dele (mesma proporção do original que já
+ *     funcionava), ficando idêntico ao iOS.
+ *   - Nada desenhado pode passar das bordas do container, senão o Android
+ *     recorta. A seta é compacta e encostada no círculo (base levemente por
+ *     baixo) para o ápice, em QUALQUER rotação, caber com folga.
+ *   - Só a SETA gira (logo sempre em pé). A rotação fica numa única camada
+ *     (sem camadas full-fill aninhadas, que faziam o marcador sumir no Android).
  *
  * `scale`   aumenta/reduz tudo proporcionalmente (1 = padrão).
  * `heading` em graus (0 = norte, 90 = leste…).
  */
 export function CarMarker({ scale = 1, heading = 0 }: { scale?: number; heading?: number }) {
   const { colors } = useTheme();
+  const s = scale;
 
-  // — Círculo com a logo —
-  const circle = 44 * scale;
-  const circleBorder = 3 * scale;
-  const circleOuterR = circle / 2 + circleBorder; // raio externo do círculo
-  const shadow = 42 * scale;
+  const container = 74 * s;
+  const center = container / 2;
+  const circle = 44 * s;          // círculo grande e prominente (igual ao iOS)
+  const circleBorder = 3 * s;
+  const shadow = 42 * s;
 
-  // — Seta de sentido (arrowhead em camadas, apontando p/ CIMA) —
-  const arrowH = 20 * scale;     // altura do triângulo principal
-  const arrowHW = 12.5 * scale;  // meia-largura da base
-  const gap = 1 * scale;         // folga entre base da seta e a borda do círculo
-  const tipY = circleOuterR + gap + arrowH; // distância do centro até o ÁPICE
+  // Seta (chevron em camadas). apexY = distância do ápice ao centro; mantida
+  // curta para o desenho caber no container em qualquer rotação.
+  const apexY = 33 * s;
+  const aW = 9 * s,  aH = 12 * s;   // triângulo accent (principal)
+  const oW = 11.5 * s, oH = 15 * s; // contorno branco + sombra (um pouco maiores)
+  const kW = 3.5 * s, kH = 5 * s;   // ápice escuro (dá volume/premium)
 
-  // Container grande o suficiente p/ conter o ápice (em qualquer rotação) + margem.
-  const margin = 8 * scale;
-  const container = 2 * (tipY + margin);
-
-  // translateY de cada camada — apexes alinhados no mesmo ponto (-tipY do centro).
-  const outlineH = arrowH + 3 * scale;
-  const outlineHW = arrowHW + 2.5 * scale;
-  const tOutline = -(tipY + 1.5 * scale) + outlineH / 2; // contorno um tico acima
-  const tShadow = tOutline + 2 * scale;                  // sombra deslocada p/ baixo
-  const tAccent = -tipY + arrowH / 2;
-  const apexH = arrowH * 0.34;
-  const apexHW = arrowHW * 0.36;
-  const tApex = -tipY + apexH / 2;
-
-  const triangle = (hw: number, h: number, color: string) => ({
-    width: 0,
-    height: 0,
-    borderStyle: 'solid' as const,
-    borderLeftWidth: hw,
-    borderRightWidth: hw,
-    borderBottomWidth: h,
-    borderBottomColor: color,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-  });
+  // `top`/`left` absolutos centralizam cada triângulo sem camadas aninhadas.
+  const tri = (bw: number, bh: number, color: string, top: number) => (
+    <View
+      style={{
+        position: 'absolute',
+        top,
+        left: center - bw,
+        width: 0,
+        height: 0,
+        borderStyle: 'solid',
+        borderLeftWidth: bw,
+        borderRightWidth: bw,
+        borderBottomWidth: bh,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+        borderBottomColor: color,
+      }}
+    />
+  );
 
   return (
     <View
@@ -76,18 +74,13 @@ export function CarMarker({ scale = 1, heading = 0 }: { scale?: number; heading?
         <View
           style={[
             styles.circleShadow,
-            {
-              width: shadow,
-              height: shadow,
-              borderRadius: shadow / 2,
-              transform: [{ translateY: 4 * scale }],
-            },
+            { width: shadow, height: shadow, borderRadius: shadow / 2, transform: [{ translateY: 4 * s }] },
           ]}
         />
       </View>
 
       {/* círculo + LOGO — NÃO gira, logo sempre legível */}
-      <View style={styles.layer} pointerEvents="none">
+      <View collapsable={false} style={styles.layer} pointerEvents="none">
         <View
           style={[
             styles.circle,
@@ -109,28 +102,19 @@ export function CarMarker({ scale = 1, heading = 0 }: { scale?: number; heading?
         </View>
       </View>
 
-      {/* GRUPO da seta — só ele gira conforme o heading do GPS.
-          Todas as camadas empilhadas no mesmo centro do container. */}
+      {/* seta de sentido — só ela gira conforme o heading do GPS */}
       <View
         style={[styles.layer, { transform: [{ rotate: `${heading}deg` }] }]}
         pointerEvents="none"
       >
-        {/* sombra da seta */}
-        <View style={styles.layer}>
-          <View style={[triangle(outlineHW, outlineH, 'rgba(0,0,0,0.22)'), { transform: [{ translateY: tShadow }] }]} />
-        </View>
+        {/* sombra da seta (atrás, deslocada p/ baixo) */}
+        {tri(oW, oH, 'rgba(0,0,0,0.22)', center - apexY + 2 * s)}
         {/* contorno branco — legibilidade sobre qualquer cor de mapa */}
-        <View style={styles.layer}>
-          <View style={[triangle(outlineHW, outlineH, '#ffffff'), { transform: [{ translateY: tOutline }] }]} />
-        </View>
-        {/* preenchimento accent (dourado) */}
-        <View style={styles.layer}>
-          <View style={[triangle(arrowHW, arrowH, colors.accent), { transform: [{ translateY: tAccent }] }]} />
-        </View>
-        {/* ápice escuro — ilusão de espessura/3-D, dá o toque premium */}
-        <View style={styles.layer}>
-          <View style={[triangle(apexHW, apexH, colors.primary), { transform: [{ translateY: tApex }] }]} />
-        </View>
+        {tri(oW, oH, '#ffffff', center - apexY)}
+        {/* preenchimento accent (dourado), ápice 1.5px abaixo → o branco aparece */}
+        {tri(aW, aH, colors.accent, center - apexY + 1.5 * s)}
+        {/* ápice escuro — ilusão de espessura/3-D, toque premium */}
+        {tri(kW, kH, colors.primary, center - apexY + 1.5 * s)}
       </View>
     </View>
   );
@@ -142,7 +126,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   // Camada que preenche o container e centraliza seu único filho. Usada para
-  // empilhar (overlay) sombra, círculo e seta todos no mesmo centro.
+  // empilhar (overlay) sombra, círculo e a seta rotativa no mesmo centro.
   layer: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
