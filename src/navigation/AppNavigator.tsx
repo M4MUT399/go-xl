@@ -349,8 +349,12 @@ export function AppNavigator() {
 
   const isAuthenticated = !!session;
   const isDriver = profile?.type === 'driver';
-  // Passageiro sem cartão cadastrado → obriga onboarding antes de entrar no app
-  const needsCard = isAuthenticated && !isDriver && !profile?.stripe_payment_method_id;
+  // Passageiro sem cartão cadastrado → obriga onboarding antes de entrar no app.
+  // IMPORTANTE: só força a tela quando o perfil JÁ carregou e de fato não tem
+  // cartão. Se o perfil ainda não veio (null por falha/lentidão de rede), NÃO
+  // prende quem já é cadastrado e tem cartão na tela de "adicionar cartão" — o
+  // usuário com cadastro completo entra direto no app.
+  const needsCard = isAuthenticated && !isDriver && !!profile && !profile.stripe_payment_method_id;
 
   return (
     <View style={{ flex: 1 }}>
