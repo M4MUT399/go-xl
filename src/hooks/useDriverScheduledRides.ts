@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
-import { getConfig } from '../lib/systemConfig';
 import type { RideRecord } from '../types';
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
@@ -118,10 +117,7 @@ export function useDriverScheduledRides(driverId: string | undefined) {
     // 1) Expira rides vencidos antes de atualizar a lista
     await expireOldScheduledRides();
 
-    // Antecedência dinâmica (min) — configurável por jurisdição, fallback 60.
-    const leadMinutes = await getConfig('scheduled_ride_lead_minutes');
     const now = new Date();
-    const windowEnd = new Date(now.getTime() + leadMinutes * 60_000);
 
     const [{ data: avail }, { data: mine }] = await Promise.all([
       supabase
@@ -129,9 +125,11 @@ export function useDriverScheduledRides(driverId: string | undefined) {
         .select('*')
         .eq('status', 'scheduled')
         .is('driver_id', null)
-        // Janela dinâmica: já passou? não mostra. Além da antecedência? também não.
+        // Mostra TODOS os agendamentos futuros ainda sem motorista — o motorista
+        // pode confirmar com qualquer antecedência (não apenas na última hora).
+        // Sem isso, agendamentos distantes nunca apareciam para aceitar, e a
+        // corrida jamais ficava confirmada para ambos.
         .gte('scheduled_for', now.toISOString())
-        .lte('scheduled_for', windowEnd.toISOString())
         .order('scheduled_for', { ascending: true }),
       supabase
         .from('rides')
