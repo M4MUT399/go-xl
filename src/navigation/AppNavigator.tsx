@@ -15,6 +15,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { AppTheme } from '../constants/theme';
 import { useNotifications, InAppMessage } from '../hooks/useNotifications';
+import { useDriverReminderScheduler } from '../hooks/useDriverReminderScheduler';
 import { setNotifyHandler } from '../lib/inAppNotify';
 import { useTranslation, type Lang } from '../i18n';
 
@@ -37,6 +38,7 @@ import { DriverHomeScreen } from '../screens/driver/DriverHomeScreen';
 import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
 import { DriverScheduledRidesScreen } from '../screens/driver/DriverScheduledRidesScreen';
 import { EarningsScreen } from '../screens/driver/EarningsScreen';
+import { DriverReminderSettingsScreen } from '../screens/driver/DriverReminderSettingsScreen';
 import { VehicleFormScreen } from '../screens/driver/VehicleFormScreen';
 import { DriverVerificationScreen } from '../screens/driver/DriverVerificationScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
@@ -187,6 +189,11 @@ function DriverTabs() {
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>💰</Text> }}
       />
       <Tab.Screen
+        name="Alertas"
+        component={DriverReminderSettingsScreen}
+        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🔔</Text> }}
+      />
+      <Tab.Screen
         name="Perfil"
         component={ProfileScreen}
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
@@ -236,6 +243,10 @@ export function AppNavigator() {
     session?.user.id,
     profile?.type as 'passenger' | 'driver' | undefined
   );
+
+  // Lembretes escalonados (2h/1h/30m/15m) das corridas agendadas do motorista.
+  // Dispara mesmo com o app fechado; no-op para passageiro / perfil não carregado.
+  useDriverReminderScheduler(profile?.type === 'driver' ? profile.id : undefined);
 
   // Conecta notifyInApp (usado por useChatAlert) ao banner do AppNavigator.
   // Garante que mensagens via postgres_changes também apareçam quando o broadcast falhar.
