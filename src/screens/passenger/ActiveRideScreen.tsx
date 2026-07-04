@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
@@ -36,6 +37,7 @@ const STATUS_LABELS: Record<RideStatus, string> = {
 export function ActiveRideScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { cancelRide } = usePassengerRide(profile?.id);
   const isFocused = useIsFocused();
   const [ride, setRide] = useState<Ride>(route.params.ride);
@@ -301,7 +303,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
       )}
       </View>
 
-      <View style={styles.bottomSheet}>
+      <View style={[styles.bottomSheet, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
         <View style={styles.handle} />
 
         {/* ── Caixa preta ETA (idêntica à do motorista) ── */}

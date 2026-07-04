@@ -4,6 +4,7 @@ import {
   Platform, Alert, ScrollView,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
 import { RootStackParamList, Ride, RideStatus } from '../../types';
@@ -95,6 +96,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const { ride } = route.params;
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   // watch: true → posição contínua durante a navegação
   const { location } = useLocation({ watch: true });
   const { updateRideStatus, refundRide } = useDriverRide(profile?.id);
@@ -428,7 +430,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       </SafeAreaView>
 
       {/* ── Bottom sheet ── */}
-      <View style={styles.bottomSheet}>
+      <View style={[styles.bottomSheet, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
         <View style={styles.handle} />
 
         {/* Próximas manobras */}

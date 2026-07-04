@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, Alert,
-  ActivityIndicator, Image, Animated, useWindowDimensions,
+  ActivityIndicator, Image, Animated, useWindowDimensions, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, {
   Defs, LinearGradient as SvgGrad, Stop,
   Rect, Circle, Line,
@@ -206,6 +207,7 @@ function ProcessingScreen({ onEscape }: { onEscape?: () => void }) {
 export function AddCardOnboardingScreen() {
   const { profile, session, refreshProfile, patchProfile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [cardInfo, setCardInfo] = useState<CardInfo>({
@@ -445,7 +447,7 @@ export function AddCardOnboardingScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      <View style={[styles.content, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
         <View style={styles.iconWrap}>
           <Text style={styles.icon}>💳</Text>
         </View>

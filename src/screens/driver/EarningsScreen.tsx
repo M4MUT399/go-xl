@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, RefreshControl, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, RefreshControl, TouchableOpacity, Alert, ActivityIndicator, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
@@ -38,6 +39,7 @@ function startOf(period: Period): number {
 export function EarningsScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
   const { payouts, pendingBalance, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
   const { status: connect, loading: connectLoading, onboarding, refresh: refreshConnect, startOnboarding } = useConnectAccount(profile?.id);
@@ -133,7 +135,7 @@ export function EarningsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, Platform.OS === 'android' && { paddingBottom: 24 + insets.bottom }]}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} tintColor={colors.accent} />}
       >
         <Text style={styles.title}>Seus ganhos</Text>

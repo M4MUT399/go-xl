@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, FlatList,
-  TouchableOpacity, ActivityIndicator, RefreshControl, Alert,
+  TouchableOpacity, ActivityIndicator, RefreshControl, Alert, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
@@ -200,6 +201,7 @@ export function DriverScheduledRidesScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { available, claimed, loading, refresh, release } = useDriverScheduledRides(profile?.id);
   const { claimScheduledRide, activate } = useScheduledRides(profile?.id);
   const [claiming, setClaiming] = useState<string | null>(null);
@@ -343,7 +345,7 @@ export function DriverScheduledRidesScreen() {
               )}
             </>
           }
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}
         />
       )}
     </SafeAreaView>

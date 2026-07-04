@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../hooks/useAuth';
 import { useRideHistory } from '../../hooks/useRideHistory';
@@ -20,6 +21,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 export function TripHistoryScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { rides, loading, error, refresh } = useRideHistory(profile?.id, 'passenger');
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -61,7 +63,7 @@ export function TripHistoryScreen() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' && { paddingBottom: 24 + insets.bottom }]}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
           ListEmptyComponent={
             error ? (

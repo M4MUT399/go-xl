@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity,
   FlatList, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -23,6 +24,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const { messages, sendMessage } = useMessages(rideId, profile?.id);
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<Message>>(null);
 
@@ -97,7 +99,7 @@ export function ChatScreen({ navigation, route }: Props) {
           }}
         />
 
-        <View style={styles.inputBar}>
+        <View style={[styles.inputBar, { paddingBottom: 10 + (Platform.OS === 'android' ? insets.bottom : 0) }]}>
           <TextInput
             style={styles.input}
             value={text}

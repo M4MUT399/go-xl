@@ -4,6 +4,7 @@ import {
   TextInput, ScrollView, Alert, ActivityIndicator, Modal, Platform,
   KeyboardAvoidingView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -31,6 +32,7 @@ type Props = {
 export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { location } = useLocation();
   const { requestRide, scheduleRide } = usePassengerRide(profile?.id);
 
@@ -383,7 +385,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
         <Modal visible={showPicker} transparent animationType="slide" onRequestClose={() => setShowPicker(false)}>
           <View style={styles.modalOverlay}>
-            <View style={styles.modalSheet}>
+            <View style={[styles.modalSheet, Platform.OS === 'android' && { paddingBottom: 36 + insets.bottom }]}>
               <Text style={styles.modalTitle}>Agendar corrida</Text>
               <Text style={styles.modalSub}>Escolha data e hora</Text>
 

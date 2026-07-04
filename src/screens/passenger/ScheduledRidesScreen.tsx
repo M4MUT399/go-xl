@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert,
+  ActivityIndicator, RefreshControl, Alert, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, RideRecord, Ride } from '../../types';
@@ -30,6 +31,7 @@ interface DriverInfo {
 export function ScheduledRidesScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { rides, loading, refresh, activate, cancel } = useScheduledRides(profile?.id);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
 
@@ -157,7 +159,7 @@ export function ScheduledRidesScreen({ navigation }: Props) {
         <FlatList
           data={rides}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' && { paddingBottom: 24 + insets.bottom }]}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
           ListEmptyComponent={
             <View style={styles.empty}>

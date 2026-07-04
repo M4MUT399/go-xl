@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Animated, Alert,
+  Animated, Alert, Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../types';
@@ -25,6 +26,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const { cancelRide } = usePassengerRide(profile?.id);
+  const insets = useSafeAreaInsets();
   const [elapsed, setElapsed] = useState(0);
 
   const styles = makeStyles(colors);
@@ -193,7 +195,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
         </View>
       </View>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
         <Button title="Cancelar corrida" onPress={handleCancel} variant="outline" />
       </View>
     </SafeAreaView>
