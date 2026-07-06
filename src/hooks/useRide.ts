@@ -164,6 +164,26 @@ async function notifySpecificDriver(driverId: string, destination: string, price
   }
 }
 
+/** Notifica o motorista vinculado ao QR code sobre um AGENDAMENTO (não uma corrida imediata). */
+async function notifySpecificDriverScheduled(driverId: string, destination: string, price: number, scheduledFor: Date) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', driverId)
+    .single();
+
+  const token = (data as { push_token: string | null })?.push_token;
+  if (token) {
+    const when = `${scheduledFor.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${scheduledFor.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    await sendPushAsync([{
+      to: token,
+      title: '🗓️📲 Agendamento via QR Code — Executive XL',
+      body: `Passageiro agendou pelo seu QR para ${when}. Destino: ${destination} • ${formatCurrency(price)}`,
+      data: { type: 'new_scheduled_ride' },
+    }]);
+  }
+}
+
 /**
  * Broadcast direto para o motorista específico (não precisa de push token).
  * Usado como fallback confiável no Expo Go / desenvolvimento.
@@ -312,6 +332,27 @@ async function notifyPassengerScheduleConfirmed(passengerId: string) {
         title: '🗓️ Motorista confirmado!',
         body: 'Um motorista aceitou seu agendamento. Você pode ver os detalhes na tela de corridas agendadas.',
         data: { type: 'schedule_confirmed' },
+      },
+    ]);
+  }
+}
+
+/** Avisa o passageiro que o motorista NÃO confirmou o agendamento travado por QR. */
+async function notifyPassengerScheduleRejected(passengerId: string) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('push_token')
+    .eq('id', passengerId)
+    .single();
+
+  const token = (data as { push_token: string | null })?.push_token;
+  if (token) {
+    await sendPushAsync([
+      {
+        to: token,
+        title: '🗓️ Agendamento não confirmado',
+        body: 'O motorista não pôde confirmar seu agendamento. Estamos procurando outro motorista para você.',
+        data: { type: 'schedule_rejected' },
       },
     ]);
   }
@@ -480,7 +521,8 @@ export function usePassengerRide(passengerId: string | undefined) {
     origin: Location,
     destination: Location,
     scheduledFor: Date,
-    routeInfo?: { distanceKm: number; durationMin: number }
+    routeInfo?: { distanceKm: number; durationMin: number },
+    options?: { lockedDriverId?: string }
   ): Promise<Ride | null> => {
     if (!passengerId) return null;
 
@@ -525,13 +567,22 @@ export function usePassengerRide(passengerId: string | undefined) {
         scheduled_for: scheduledFor.toISOString(),
         driver_amount: driverAmount,
         platform_fee: platformFee,
+        // QR: pré-vincula o motorista; ele ainda precisa aceitar/recusar o agendamento
+        ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
       })
       .select()
       .single();
 
     if (error) return null;
-    // Notifica motoristas online imediatamente — igual ao requestRide
-    notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng });
+    if (options?.lockedDriverId) {
+      // Broadcast in-app (confiável mesmo sem push token no Expo Go)
+      broadcastToDriver(options.lockedDriverId, data);
+      // Push remoto como reforço (funciona em produção)
+      notifySpecificDriverScheduled(options.lockedDriverId, destination.address, price, scheduledFor);
+    } else {
+      // Notifica motoristas online imediatamente — igual ao requestRide
+      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng });
+    }
     return data as Ride;
   }, [passengerId]);
 
@@ -604,7 +655,10 @@ export function useScheduledRides(passengerId: string | undefined) {
   const claimScheduledRide = useCallback(async (rideId: string, driverId: string): Promise<boolean> => {
     const { error } = await supabase
       .from('rides')
-      .update({ driver_id: driverId })
+      // accepted_at marca a decisão do motorista — reivindicar do pool aberto
+      // já É a confirmação, então grava junto (mesma semântica usada pelo
+      // fluxo de agendamento travado por QR, ver confirmQrScheduledRide).
+      .update({ driver_id: driverId, accepted_at: new Date().toISOString() })
       .eq('id', rideId)
       .is('driver_id', null) // apenas se ainda sem motorista (evita dupla confirmação)
       .eq('status', 'scheduled');
@@ -625,12 +679,17 @@ export function useDriverRide(driverId: string | undefined) {
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
   const pendingRideIdRef = useRef<string | null>(null);
+  const pendingScheduledRideIdRef = useRef<string | null>(null);
   const activeRideRef = useRef<Ride | null>(null);
 
   // Mantém ref sincronizada para usar dentro de setInterval sem stale closure
   useEffect(() => {
     pendingRideIdRef.current = pendingRide?.id ?? null;
   }, [pendingRide?.id]);
+
+  useEffect(() => {
+    pendingScheduledRideIdRef.current = pendingScheduledRide?.id ?? null;
+  }, [pendingScheduledRide?.id]);
 
   // Mantém ref da corrida ativa sincronizada — usada para decidir, fora de
   // qualquer closure de handler, se uma NOVA chamada de corrida pode chegar
@@ -671,11 +730,30 @@ export function useDriverRide(driverId: string | undefined) {
         }
       });
 
-    // Corrida agendada disponível — apenas dentro da janela de 1h
-    {
+    (async () => {
+      // Agendamento travado por QR aguardando a decisão deste motorista — tem
+      // prioridade sobre o pool aberto e NÃO respeita a janela de 1h (o
+      // passageiro escolheu este motorista especificamente e precisa de uma
+      // resposta o quanto antes).
+      const { data: qrScheduled } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('driver_id', driverId)
+        .eq('status', 'scheduled')
+        .is('accepted_at', null)
+        .order('scheduled_for', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (qrScheduled) {
+        setPendingScheduledRide(qrScheduled as Ride);
+        return;
+      }
+
+      // Corrida agendada disponível no pool aberto — apenas dentro da janela de 1h
       const now = new Date();
       const windowEnd = new Date(now.getTime() + 60 * 60 * 1000);
-      supabase
+      const { data: poolRide } = await supabase
         .from('rides')
         .select('*')
         .eq('status', 'scheduled')
@@ -684,11 +762,10 @@ export function useDriverRide(driverId: string | undefined) {
         .lte('scheduled_for', windowEnd.toISOString())
         .order('scheduled_for', { ascending: true })
         .limit(1)
-        .single()
-        .then(({ data }) => {
-          if (data) setPendingScheduledRide(data as Ride);
-        });
-    }
+        .maybeSingle();
+
+      if (poolRide) setPendingScheduledRide(poolRide as Ride);
+    })();
   }, [driverId]);
 
   // ─── Polling: verifica corrida QR a cada 4s ─────────────────────────────────
@@ -710,6 +787,31 @@ export function useDriverRide(driverId: string | undefined) {
         canReceiveNewRideOffer(activeRideRef.current, data as Ride)
       ) {
         setPendingRide(data as Ride);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [driverId]);
+
+  // ─── Polling: verifica agendamento QR-travado aguardando decisão a cada 4s ──
+  // Mesmo motivo do polling acima — garante entrega mesmo sem realtime, já que
+  // este caso NÃO depende da janela de 1h (precisa aparecer assim que criado).
+  useEffect(() => {
+    if (!driverId) return;
+
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('driver_id', driverId)
+        .eq('status', 'scheduled')
+        .is('accepted_at', null)
+        .order('scheduled_for', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (data && (data as Ride).id !== pendingScheduledRideIdRef.current) {
+        setPendingScheduledRide(data as Ride);
       }
     }, 4000);
 
@@ -749,6 +851,12 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
+          if (ride.driver_id === driverId) {
+            // Agendamento travado por QR para ESTE motorista — avisa sempre,
+            // sem restrição de janela de 1h (ele precisa decidir já).
+            setPendingScheduledRide(ride);
+            return;
+          }
           if (!ride.driver_id && ride.scheduled_for) {
             const now = Date.now();
             const scheduledAt = new Date(ride.scheduled_for).getTime();
@@ -942,7 +1050,13 @@ export function useDriverRide(driverId: string | undefined) {
   const confirmScheduledRide = useCallback(async (rideId: string): Promise<boolean> => {
     const { data, error } = await supabase
       .from('rides')
-      .update({ driver_id: driverId })
+      // accepted_at marca a decisão do motorista — reivindicar do pool aberto
+      // já É a confirmação, então grava junto. Isso mantém accepted_at com o
+      // mesmo significado ("motorista confirmou") tanto aqui quanto no fluxo
+      // de agendamento travado por QR (confirmQrScheduledRide) — evitando que
+      // uma corrida recém-reivindicada seja confundida com uma ainda aguardando
+      // decisão nas checagens de polling/realtime abaixo.
+      .update({ driver_id: driverId, accepted_at: new Date().toISOString() })
       .eq('id', rideId)
       .is('driver_id', null)
       .eq('status', 'scheduled')
@@ -963,6 +1077,61 @@ export function useDriverRide(driverId: string | undefined) {
     return true;
   }, [driverId]);
 
+  /**
+   * Confirma um agendamento que já veio TRAVADO para este motorista (via QR
+   * code do passageiro) — diferente de `confirmScheduledRide` (que reivindica
+   * uma corrida do pool aberto, ainda sem motorista). Aqui `driver_id` já é
+   * deste motorista desde a criação; só falta gravar `accepted_at` para sair
+   * do estado "aguardando decisão".
+   */
+  const confirmQrScheduledRide = useCallback(async (rideId: string): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from('rides')
+      .update({ accepted_at: new Date().toISOString() })
+      .eq('id', rideId)
+      .eq('driver_id', driverId)
+      .eq('status', 'scheduled')
+      .is('accepted_at', null)
+      .select()
+      .single();
+
+    if (error || !data) return false;
+    setPendingScheduledRide(null);
+
+    const ride = data as Ride;
+    // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
+    broadcastToPassenger(ride.passenger_id, ride.id);
+    // Tenta push remoto como fallback
+    notifyPassengerScheduleConfirmed(ride.passenger_id);
+
+    return true;
+  }, [driverId]);
+
+  /**
+   * Recusa um agendamento travado por QR: libera `driver_id` de volta para
+   * `null`, devolvendo a corrida ao pool aberto para outros motoristas, e
+   * avisa o passageiro que este motorista não pôde confirmar.
+   */
+  const rejectScheduledRide = useCallback(async (rideId: string): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from('rides')
+      .update({ driver_id: null })
+      .eq('id', rideId)
+      .eq('driver_id', driverId)
+      .eq('status', 'scheduled')
+      .is('accepted_at', null)
+      .select()
+      .single();
+
+    if (error || !data) return false;
+    setPendingScheduledRide(null);
+
+    const ride = data as Ride;
+    notifyPassengerScheduleRejected(ride.passenger_id);
+
+    return true;
+  }, [driverId]);
+
   const updateRideStatus = useCallback(async (rideId: string, status: RideStatus) => {
     await supabase
       .from('rides')
@@ -973,6 +1142,7 @@ export function useDriverRide(driverId: string | undefined) {
   return {
     pendingRide, pendingScheduledRide,
     activeRide, acceptRide, confirmScheduledRide,
+    confirmQrScheduledRide, rejectScheduledRide,
     updateRideStatus, setPendingRide, setPendingScheduledRide,
     refundRide,
   };

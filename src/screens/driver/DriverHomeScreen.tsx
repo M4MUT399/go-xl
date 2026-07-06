@@ -19,6 +19,7 @@ import { DutyStatusBanner } from '../../components/driver/DutyStatusBanner';
 import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
 import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
 import { useScheduledOfferAlert } from '../../hooks/useScheduledOfferAlert';
+import { useRideCallAlert } from '../../hooks/useRideCallAlert';
 import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
 
@@ -32,7 +33,14 @@ export function DriverHomeScreen({ navigation }: Props) {
   // Estado online/localização/assinatura de corridas agora vive em um Provider
   // único (DriverRideContext), montado fora da Stack.Navigator — sobrevive à
   // navegação entre telas e é a mesma instância usada por GlobalDriverRideOverlay.
-  const { isOnline, setIsOnline, location, pendingRide, pendingScheduledRide, setPendingScheduledRide, confirmScheduledRide } = useDriverRideContext();
+  const {
+    isOnline, setIsOnline, location, pendingRide, pendingScheduledRide, setPendingScheduledRide,
+    confirmScheduledRide, confirmQrScheduledRide, rejectScheduledRide,
+  } = useDriverRideContext();
+  // Agendamento travado por QR (o passageiro escolheu este motorista pelo
+  // código dele): diferente do pool aberto, aqui `driver_id` já vem preenchido
+  // desde a criação — usamos isso para diferenciar o banner e o alerta sonoro.
+  const isQrLockedSchedule = !!pendingScheduledRide?.driver_id;
   // P2: próxima corrida agendada confirmada por mim → banner fixo + alerta sonoro.
   const upcoming = useUpcomingScheduledRide(profile?.id);
   useScheduledReminderAlert(upcoming.imminent, upcoming.ride?.id ?? null);
@@ -41,8 +49,13 @@ export function DriverHomeScreen({ navigation }: Props) {
   // interna dele é por passenger_id e não nos interessa aqui).
   const { activate: activateScheduledRide } = useScheduledRides(profile?.id);
   const [startingBannerRide, setStartingBannerRide] = useState(false);
-  // Item #4: sinal sonoro DISTINTO (arpejo) quando um novo agendamento chega.
-  useScheduledOfferAlert(pendingScheduledRide?.id ?? null);
+  // Item #4: sinal sonoro DISTINTO (arpejo, toca uma vez) para o pool aberto.
+  useScheduledOfferAlert(!isQrLockedSchedule ? (pendingScheduledRide?.id ?? null) : null);
+  // Agendamento travado por QR: alerta RECORRENTE (mesmo som/vibração da
+  // chamada de corrida imediata) até o motorista aceitar ou recusar — o
+  // passageiro escolheu este motorista especificamente, então a notificação
+  // precisa insistir, não apenas tocar uma vez.
+  useRideCallAlert(isQrLockedSchedule);
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
   const duty = useDrivingLimit(profile?.id);
   const bgCheck = useBackgroundCheck(profile?.id);
@@ -137,7 +150,11 @@ export function DriverHomeScreen({ navigation }: Props) {
   async function handleConfirmScheduled() {
     if (!pendingScheduledRide) return;
     setConfirming(true);
-    const ok = await confirmScheduledRide(pendingScheduledRide.id);
+    // Agendamento travado por QR já tem driver_id — só falta gravar accepted_at
+    // (confirmQrScheduledRide); o pool aberto ainda precisa reivindicar (confirmScheduledRide).
+    const ok = isQrLockedSchedule
+      ? await confirmQrScheduledRide(pendingScheduledRide.id)
+      : await confirmScheduledRide(pendingScheduledRide.id);
     setConfirming(false);
     if (ok) {
       // Item #5: após confirmar, fecha o banner e volta para o mapa principal,
@@ -146,9 +163,22 @@ export function DriverHomeScreen({ navigation }: Props) {
       setPendingScheduledRide(null);
       Alert.alert('✅ Corrida confirmada!', 'O passageiro foi notificado que você irá buscá-lo.');
     } else {
-      Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
+      Alert.alert('Ops', isQrLockedSchedule ? 'Não foi possível confirmar este agendamento.' : 'Essa corrida já foi confirmada por outro motorista.');
       setPendingScheduledRide(null);
     }
+  }
+
+  // Recusa do banner de agendamento. No pool aberto a corrida ainda não tem
+  // motorista vinculado — só dispensar o banner é suficiente. Já no caso
+  // travado por QR, o `driver_id` já está gravado no banco: é preciso liberar
+  // a corrida de volta (rejectScheduledRide) para que outro motorista possa
+  // recebê-la, e avisar o passageiro que este motorista não confirmou.
+  async function handleRejectScheduled() {
+    if (!pendingScheduledRide) return;
+    if (isQrLockedSchedule) {
+      await rejectScheduledRide(pendingScheduledRide.id);
+    }
+    setPendingScheduledRide(null);
   }
 
   // Toque no banner fixo de corrida agendada: inicia a rota de verdade
@@ -250,9 +280,11 @@ export function DriverHomeScreen({ navigation }: Props) {
           <View style={styles.requestHandle} />
 
           <View style={styles.scheduledHeader}>
-            <Text style={styles.scheduledIcon}>🗓️</Text>
+            <Text style={styles.scheduledIcon}>{isQrLockedSchedule ? '📲' : '🗓️'}</Text>
             <View>
-              <Text style={styles.requestTitle}>Corrida agendada!</Text>
+              <Text style={styles.requestTitle}>
+                {isQrLockedSchedule ? 'Agendamento via QR Code!' : 'Corrida agendada!'}
+              </Text>
               {pendingScheduledRide.scheduled_for && (
                 <Text style={styles.scheduledWhen}>
                   {new Date(pendingScheduledRide.scheduled_for).toLocaleDateString('en-US', { day: '2-digit', month: 'short' })}
@@ -301,7 +333,7 @@ export function DriverHomeScreen({ navigation }: Props) {
           <View style={styles.requestActions}>
             <TouchableOpacity
               style={styles.declineBtn}
-              onPress={() => setPendingScheduledRide(null)}
+              onPress={handleRejectScheduled}
             >
               <Text style={styles.declineText}>Recusar</Text>
             </TouchableOpacity>

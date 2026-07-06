@@ -61,6 +61,8 @@ export interface Coordinates {
   lat: number;
   lng: number;
   heading?: number;
+  /** Velocidade instantânea do GPS, em m/s (undefined quando o dispositivo não informa). */
+  speed?: number;
 }
 
 export interface Location extends Coordinates {

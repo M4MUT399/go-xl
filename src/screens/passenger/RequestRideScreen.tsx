@@ -214,7 +214,8 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       origin,
       selectedDest,
       scheduledDate,
-      route ? { distanceKm: route.distanceKm, durationMin: route.durationMin } : undefined
+      route ? { distanceKm: route.distanceKm, durationMin: route.durationMin } : undefined,
+      lockedDriverId ? { lockedDriverId } : undefined
     );
     setLoading(false);
     setShowPicker(false);

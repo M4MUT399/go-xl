@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Platform, Alert, ScrollView,
+  Platform, Alert,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,7 +16,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../hooks/useLocation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
-import { formatCurrency, formatDistance } from '../../lib/format';
+import { formatCurrency } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { RouteStep } from '../../lib/routing';
 import { NavChevron } from '../../components/common/NavChevron';
@@ -207,18 +207,12 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // steps[0] = instrução atual (de onde estou → próxima manobra)
   // steps[1..] = próximas manobras
   const currentStep   = steps[0] ?? null;
-  const upcomingSteps = steps.slice(1, 4).filter((s) => s.maneuver.type !== 'arrive');
 
   // Fallback: enquanto a rota local (OSRM) ainda não carregou, usa o ETA já
   // calculado no momento do aceite (acceptRide) — assim o motorista vê o tempo
   // estimado imediatamente ao abrir a tela, em vez de esperar o GPS+rota.
   const fallbackEtaMin = phase === 'pickup' ? (ride.driver_eta_min ?? null) : null;
-  const fallbackEtaKm  = phase === 'pickup' ? (ride.driver_eta_km ?? null) : null;
   const etaMinDisplay = path?.durationMin ?? fallbackEtaMin;
-  const etaKmDisplay  = path?.distanceKm ?? fallbackEtaKm;
-  const etaTime = etaMinDisplay
-    ? new Date(Date.now() + etaMinDisplay * 60 * 1000)
-    : null;
 
   // ── Grava posição + ETA na própria corrida ────────────────────────────────
   const lastTelemetry = useRef<{ lat: number; lng: number; etaMin?: number } | null>(null);
@@ -299,6 +293,63 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   }
 
   const buttonLabel = phase === 'pickup' ? 'Passei buscar o passageiro' : 'Finalizar corrida';
+
+  // ── Painel reduzido pós-aceite: cronômetro da corrida + velocidade atual ──
+  // Marca o início no momento em que a corrida foi aceita (accepted_at); se por
+  // algum motivo não vier preenchido, usa o instante em que esta tela montou.
+  const [rideStartMs] = useState(() =>
+    ride.accepted_at ? new Date(ride.accepted_at).getTime() : Date.now()
+  );
+  const [elapsedSec, setElapsedSec] = useState(() => Math.max(0, Math.floor((Date.now() - rideStartMs) / 1000)));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - rideStartMs) / 1000)));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [rideStartMs]);
+  const elapsedLabel = (() => {
+    const h = Math.floor(elapsedSec / 3600);
+    const m = Math.floor((elapsedSec % 3600) / 60);
+    const s = elapsedSec % 60;
+    return h > 0
+      ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+      : `${m}:${s.toString().padStart(2, '0')}`;
+  })();
+  const speedKmh = location?.speed != null ? Math.round(location.speed * 3.6) : null;
+
+  // Confirmação DUPLA antes de avançar de fase (embarque → destino → finalizar):
+  // evita toque acidental encerrando/avançando a corrida sem querer.
+  function handleNextPhasePress() {
+    const isFinal = phase === 'dropoff';
+    Alert.alert(
+      isFinal ? 'Finalizar corrida?' : 'Confirmar embarque?',
+      isFinal
+        ? 'Tem certeza que deseja finalizar esta corrida?'
+        : 'Confirma que já buscou o passageiro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sim',
+          onPress: () => {
+            Alert.alert(
+              isFinal ? 'Confirmar finalização' : 'Confirmar embarque',
+              isFinal
+                ? 'Esta ação não pode ser desfeita. Finalizar corrida agora?'
+                : 'Iniciar deslocamento até o destino agora?',
+              [
+                { text: 'Voltar', style: 'cancel' },
+                {
+                  text: isFinal ? 'Finalizar' : 'Confirmar',
+                  style: isFinal ? 'destructive' : 'default',
+                  onPress: handleNextPhase,
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
+  }
 
   // Instrução atual
   const arrow       = currentStep ? maneuverArrow(currentStep.maneuver.type, currentStep.maneuver.modifier) : '↑';
@@ -468,98 +519,25 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         </View>
       </SafeAreaView>
 
-      {/* ── Bottom sheet ── */}
-      <View style={[styles.bottomSheet, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
+      {/* ── Bottom sheet reduzido (pós-aceite): só tempo/velocidade + ação ── */}
+      <View style={[styles.bottomSheetCompact, Platform.OS === 'android' && { paddingBottom: 20 + insets.bottom }]}>
         <View style={styles.handle} />
 
-        {/* Próximas manobras */}
-        {upcomingSteps.length > 0 && (
-          <View style={styles.upcomingSection}>
-            <Text style={styles.upcomingTitle}>Próximas</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.upcomingList}
-            >
-              {upcomingSteps.map((s, i) => {
-                const a = maneuverArrow(s.maneuver.type, s.maneuver.modifier);
-                const bg = maneuverColor(s.maneuver.type, s.maneuver.modifier, colors);
-                return (
-                  <View key={i} style={styles.upcomingChip}>
-                    <View style={[styles.upcomingArrowBox, { backgroundColor: bg }]}>
-                      <Text style={styles.upcomingArrow}>{a}</Text>
-                    </View>
-                    <View style={styles.upcomingChipInfo}>
-                      <Text style={styles.upcomingChipName} numberOfLines={1}>
-                        {s.name || maneuverInstruction(s.maneuver.type, s.maneuver.modifier).action}
-                      </Text>
-                      <Text style={styles.upcomingChipDist}>{formatStepDist(s.distance)}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </ScrollView>
+        <View style={styles.compactStatsRow}>
+          <View style={styles.compactStat}>
+            <Text style={styles.compactStatValue}>{elapsedLabel}</Text>
+            <Text style={styles.compactStatLabel}>Tempo de corrida</Text>
           </View>
-        )}
-
-        {/* ETA card (pickup e dropoff) */}
-        {etaMinDisplay != null && (
-          <View style={styles.etaCard}>
-            <View style={styles.etaMain}>
-              <Text style={styles.etaMinutes}>{etaMinDisplay}</Text>
-              <Text style={styles.etaUnit}>min</Text>
-              {etaKmDisplay != null && (
-                <>
-                  <View style={styles.etaSep} />
-                  <Text style={styles.etaDist}>{formatDistance(etaKmDisplay)}</Text>
-                </>
-              )}
-            </View>
-            {etaTime && (
-              <Text style={styles.etaArrival}>
-                {phase === 'pickup' ? 'Embarque estimado' : 'Chegada estimada'}:{' '}
-                {etaTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-            )}
-          </View>
-        )}
-
-        {/* Endereço alvo */}
-        <View style={styles.addressCard}>
-          <Text style={styles.addressLabel}>
-            {phase === 'pickup' ? 'Local de embarque' : 'Destino final'}
-          </Text>
-          <Text style={styles.addressText}>{target.address}</Text>
-        </View>
-
-        {/* Passageiro */}
-        <View style={styles.passengerRow}>
-          <View style={styles.passengerAvatar}>
-            <Text style={styles.passengerAvatarText}>P</Text>
-          </View>
-          <View style={styles.passengerInfo}>
-            <Text style={styles.passengerName}>Passageiro</Text>
-            <View style={styles.ratingRow}>
-              <Text style={styles.star}>★</Text>
-              <Text style={styles.ratingText}>4.8</Text>
-            </View>
-          </View>
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.actionBtn}>
-              <Text>📞</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: 'Passageiro' })}
-            >
-              <Text>💬</Text>
-            </TouchableOpacity>
+          <View style={styles.compactDivider} />
+          <View style={styles.compactStat}>
+            <Text style={styles.compactStatValue}>{speedKmh != null ? speedKmh : '--'}</Text>
+            <Text style={styles.compactStatLabel}>km/h</Text>
           </View>
         </View>
 
         <Button
           title={buttonLabel}
-          onPress={handleNextPhase}
+          onPress={handleNextPhasePress}
           loading={loading}
           style={styles.btn}
         />
@@ -669,14 +647,16 @@ function makeStyles(colors: AppTheme) {
       fontWeight: '700',
     },
 
-    // Bottom sheet
-    bottomSheet: {
+    // Bottom sheet reduzido (pós-aceite) — só cronômetro/velocidade + ação.
+    // ~40% menor que o painel anterior (que tinha manobras, ETA, endereço e
+    // dados do passageiro): agora é praticamente a barra + um botão.
+    bottomSheetCompact: {
       backgroundColor: colors.card,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
       paddingTop: 8,
       paddingHorizontal: 20,
-      paddingBottom: 32,
+      paddingBottom: 20,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -4 },
       shadowOpacity: 0.1,
@@ -691,154 +671,34 @@ function makeStyles(colors: AppTheme) {
       marginBottom: 14,
     },
 
-    // Upcoming steps
-    upcomingSection: {
-      marginBottom: 14,
-    },
-    upcomingTitle: {
-      fontSize: 11,
-      fontWeight: '800',
-      color: colors.gray[400],
-      textTransform: 'uppercase',
-      letterSpacing: 0.6,
-      marginBottom: 8,
-    },
-    upcomingList: {
-      gap: 8,
-    },
-    upcomingChip: {
+    // Barra compacta: tempo de corrida + velocidade atual
+    compactStatsRow: {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.gray[100],
-      borderRadius: 12,
-      paddingVertical: 8,
-      paddingHorizontal: 10,
-      gap: 8,
-      maxWidth: 180,
+      borderRadius: 16,
+      paddingVertical: 12,
+      marginBottom: 14,
     },
-    upcomingArrowBox: {
-      width: 30,
-      height: 30,
-      borderRadius: 8,
-      alignItems: 'center',
-      justifyContent: 'center',
-      flexShrink: 0,
-    },
-    upcomingArrow: {
-      fontSize: 16,
-      color: colors.white,
-      fontWeight: '700',
-    },
-    upcomingChipInfo: {
-      flex: 1,
-    },
-    upcomingChipName: {
-      fontSize: 12,
-      fontWeight: '700',
+    compactStat: { flex: 1, alignItems: 'center' },
+    compactStatValue: {
+      fontSize: 22,
+      fontWeight: '900',
       color: colors.text,
+      fontVariant: ['tabular-nums'],
     },
-    upcomingChipDist: {
+    compactStatLabel: {
       fontSize: 11,
       color: colors.gray[500],
-      marginTop: 1,
-    },
-
-    // ETA card (dropoff)
-    etaCard: {
-      backgroundColor: colors.primary,
-      borderRadius: 16,
-      padding: 16,
-      marginBottom: 14,
-      alignItems: 'center',
-    },
-    etaMain: {
-      flexDirection: 'row',
-      alignItems: 'baseline',
-      gap: 6,
-      marginBottom: 6,
-    },
-    etaMinutes: {
-      fontSize: 48,
-      fontWeight: '900',
-      color: colors.white,
-      letterSpacing: -2,
-    },
-    etaUnit: {
-      fontSize: 18,
       fontWeight: '600',
-      color: colors.accent,
-      marginBottom: 4,
-    },
-    etaSep: {
-      width: 1,
-      height: 32,
-      backgroundColor: 'rgba(255,255,255,0.2)',
-      marginHorizontal: 8,
-    },
-    etaDist: {
-      fontSize: 20,
-      fontWeight: '700',
-      color: colors.gray[300],
-    },
-    etaArrival: {
-      fontSize: 13,
-      color: colors.gray[400],
-      fontWeight: '600',
-    },
-
-    // Address card
-    addressCard: {
-      backgroundColor: colors.gray[100],
-      borderRadius: 12,
-      padding: 14,
-      marginBottom: 14,
-    },
-    addressLabel: {
-      fontSize: 11,
-      color: colors.gray[400],
       textTransform: 'uppercase',
       letterSpacing: 0.5,
-      marginBottom: 4,
+      marginTop: 2,
     },
-    addressText: {
-      fontSize: 15,
-      color: colors.text,
-      fontWeight: '600',
-    },
-
-    // Passenger row
-    passengerRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 18,
-    },
-    passengerAvatar: {
-      width: 46,
-      height: 46,
-      borderRadius: 23,
-      backgroundColor: colors.gray[200],
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 12,
-    },
-    passengerAvatarText: {
-      fontSize: 18,
-      fontWeight: '700',
-      color: colors.gray[600],
-    },
-    passengerInfo: { flex: 1 },
-    passengerName: { fontSize: 15, fontWeight: '600', color: colors.text },
-    ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-    star: { color: colors.accent, fontSize: 13, marginRight: 2 },
-    ratingText: { fontSize: 12, color: colors.gray[500] },
-    actions: { flexDirection: 'row', gap: 8 },
-    actionBtn: {
-      width: 38,
-      height: 38,
-      borderRadius: 19,
-      backgroundColor: colors.gray[100],
-      alignItems: 'center',
-      justifyContent: 'center',
+    compactDivider: {
+      width: 1,
+      height: 32,
+      backgroundColor: colors.gray[300],
     },
     btn: {},
     cancelBtn: {

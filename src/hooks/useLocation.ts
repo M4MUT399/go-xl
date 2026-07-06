@@ -9,6 +9,11 @@ function validHeading(heading: number | null | undefined): number | undefined {
   return heading != null && heading >= 0 ? heading : undefined;
 }
 
+// Idem para velocidade: valores negativos indicam leitura inválida/desconhecida.
+function validSpeed(speed: number | null | undefined): number | undefined {
+  return speed != null && speed >= 0 ? speed : undefined;
+}
+
 interface UseLocationOptions {
   /** Quando true, inicia watchPositionAsync e atualiza a posição continuamente. */
   watch?: boolean;
@@ -52,7 +57,7 @@ export function useLocation(options?: UseLocationOptions) {
           requiredAccuracy: 50,
         });
         if (last) {
-          setLocation({ lat: last.coords.latitude, lng: last.coords.longitude, heading: validHeading(last.coords.heading) });
+          setLocation({ lat: last.coords.latitude, lng: last.coords.longitude, heading: validHeading(last.coords.heading), speed: validSpeed(last.coords.speed) });
           setStatus('ready');
         }
       } catch {
@@ -65,7 +70,7 @@ export function useLocation(options?: UseLocationOptions) {
       const loc = await ExpoLocation.getCurrentPositionAsync({
         accuracy: ExpoLocation.Accuracy.Balanced,
       });
-      setLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading) });
+      setLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading), speed: validSpeed(loc.coords.speed) });
       setStatus('ready');
     } catch {
       // Se já tínhamos exibido o cache, mantém "ready" — o usuário já está
@@ -102,7 +107,7 @@ export function useLocation(options?: UseLocationOptions) {
           timeInterval: 5000,     // ou a cada 5 s (o que vier primeiro)
         },
         (pos) => {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, heading: validHeading(pos.coords.heading) });
+          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, heading: validHeading(pos.coords.heading), speed: validSpeed(pos.coords.speed) });
           setStatus('ready');
         }
       ).then((sub) => {
@@ -126,7 +131,7 @@ export function useLocation(options?: UseLocationOptions) {
       const loc = await ExpoLocation.getCurrentPositionAsync({
         accuracy: ExpoLocation.Accuracy.High,
       });
-      const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading) };
+      const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading), speed: validSpeed(loc.coords.speed) };
       setLocation(coords);
       return coords;
     } catch {

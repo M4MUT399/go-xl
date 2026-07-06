@@ -136,6 +136,11 @@ export function useDriverScheduledRides(driverId: string | undefined) {
         .select('*')
         .eq('status', 'scheduled')
         .eq('driver_id', driverId)
+        // Exclui agendamentos travados por QR que ainda aguardam a decisão do
+        // motorista (accepted_at IS NULL) — esses só devem aparecer no popup
+        // de aceitar/recusar (DriverHomeScreen), não em "Minhas corridas" como
+        // se já estivessem confirmados. Ver confirmQrScheduledRide/useRide.ts.
+        .not('accepted_at', 'is', null)
         .order('scheduled_for', { ascending: true }),
     ]);
 
