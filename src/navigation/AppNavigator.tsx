@@ -26,6 +26,7 @@ import { ResetPasswordScreen } from '../screens/auth/ResetPasswordScreen';
 import { RegisterScreen } from '../screens/auth/RegisterScreen';
 import { ExpressRegisterScreen } from '../screens/passenger/ExpressRegisterScreen';
 import { AddCardOnboardingScreen } from '../screens/passenger/AddCardOnboardingScreen';
+import { CompleteRegistrationScreen } from '../screens/passenger/CompleteRegistrationScreen';
 import { consumePendingExpressRide } from '../lib/expressRide';
 import { HomeScreen } from '../screens/passenger/HomeScreen';
 import { RequestRideScreen } from '../screens/passenger/RequestRideScreen';
@@ -49,12 +50,15 @@ import { TermsScreen } from '../screens/profile/TermsScreen';
 import { PaymentScreen } from '../screens/profile/PaymentScreen';
 import { ChatScreen } from '../screens/ChatScreen';
 import { QRCodeScreen } from '../screens/driver/QRCodeScreen';
+import { DriverRideProvider } from '../contexts/DriverRideContext';
+import { GlobalDriverRideOverlay } from '../components/driver/GlobalDriverRideOverlay';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
 
-/** Ref global — permite navegar de fora do NavigationContainer (ex: banner de notificação) */
-const navigationRef = createNavigationContainerRef<RootStackParamList>();
+/** Ref global — permite navegar de fora do NavigationContainer (ex: banner de
+ *  notificação, ou o overlay global de chamada de corrida do motorista). */
+export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 // ─── Banner in-app ────────────────────────────────────────────────────────────
 // Aparece sobre qualquer tela, independente de permissão de notificação.
@@ -338,6 +342,9 @@ export function AppNavigator() {
           navigationRef.navigate('RequestRide', {
             lockedDriverId:   express.driverId,
             lockedDriverName: express.driverName,
+            // 1ª corrida expressa: cartão já foi adicionado; o cadastro completo
+            // (nome/e-mail/telefone) só será cobrado na 2ª viagem/agendamento.
+            express: true,
           });
         }, 700);
         return;
@@ -360,15 +367,15 @@ export function AppNavigator() {
 
   const isAuthenticated = !!session;
   const isDriver = profile?.type === 'driver';
-  // Passageiro sem cartão cadastrado → obriga onboarding antes de entrar no app.
-  // IMPORTANTE: só força a tela quando o perfil JÁ carregou e de fato não tem
-  // cartão. Se o perfil ainda não veio (null por falha/lentidão de rede), NÃO
-  // prende quem já é cadastrado e tem cartão na tela de "adicionar cartão" — o
-  // usuário com cadastro completo entra direto no app.
-  const needsCard = isAuthenticated && !isDriver && !!profile && !profile.stripe_payment_method_id;
+  // Onboarding do passageiro (decisão de produto):
+  //  • Download normal → cadastro (nome/e-mail/telefone) primeiro; o passageiro
+  //    entra direto no app e o cartão é exigido só ao chamar a corrida.
+  //  • Via QR (Expresso) → cartão primeiro; cadastro completo cobrado depois.
+  // Por isso NÃO há mais "muro do cartão" aqui: o passageiro sempre entra em
+  // PassengerTabs, e o gate de cartão/cadastro vive no fluxo de pedir corrida.
 
-  return (
-    <View style={{ flex: 1 }}>
+  const navigatorContent = (
+    <>
       <NavigationContainer ref={navigationRef}>
         <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }} >
           {isRecovery ? (
@@ -399,15 +406,15 @@ export function AppNavigator() {
               <Stack.Screen name="Terms" component={TermsScreen} />
               <Stack.Screen name="Payment" component={PaymentScreen} />
             </>
-          ) : needsCard ? (
-            /* Passageiro sem cartão: bloqueia no onboarding até cadastrar */
-            <>
-              <Stack.Screen name="AddCardOnboarding" component={AddCardOnboardingScreen} />
-            </>
           ) : (
             <>
               <Stack.Screen name="PassengerTabs" component={PassengerTabs} />
               <Stack.Screen name="RequestRide" component={RequestRideScreen} />
+              {/* Gates de onboarding, agora como passos DENTRO do app (não muro):
+               *  cartão exigido ao chamar corrida; cadastro completo ao agendar
+               *  ou pedir a 2ª viagem de uma conta expressa. */}
+              <Stack.Screen name="AddCardOnboarding" component={AddCardOnboardingScreen} />
+              <Stack.Screen name="CompleteRegistration" component={CompleteRegistrationScreen} />
               <Stack.Screen name="FindingDriver" component={FindingDriverScreen} />
               <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
               <Stack.Screen name="RateRide" component={RateRideScreen} />
@@ -426,6 +433,24 @@ export function AppNavigator() {
       {/* Banner in-app — aparece sobre qualquer tela, sem precisar de permissão */}
       {inAppMessage && (
         <NotificationBanner message={inAppMessage} onDismiss={clearInAppMessage} />
+      )}
+    </>
+  );
+
+  return (
+    <View style={{ flex: 1 }}>
+      {isDriver ? (
+        // Provider único para o motorista: guarda a assinatura realtime de novas
+        // corridas + status online + localização, e sobrevive à navegação entre
+        // TODAS as telas do driver stack. O `GlobalDriverRideOverlay` (que
+        // renderiza o Modal de chamada de corrida) fica FORA da Stack.Navigator,
+        // como irmão dela, para nunca ser "congelado" por react-native-screens.
+        <DriverRideProvider>
+          {navigatorContent}
+          <GlobalDriverRideOverlay />
+        </DriverRideProvider>
+      ) : (
+        navigatorContent
       )}
     </View>
   );

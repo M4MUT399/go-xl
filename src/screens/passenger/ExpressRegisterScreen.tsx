@@ -1,17 +1,20 @@
 /**
  * Cadastro Expresso — ativado quando um passageiro NOVO escaneia o QR do motorista.
- * Fluxo:
- *   1. Informa nome + telefone
- *   2. Adiciona cartão via Stripe (browser)
- *   3. Corrida é solicitada automaticamente vinculada ao motorista do QR
  *
- * O cadastro completo (e-mail / senha) pode ser feito depois, no Perfil.
+ * Decisão de produto: para a 1ª corrida sair o mais rápido possível, pede-se
+ * SÓ O CARTÃO. A conta é criada com um nome provisório e sem telefone; o
+ * cadastro completo (nome / e-mail / telefone) é cobrado depois, quando o
+ * passageiro for agendar ou pedir a 2ª viagem.
+ *
+ * Fluxo:
+ *   1. Adiciona cartão via Stripe (browser)
+ *   2. Corrida é solicitada automaticamente, travada no motorista do QR
  */
 
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import * as WebBrowser from 'expo-web-browser';
@@ -22,6 +25,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { supabase } from '../../lib/supabase';
 import { setPendingExpressRide } from '../../lib/expressRide';
+import { EXPRESS_PLACEHOLDER_NAME } from '../../lib/onboarding';
 
 const SUPABASE_URL    = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SETUP_CARD_URL  = `${SUPABASE_URL}/functions/v1/setup-card`;
@@ -35,24 +39,12 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
   const { driverCode } = route.params;
   const { colors } = useTheme();
 
-  const [name,    setName]    = useState('');
-  const [phone,   setPhone]   = useState('');
   const [loading, setLoading] = useState(false);
-  const [step,    setStep]    = useState<'form' | 'card' | 'done'>('form');
+  const [step,    setStep]    = useState<'card' | 'done'>('card');
 
   const styles = makeStyles(colors);
 
   async function handleContinue() {
-    if (!name.trim()) {
-      Alert.alert('Nome obrigatório', 'Por favor, informe seu nome completo.');
-      return;
-    }
-    const digits = phone.replace(/\D/g, '');
-    if (digits.length < 10) {
-      Alert.alert('Telefone inválido', 'Informe um número de telefone válido com DDD.');
-      return;
-    }
-
     setLoading(true);
     try {
       // ── 1. Busca o motorista pelo código ───────────────────────────────────
@@ -72,12 +64,10 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
       }
 
       // ── 2. Cria conta expressa no Supabase ────────────────────────────────
-      // Email derivado do telefone (único) + sufixo para não conflitar com contas reais.
+      // E-mail interno único (o passageiro informa o e-mail real depois, no
+      // cadastro completo). Senha aleatória — não é necessária agora.
       const ts    = Date.now();
-      const email = `express_${digits}_${ts}@goxl.express`;
-      // Senha aleatória — o passageiro não precisa dela agora.
-      // Ele pode redefinir mais tarde pelo fluxo "Esqueci a senha" (com o e-mail acima)
-      // ou configurar e-mail/senha real pelo Perfil.
+      const email = `express_${ts}@goxl.express`;
       const password = `${Math.random().toString(36).slice(2)}${ts.toString(36)}`;
 
       const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
@@ -87,11 +77,11 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
 
       const userId = authData.user.id;
 
-      // ── 3. Cria o perfil ──────────────────────────────────────────────────
+      // ── 3. Cria o perfil provisório (sem telefone = cadastro incompleto) ──
       await supabase.from('profiles').insert({
         id:         userId,
-        full_name:  name.trim(),
-        phone:      digits,
+        full_name:  EXPRESS_PLACEHOLDER_NAME,
+        phone:      '',
         email,
         type:       'passenger',
       });
@@ -100,7 +90,6 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
       setPendingExpressRide(driverId, driverName);
 
       // ── 5. Abre Stripe Checkout para adicionar cartão ─────────────────────
-      setStep('card');
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Sessão não disponível.');
 
@@ -130,7 +119,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
     } catch (e: unknown) {
       const err = e as { message?: string };
       Alert.alert('Erro', err?.message ?? 'Ocorreu um erro. Tente novamente.');
-      setStep('form');
+      setStep('card');
     } finally {
       setLoading(false);
     }
@@ -152,57 +141,32 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
 
           <Text style={styles.title}>Corrida Expressa 🚀</Text>
           <Text style={styles.subtitle}>
-            Preencha seus dados e adicione um cartão.{'\n'}
-            Em menos de 1 minuto você está a caminho!
+            Adicione seu cartão e chame sua corrida agora.{'\n'}
+            O cadastro completo você faz depois — leva menos de 1 minuto!
           </Text>
 
-          {/* Steps indicator */}
+          {/* Steps indicator (2 passos) */}
           <View style={styles.steps}>
             <View style={[styles.step, styles.stepActive]}>
               <Text style={styles.stepNum}>1</Text>
-              <Text style={styles.stepLabel}>Dados</Text>
-            </View>
-            <View style={styles.stepLine} />
-            <View style={[styles.step, step !== 'form' && styles.stepActive]}>
-              <Text style={[styles.stepNum, step === 'form' && styles.stepNumInactive]}>2</Text>
-              <Text style={[styles.stepLabel, step === 'form' && styles.stepLabelInactive]}>Cartão</Text>
+              <Text style={styles.stepLabel}>Cartão</Text>
             </View>
             <View style={styles.stepLine} />
             <View style={[styles.step, step === 'done' && styles.stepActive]}>
-              <Text style={[styles.stepNum, step !== 'done' && styles.stepNumInactive]}>3</Text>
+              <Text style={[styles.stepNum, step !== 'done' && styles.stepNumInactive]}>2</Text>
               <Text style={[styles.stepLabel, step !== 'done' && styles.stepLabelInactive]}>Corrida</Text>
             </View>
           </View>
 
-          {/* Formulário */}
-          <View style={styles.form}>
-            <Text style={styles.label}>Nome completo</Text>
-            <TextInput
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder="Ex: João Silva"
-              placeholderTextColor={colors.gray[400]}
-              autoCapitalize="words"
-              editable={!loading}
-            />
-
-            <Text style={styles.label}>Celular (com DDD)</Text>
-            <TextInput
-              style={styles.input}
-              value={phone}
-              onChangeText={setPhone}
-              placeholder="(11) 99999-9999"
-              placeholderTextColor={colors.gray[400]}
-              keyboardType="phone-pad"
-              editable={!loading}
-            />
+          {/* Cartão de destaque */}
+          <View style={styles.cardBox}>
+            <Text style={styles.cardEmoji}>💳</Text>
+            <Text style={styles.cardTitle}>Pagamento automático e seguro</Text>
+            <Text style={styles.cardText}>
+              A cobrança acontece sozinha quando o motorista aceitar.{'\n'}
+              Seus dados são protegidos pela Stripe.
+            </Text>
           </View>
-
-          <Text style={styles.hint}>
-            💳 No próximo passo você vai adicionar seu cartão de crédito.{'\n'}
-            O pagamento é feito automaticamente quando o motorista aceitar.
-          </Text>
 
           <TouchableOpacity
             style={[styles.btn, (loading || step === 'done') && { opacity: 0.7 }]}
@@ -211,12 +175,10 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
           >
             {loading ? (
               <ActivityIndicator color={colors.primary} />
-            ) : step === 'card' ? (
-              <Text style={styles.btnText}>Aguardando cartão...</Text>
             ) : step === 'done' ? (
               <Text style={styles.btnText}>✓ Pronto! Carregando corrida...</Text>
             ) : (
-              <Text style={styles.btnText}>Continuar → Adicionar cartão</Text>
+              <Text style={styles.btnText}>Adicionar cartão e chamar corrida</Text>
             )}
           </TouchableOpacity>
 
@@ -229,8 +191,8 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
           </TouchableOpacity>
 
           <Text style={styles.legalNote}>
-            Cadastro completo (e-mail e senha) pode ser feito depois no Perfil.
-            Dados protegidos com criptografia.
+            Cadastro completo (nome, e-mail e telefone) será solicitado quando você
+            agendar ou pedir a segunda viagem. Dados protegidos com criptografia.
           </Text>
       </KeyboardAwareScrollView>
     </SafeAreaView>
@@ -262,28 +224,18 @@ function makeStyles(colors: AppTheme) {
     stepLabel: { fontSize: 11, fontWeight: '700', color: colors.text, marginTop: 4 },
     stepLabelInactive: { color: colors.gray[400] },
 
-    // Form
-    form:  { width: '100%', marginBottom: 16 },
-    label: { fontSize: 13, fontWeight: '700', color: colors.gray[600], marginBottom: 6, marginTop: 16 },
-    input: {
-      backgroundColor: colors.gray[100],
-      borderRadius: 12,
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-      fontSize: 16,
-      color: colors.text,
-      borderWidth: 1.5,
-      borderColor: colors.gray[200],
+    // Card box
+    cardBox: {
+      width: '100%',
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      padding: 22,
+      alignItems: 'center',
+      marginBottom: 28,
     },
-
-    hint: {
-      fontSize: 13,
-      color: colors.gray[500],
-      textAlign: 'center',
-      lineHeight: 20,
-      marginBottom: 24,
-      paddingHorizontal: 8,
-    },
+    cardEmoji: { fontSize: 40, marginBottom: 10 },
+    cardTitle: { fontSize: 16, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 8 },
+    cardText:  { fontSize: 13, color: colors.gray[500], textAlign: 'center', lineHeight: 20 },
 
     btn: {
       backgroundColor: colors.accent,

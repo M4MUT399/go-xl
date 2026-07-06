@@ -23,6 +23,7 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
 import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
+import { hasPaymentCard, isProfileComplete } from '../../lib/onboarding';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RequestRide'>;
@@ -40,6 +41,8 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
   const lockedDriverId   = screenRoute.params?.lockedDriverId;
   const lockedDriverName = screenRoute.params?.lockedDriverName;
+  // 1ª corrida expressa (via QR): liberada só com cartão, sem cadastro completo.
+  const isExpressFirstRide = screenRoute.params?.express === true;
 
   const [destinationText, setDestinationText] = useState('');
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
@@ -149,6 +152,18 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       );
       return;
     }
+    // Gate de cartão: toda corrida precisa de um cartão salvo. Envia para a
+    // tela de adicionar cartão e volta; o passageiro toca "Solicitar" de novo.
+    if (!hasPaymentCard(profile)) {
+      navigation.navigate('AddCardOnboarding');
+      return;
+    }
+    // Gate de cadastro: conta expressa (via QR) completa o cadastro na 2ª
+    // viagem. Só a 1ª corrida expressa imediata é liberada sem cadastro completo.
+    if (!isProfileComplete(profile) && !isExpressFirstRide) {
+      navigation.navigate('CompleteRegistration');
+      return;
+    }
     setLoading(true);
     const origin: Location = {
       lat: location.lat,
@@ -179,6 +194,18 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     if (!selectedDest || !location) return;
     if (scheduledDate.getTime() < Date.now() + 5 * 60 * 1000) {
       Alert.alert('Atenção', 'Escolha um horário pelo menos 5 minutos no futuro.');
+      return;
+    }
+    // Agendar exige cartão E cadastro completo — inclusive em conta expressa
+    // (agendamento é o gatilho para o passageiro completar o cadastro).
+    if (!hasPaymentCard(profile)) {
+      setShowPicker(false);
+      navigation.navigate('AddCardOnboarding');
+      return;
+    }
+    if (!isProfileComplete(profile)) {
+      setShowPicker(false);
+      navigation.navigate('CompleteRegistration');
       return;
     }
     setLoading(true);

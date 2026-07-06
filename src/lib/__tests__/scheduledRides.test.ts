@@ -22,24 +22,26 @@ describe('minutesUntil', () => {
 });
 
 describe('shouldShowBanner', () => {
-  it('mostra dentro da janela e some depois', () => {
+  it('mostra dentro da janela e não mostra antes dela', () => {
     expect(shouldShowBanner(60, 120)).toBe(true);
     expect(shouldShowBanner(120, 120)).toBe(true);
     expect(shouldShowBanner(121, 120)).toBe(false);
   });
-  it('mantém uma folga de 5 min após o horário', () => {
+  it('permanece indefinidamente após o horário — só some quando o status da corrida muda', () => {
     expect(shouldShowBanner(-3, 120)).toBe(true);
-    expect(shouldShowBanner(-10, 120)).toBe(false);
+    expect(shouldShowBanner(-10, 120)).toBe(true);
+    expect(shouldShowBanner(-500, 120)).toBe(true);
   });
 });
 
 describe('isImminent', () => {
-  it('verdadeiro só dentro do lembrete', () => {
+  it('verdadeiro dentro do lembrete e permanece iminente mesmo atrasada', () => {
     expect(isImminent(10, 15)).toBe(true);
     expect(isImminent(15, 15)).toBe(true);
     expect(isImminent(16, 15)).toBe(false);
     expect(isImminent(-3, 15)).toBe(true);
-    expect(isImminent(-10, 15)).toBe(false);
+    expect(isImminent(-10, 15)).toBe(true);
+    expect(isImminent(-500, 15)).toBe(true);
   });
 });
 
@@ -56,7 +58,7 @@ describe('formatCountdown', () => {
 });
 
 describe('pickSoonest', () => {
-  it('escolhe a mais próxima no futuro, ignora as bem passadas', () => {
+  it('escolhe a mais próxima no futuro', () => {
     const rides = [
       { scheduled_for: iso(90) },
       { scheduled_for: iso(20) },
@@ -64,8 +66,10 @@ describe('pickSoonest', () => {
     ];
     expect(pickSoonest(rides, NOW)).toBe(rides[1]);
   });
-  it('null quando nada qualifica', () => {
+  it('mesmo bem atrasada, continua qualificando (some só quando o status muda, fora daqui)', () => {
+    expect(pickSoonest([{ scheduled_for: iso(-60) }], NOW)).toEqual({ scheduled_for: iso(-60) });
+  });
+  it('null quando a lista está vazia', () => {
     expect(pickSoonest([], NOW)).toBeNull();
-    expect(pickSoonest([{ scheduled_for: iso(-60) }], NOW)).toBeNull();
   });
 });

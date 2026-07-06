@@ -8,6 +8,7 @@ import { estimateTollAmount } from '../lib/tolls';
 import { estimateAirportFees } from '../lib/airportFees';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
+import { canReceiveNewRideOffer } from '../lib/rideDispatch';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
@@ -88,13 +89,41 @@ async function refundRide(rideId: string): Promise<{ ok: boolean; error?: string
   }
 }
 
-async function notifyOnlineDrivers(destination: string, price: number) {
+async function notifyOnlineDrivers(
+  destination: string,
+  price: number,
+  destinationCoords?: { lat: number; lng: number }
+) {
   const { data: online } = await supabase
     .from('driver_locations')
     .select('driver_id')
     .eq('is_online', true);
 
-  const driverIds = ((online as { driver_id: string }[]) ?? []).map((d) => d.driver_id);
+  let driverIds = ((online as { driver_id: string }[]) ?? []).map((d) => d.driver_id);
+  if (driverIds.length === 0) return;
+
+  // Não incomoda motoristas já a caminho/em corrida com outro passageiro —
+  // salvo se o destino desta nova chamada for igual (ou a até 1km) do
+  // destino final da corrida ativa deles, ou se faltarem <=5min para
+  // terminá-la (mesma regra usada no realtime — ver canReceiveNewRideOffer).
+  const { data: busyRows } = await supabase
+    .from('rides')
+    .select('driver_id, status, destination_lat, destination_lng, destination_address, driver_eta_min')
+    .in('driver_id', driverIds)
+    .in('status', ['accepted', 'driver_en_route', 'in_progress']);
+
+  const busyByDriver = new Map<string, { status: string; destination_lat?: number; destination_lng?: number; destination_address?: string; driver_eta_min?: number }>();
+  for (const r of (busyRows as { driver_id?: string; status: string; destination_lat?: number; destination_lng?: number; destination_address?: string; driver_eta_min?: number }[]) ?? []) {
+    if (r.driver_id) busyByDriver.set(r.driver_id, r);
+  }
+
+  driverIds = driverIds.filter((id) =>
+    canReceiveNewRideOffer(busyByDriver.get(id) ?? null, {
+      destination_address: destination,
+      destination_lat: destinationCoords?.lat,
+      destination_lng: destinationCoords?.lng,
+    })
+  );
   if (driverIds.length === 0) return;
 
   const { data: drivers } = await supabase
@@ -442,7 +471,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       // Push remoto como reforço (funciona em produção)
       notifySpecificDriver(options.lockedDriverId, destination.address, price);
     } else {
-      notifyOnlineDrivers(destination.address, price);
+      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng });
     }
     return data as Ride;
   }, [passengerId]);
@@ -502,7 +531,7 @@ export function usePassengerRide(passengerId: string | undefined) {
 
     if (error) return null;
     // Notifica motoristas online imediatamente — igual ao requestRide
-    notifyOnlineDrivers(destination.address, price);
+    notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng });
     return data as Ride;
   }, [passengerId]);
 
@@ -564,7 +593,9 @@ export function useScheduledRides(passengerId: string | undefined) {
         notifyPassenger(ride.passenger_id); // reutiliza lógica de push
       } else {
         const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
-        notifyOnlineDrivers(dest, Number(ride.price) || 0);
+        const destLat = ride.destination_lat ?? ride.destination?.lat;
+        const destLng = ride.destination_lng ?? ride.destination?.lng;
+        notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined);
       }
     }
     return (data as Ride) ?? null;
@@ -594,11 +625,21 @@ export function useDriverRide(driverId: string | undefined) {
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
   const pendingRideIdRef = useRef<string | null>(null);
+  const activeRideRef = useRef<Ride | null>(null);
 
   // Mantém ref sincronizada para usar dentro de setInterval sem stale closure
   useEffect(() => {
     pendingRideIdRef.current = pendingRide?.id ?? null;
   }, [pendingRide?.id]);
+
+  // Mantém ref da corrida ativa sincronizada — usada para decidir, fora de
+  // qualquer closure de handler, se uma NOVA chamada de corrida pode chegar
+  // ao motorista (ver canReceiveNewRideOffer): uma vez que ele inicia o
+  // deslocamento de uma corrida (agendada ou não), fica bloqueado para novas
+  // chamadas até faltar <=5min para terminar, salvo destino igual/perto (1km).
+  useEffect(() => {
+    activeRideRef.current = activeRide;
+  }, [activeRide]);
 
   // Descarta o popup de agendamento automaticamente quando o horário passa
   useEffect(() => {
@@ -625,7 +666,9 @@ export function useDriverRide(driverId: string | undefined) {
       .eq('status', 'requesting')
       .maybeSingle()
       .then(({ data }) => {
-        if (data) setPendingRide(data as Ride);
+        if (data && canReceiveNewRideOffer(activeRideRef.current, data as Ride)) {
+          setPendingRide(data as Ride);
+        }
       });
 
     // Corrida agendada disponível — apenas dentro da janela de 1h
@@ -661,7 +704,11 @@ export function useDriverRide(driverId: string | undefined) {
         .eq('status', 'requesting')
         .maybeSingle();
 
-      if (data && (data as Ride).id !== pendingRideIdRef.current) {
+      if (
+        data &&
+        (data as Ride).id !== pendingRideIdRef.current &&
+        canReceiveNewRideOffer(activeRideRef.current, data as Ride)
+      ) {
         setPendingRide(data as Ride);
       }
     }, 4000);
@@ -686,7 +733,7 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          if (!ride.driver_id || ride.driver_id === driverId) {
+          if ((!ride.driver_id || ride.driver_id === driverId) && canReceiveNewRideOffer(activeRideRef.current, ride)) {
             setPendingRide(ride);
           }
         }
@@ -721,7 +768,7 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          if (!ride.driver_id) setPendingRide(ride);
+          if (!ride.driver_id && canReceiveNewRideOffer(activeRideRef.current, ride)) setPendingRide(ride);
         }
       )
       .on(
@@ -846,37 +893,34 @@ export function useDriverRide(driverId: string | undefined) {
 
     let ride = data as Ride;
 
-    // 3) Calcula o ETA até o embarque JÁ no momento do aceite (não espera o motorista
-    //    abrir a tela de navegação) e grava em rides — assim o passageiro já recebe o
-    //    tempo estimado junto com o aviso de "motorista a caminho".
-    //    IMPORTANTE: nada aqui pode BLOQUEAR a navegação/o aviso ao passageiro — por
-    //    isso getRoute tem timeout curto e a ESCRITA da telemetria é fire-and-forget.
+    // 3) Calcula o ETA até o embarque para gravar em rides — assim o passageiro
+    //    recebe o tempo estimado junto com o aviso de "motorista a caminho".
+    //    IMPORTANTE: isso é 100% fire-and-forget agora. O motorista precisa ver o
+    //    mapa com a rota traçada IMEDIATAMENTE ao aceitar — nenhuma chamada de
+    //    rede (OSRM/telemetria) pode segurar o retorno de acceptRide/a navegação
+    //    para DriverNavigateScreen, que já calcula e desenha a própria rota ao
+    //    montar (usando a localização do motorista salva no aceite como origem).
     if (driverLocation && ride.origin_lat != null && ride.origin_lng != null) {
-      try {
-        const path = await withTimeout(
-          getRoute(driverLocation, { lat: ride.origin_lat, lng: ride.origin_lng }),
-          6000,
-          'route timeout'
-        );
-        if (path) {
+      const originForRoute = driverLocation;
+      const destForRoute = { lat: ride.origin_lat, lng: ride.origin_lng };
+      getRoute(originForRoute, destForRoute)
+        .then((path) => {
+          if (!path) return;
           const telemetry = {
-            driver_lat: driverLocation.lat,
-            driver_lng: driverLocation.lng,
+            driver_lat: originForRoute.lat,
+            driver_lng: originForRoute.lng,
             driver_eta_min: path.durationMin,
             driver_eta_km: path.distanceKm,
           };
-          ride = { ...ride, ...telemetry };
-          // Grava em background: se demorar/falhar, o DriverNavigateScreen recalcula
-          // e grava o próprio ETA. Nunca segura o fluxo de aceite.
-          withTimeout(
+          return withTimeout(
             supabase.from('rides').update(telemetry).eq('id', rideId),
             8000,
             'telemetry timeout'
-          ).catch(() => {});
-        }
-      } catch {
-        // Sem ETA inicial — DriverNavigateScreen ainda vai calcular e gravar o seu.
-      }
+          );
+        })
+        .catch(() => {
+          // Sem ETA inicial — DriverNavigateScreen ainda vai calcular e gravar o seu.
+        });
     }
 
     setActiveRide(ride);

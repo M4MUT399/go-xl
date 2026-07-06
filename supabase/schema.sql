@@ -173,3 +173,7 @@ select
   json_build_object('lat', r.origin_lat, 'lng', r.origin_lng, 'address', r.origin_address) as origin,
   json_build_object('lat', r.destination_lat, 'lng', r.destination_lng, 'address', r.destination_address) as destination
 from public.rides r;
+
+-- security_invoker: a view deve respeitar RLS/permissões de quem consulta,
+-- não do criador (corrige o alerta "Security Definer View" do linter).
+alter view public.rides_with_locations set (security_invoker = on);

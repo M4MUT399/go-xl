@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Platform, Alert } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -8,19 +7,15 @@ import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
-import { useLocation } from '../../hooks/useLocation';
-import { useDriverRide } from '../../hooks/useRide';
+import { useScheduledRides } from '../../hooks/useRide';
+import { useDriverRideContext } from '../../contexts/DriverRideContext';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
-import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
 import { CarMarker } from '../../components/common/CarMarker';
 import { CrosshairIcon } from '../../components/common/CrosshairIcon';
-import { IncomingRideCall } from '../../components/driver/IncomingRideCall';
 import { ScheduledRideBanner } from '../../components/driver/ScheduledRideBanner';
 import { DutyStatusBanner } from '../../components/driver/DutyStatusBanner';
-import { getConfig, getConfigDefault } from '../../lib/systemConfig';
-import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
 import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
 import { useScheduledOfferAlert } from '../../hooks/useScheduledOfferAlert';
@@ -34,26 +29,24 @@ export function DriverHomeScreen({ navigation }: Props) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
-  const [isOnline, setIsOnline] = useState(false);
-  // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m)
-  const { location } = useLocation({ watch: isOnline });
-  const { pendingRide, pendingScheduledRide, setPendingRide, setPendingScheduledRide, acceptRide, confirmScheduledRide } = useDriverRide(profile?.id);
+  // Estado online/localização/assinatura de corridas agora vive em um Provider
+  // único (DriverRideContext), montado fora da Stack.Navigator — sobrevive à
+  // navegação entre telas e é a mesma instância usada por GlobalDriverRideOverlay.
+  const { isOnline, setIsOnline, location, pendingRide, pendingScheduledRide, setPendingScheduledRide, confirmScheduledRide } = useDriverRideContext();
   // P2: próxima corrida agendada confirmada por mim → banner fixo + alerta sonoro.
   const upcoming = useUpcomingScheduledRide(profile?.id);
   useScheduledReminderAlert(upcoming.imminent, upcoming.ride?.id ?? null);
+  // `activate` inicia a rota de fato (muda status da corrida) quando o
+  // motorista toca no banner fixo — só usamos essa função do hook (a lista
+  // interna dele é por passenger_id e não nos interessa aqui).
+  const { activate: activateScheduledRide } = useScheduledRides(profile?.id);
+  const [startingBannerRide, setStartingBannerRide] = useState(false);
   // Item #4: sinal sonoro DISTINTO (arpejo) quando um novo agendamento chega.
   useScheduledOfferAlert(pendingScheduledRide?.id ?? null);
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
   const duty = useDrivingLimit(profile?.id);
   const bgCheck = useBackgroundCheck(profile?.id);
-  // true após carregar o valor persistido — evita gravar is_online=false no banco antes de ler o AsyncStorage
-  const [onlineLoaded, setOnlineLoaded] = useState(false);
-  const [accepting, setAccepting] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // Timeout da chamada de corrida (s) — configurável via system_config (P1).
-  const [callTimeout, setCallTimeout] = useState<number>(getConfigDefault('ride_offer_timeout_seconds'));
-  // Evita registrar o evento 'received' mais de uma vez para a mesma chamada.
-  const loggedReceivedRef = useRef<string | null>(null);
   const mapRef = useRef<MapView>(null);
   // Mantém o marcador "ligado" por um instante a cada movimento, para o
   // ícone do carro repintar e acompanhar a posição/rotação no iOS.
@@ -77,42 +70,6 @@ export function DriverHomeScreen({ navigation }: Props) {
     }
   }
 
-  // Carrega o status online salvo ao montar (persiste entre sessões)
-  useEffect(() => {
-    AsyncStorage.getItem('driver_is_online').then((val) => {
-      if (val === 'true') setIsOnline(true);
-      setOnlineLoaded(true);
-    });
-  }, []);
-
-  // Sincroniza localização + status online no banco (só após carregar o valor persistido)
-  useEffect(() => {
-    if (!location || !profile?.id || !onlineLoaded) return;
-    supabase.from('driver_locations').upsert({
-      driver_id: profile.id,
-      lat: location.lat,
-      lng: location.lng,
-      heading: location.heading ?? null,
-      is_online: isOnline,
-      updated_at: new Date().toISOString(),
-    });
-  }, [location, isOnline, profile?.id, onlineLoaded]);
-
-  // Carrega o timeout configurável da chamada de corrida (fallback local seguro).
-  useEffect(() => {
-    getConfig('ride_offer_timeout_seconds').then(setCallTimeout).catch(() => {});
-  }, []);
-
-  // Registra 'received' assim que uma nova chamada aparece para este motorista.
-  useEffect(() => {
-    const id = pendingRide?.id;
-    if (id && loggedReceivedRef.current !== id) {
-      loggedReceivedRef.current = id;
-      logRideOfferEvent(id, profile?.id, 'received');
-    }
-    if (!id) loggedReceivedRef.current = null;
-  }, [pendingRide?.id, profile?.id]);
-
   // P3: se o limite de direção estourar enquanto online, força offline e avisa
   // uma única vez por episódio de descanso. Só acontece na home (idle) — corrida
   // em andamento vive na tela de navegação, então não interrompe viagem.
@@ -130,7 +87,6 @@ export function DriverHomeScreen({ navigation }: Props) {
         );
       }
       setIsOnline(false);
-      AsyncStorage.setItem('driver_is_online', 'false');
       duty.endSession();
     }
     if (!duty.status.mustRest) forcedRestRef.current = false;
@@ -173,39 +129,9 @@ export function DriverHomeScreen({ navigation }: Props) {
       return;
     }
     setIsOnline(val);
-    AsyncStorage.setItem('driver_is_online', val ? 'true' : 'false');
     // Abre/fecha a sessão de serviço que alimenta o cálculo do limite (P3).
     if (val) duty.startSession();
     else duty.endSession();
-  }
-
-  async function handleAccept() {
-    if (!pendingRide) return;
-    setAccepting(true);
-    const ride = await acceptRide(pendingRide.id, location ? { lat: location.lat, lng: location.lng } : null);
-    setAccepting(false);
-    if (ride === 'payment_error') {
-      Alert.alert(
-        'Pagamento recusado',
-        'O cartão do passageiro foi recusado. A corrida não pôde ser aceita.',
-      );
-      setPendingRide(null);
-    } else if (ride) {
-      navigation.navigate('DriverNavigate', { ride });
-    } else {
-      Alert.alert('Ops', 'Corrida já foi aceita por outro motorista.');
-      setPendingRide(null);
-    }
-  }
-
-  function handleReject() {
-    if (pendingRide) logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
-    setPendingRide(null);
-  }
-
-  function handleExpire() {
-    if (pendingRide) logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
-    setPendingRide(null);
   }
 
   async function handleConfirmScheduled() {
@@ -222,6 +148,24 @@ export function DriverHomeScreen({ navigation }: Props) {
     } else {
       Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
       setPendingScheduledRide(null);
+    }
+  }
+
+  // Toque no banner fixo de corrida agendada: inicia a rota de verdade
+  // (muda o status da corrida) em vez de só abrir a lista — é isso que faz
+  // o banner sumir (a corrida deixa de ser 'scheduled').
+  async function handleStartScheduledFromBanner() {
+    if (!upcoming.ride || startingBannerRide) return;
+    setStartingBannerRide(true);
+    const activated = await activateScheduledRide(upcoming.ride.id);
+    setStartingBannerRide(false);
+    if (activated) {
+      navigation.navigate('DriverNavigate', {
+        ride: activated,
+        initialDriverLocation: location ? { lat: location.lat, lng: location.lng } : undefined,
+      });
+    } else {
+      Alert.alert('Ops', 'Não foi possível iniciar a rota agora. Tente novamente.');
     }
   }
 
@@ -293,7 +237,7 @@ export function DriverHomeScreen({ navigation }: Props) {
             ride={upcoming.ride}
             minutesUntil={upcoming.minutesUntil}
             imminent={upcoming.imminent}
-            onPress={() => navigation.navigate('DriverScheduledRides')}
+            onPress={handleStartScheduledFromBanner}
           />
         )}
 
@@ -372,18 +316,11 @@ export function DriverHomeScreen({ navigation }: Props) {
         </View>
       )}
 
-      {pendingRide && (isOnline || !!pendingRide.driver_id) && (
-        <IncomingRideCall
-          ride={pendingRide}
-          driverLocation={location ? { lat: location.lat, lng: location.lng } : null}
-          timeoutSeconds={callTimeout}
-          accepting={accepting}
-          isQrLocked={!!pendingRide.driver_id}
-          onAccept={handleAccept}
-          onReject={handleReject}
-          onExpire={handleExpire}
-        />
-      )}
+      {/* O Modal de chamada de corrida (IncomingRideCall) agora é renderizado
+       *  globalmente por <GlobalDriverRideOverlay>, fora da Stack.Navigator —
+       *  veja AppNavigator.tsx e DriverRideContext.tsx. Isso garante que o
+       *  banner apareça mesmo com o motorista em outra tela (Agenda, Navegação
+       *  etc.), já que react-native-screens "congela" telas para trás na pilha. */}
     </View>
   );
 }

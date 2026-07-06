@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, Dimensions, Image } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, Dimensions, Image, TouchableOpacity } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { Button } from '../../components/common/Button';
@@ -32,17 +32,23 @@ export function WelcomeScreen({ navigation }: Props) {
       <View style={styles.footer}>
         <LanguageSelector />
         <Button
-          title={t('welcome.signIn')}
-          onPress={() => navigation.navigate('Login')}
+          title={t('welcome.createAccount')}
+          onPress={() => navigation.navigate('Register', { type: 'passenger' })}
           variant="primary"
           style={styles.btn}
         />
         <Button
-          title={t('welcome.becomeDriver')}
-          onPress={() => navigation.navigate('Register', { type: 'driver' })}
+          title={t('welcome.signIn')}
+          onPress={() => navigation.navigate('Login')}
           variant="outline"
           style={styles.btn}
         />
+        <TouchableOpacity
+          onPress={() => navigation.navigate('Register', { type: 'driver' })}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.driverLink}>{t('welcome.becomeDriver')}</Text>
+        </TouchableOpacity>
         <Text style={styles.terms}>
           {t('welcome.terms')}{' '}
           <Text style={styles.link}>{t('welcome.termsOfUse')}</Text> {t('welcome.and')}{' '}
@@ -99,6 +105,13 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     btn: {
       width: '100%',
+    },
+    driverLink: {
+      color: colors.accent,
+      fontSize: 14,
+      fontWeight: '600',
+      textAlign: 'center',
+      marginTop: 4,
     },
     terms: {
       fontSize: 12,

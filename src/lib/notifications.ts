@@ -10,7 +10,13 @@ import { reportError } from './errorReporting';
  * aberto. Em BACKGROUND o handler não é consultado, e o sistema entrega o push
  * normalmente (aviso único).
  */
-const FOREGROUND_SILENT_TYPES = new Set(['schedule_confirmed', 'ride_accepted', 'driver_released']);
+const FOREGROUND_SILENT_TYPES = new Set([
+  'schedule_confirmed', 'ride_accepted', 'driver_released',
+  // O teste da aba Alertas já toca notification.wav e mostra o banner de
+  // corrida agendada por conta própria — suprime o push do sistema em
+  // foreground para não duplicar som/banner.
+  'sched_reminder_test',
+]);
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {

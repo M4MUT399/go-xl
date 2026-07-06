@@ -17,16 +17,19 @@ export function minutesUntil(scheduledForISO: string | null | undefined, now: Da
 
 /**
  * O banner fixo deve aparecer? Verdadeiro quando o horário está dentro da
- * janela `bannerMinutes` à frente e ainda não passou de uma folga de 5 min
- * (mantém o banner um pouco após o horário, caso o motorista se atrase).
+ * janela `bannerMinutes` à frente. Uma vez dentro da janela, o banner
+ * permanece indefinidamente — mesmo com a corrida já atrasada — até o
+ * motorista tocar para iniciar a rota (o que muda o status da corrida e a
+ * remove da consulta em `useUpcomingScheduledRide`). Não há mais corte por
+ * tempo decorrido: a elegibilidade é 100% governada pelo `status='scheduled'`.
  */
 export function shouldShowBanner(mins: number, bannerMinutes: number): boolean {
-  return mins <= bannerMinutes && mins >= -5;
+  return mins <= bannerMinutes;
 }
 
-/** Já é iminente? (dispara som + destaque de urgência). Só antes do horário. */
+/** Já é iminente? (dispara som + destaque de urgência). Permanece iminente mesmo atrasada, até o motorista agir. */
 export function isImminent(mins: number, reminderMinutes: number): boolean {
-  return mins <= reminderMinutes && mins >= -5;
+  return mins <= reminderMinutes;
 }
 
 /**
@@ -44,20 +47,29 @@ export function formatCountdown(mins: number): string {
 }
 
 /**
- * Escolhe a corrida agendada mais próxima (menor `scheduled_for` no futuro/folga)
- * de uma lista já confirmada por mim. Retorna null se nenhuma qualificar.
+ * Escolhe a corrida agendada mais "urgente" (mais próxima do agora, para
+ * frente ou para trás no tempo) de uma lista já confirmada por mim. Retorna
+ * null se a lista estiver vazia.
+ *
+ * Corridas atrasadas continuam qualificando (sem corte por tempo decorrido)
+ * — a lista de entrada já vem filtrada por `status='scheduled'` na consulta,
+ * então uma corrida só some daqui quando o motorista de fato iniciar a rota
+ * (muda o status). Comparamos por distância absoluta ao agora: entre uma
+ * corrida já atrasada e outra ainda no futuro, vence a que estiver mais perto
+ * do momento atual — é a que precisa da atenção do motorista primeiro.
  */
 export function pickSoonest<T extends { scheduled_for?: string | null }>(
   rides: T[],
   now: Date = new Date()
 ): T | null {
   let best: T | null = null;
-  let bestMins = Infinity;
+  let bestAbsMins = Infinity;
   for (const r of rides) {
     const mins = minutesUntil(r.scheduled_for, now);
-    if (mins >= -5 && mins < bestMins) {
+    const absMins = Math.abs(mins);
+    if (absMins < bestAbsMins) {
       best = r;
-      bestMins = mins;
+      bestAbsMins = absMins;
     }
   }
   return best;

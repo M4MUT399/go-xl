@@ -1,96 +1,53 @@
 import React from 'react';
 import { View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { useTheme } from '../../hooks/useTheme';
+
+// Geometria da seta em um viewBox fixo — aponta para CIMA (north) quando
+// rotation=0. O SVG escala pelo container (width/height), então basta ajustar
+// containerW/H pelo `scale` para redimensionar sem recalcular pontos.
+const BASE_W = 36;
+const BASE_H = 48;
+
+/**
+ * Corpo inteiro da seta (ponta triangular + haste). Haste 40% mais curta que
+ * a versão anterior (35 → 21 de altura) e afunilada (mais larga na base,
+ * mais estreita perto da ponta) — o alargamento da base simula perspectiva
+ * forçada, como se a cauda estivesse sempre "colada" ao chão bem debaixo do
+ * motorista e a seta se estreitasse ao se afastar em direção ao horizonte.
+ */
+const ARROW_PATH = 'M18,0 L34,27 L24,27 L28,48 L8,48 L12,27 L2,27 Z';
 
 /**
  * Marcador de navegação GPS — usado no modo de condução ativa.
  *
- * Triângulo apontando para CIMA (north) quando rotation=0.
+ * Seta (haste + ponta) apontando para CIMA (north) quando rotation=0.
  * O <Marker rotation={heading}> pai rotaciona tudo para o sentido do movimento.
  * flat={true} no Marker garante que o ícone fique plano sobre o mapa (não billboard).
  *
- * Camadas:
- *   1. Sombra deslocada — simula profundidade
- *   2. Contorno branco  — garante legibilidade sobre qualquer cor de mapa
- *   3. Preenchimento accent — cor de marca
+ * Substitui o triângulo simples anterior por uma seta de verdade (mesma ideia
+ * de referência visual pedida pelo usuário), redesenhada 100% com a paleta do
+ * app — sem nenhum fundo/quadro branco ao redor, só a forma da seta:
+ *   1. Sombra deslocada       — simula profundidade
+ *   2. Contorno branco (stroke fino) — legibilidade sobre qualquer cor de mapa
+ *   3. Preenchimento dourado (accent) — cor de marca, seta toda em dourado
  */
 export function NavChevron({ scale = 1 }: { scale?: number }) {
   const { colors } = useTheme();
-  const hw = 17 * scale;   // meia-largura da base
-  const h  = 40 * scale;   // altura total
-
-  const containerW = (hw + 6) * 2;
-  const containerH = h + 10;
+  const containerW = BASE_W * scale;
+  const containerH = BASE_H * scale;
 
   return (
     <View
       collapsable={false}
-      style={{ width: containerW, height: containerH, alignItems: 'center' }}
+      style={{ width: containerW, height: containerH, alignItems: 'center', justifyContent: 'center' }}
     >
-      {/* Sombra */}
-      <View
-        style={{
-          position: 'absolute',
-          top: 6,
-          width: 0,
-          height: 0,
-          borderStyle: 'solid',
-          borderLeftWidth: hw + 4,
-          borderRightWidth: hw + 4,
-          borderBottomWidth: h + 4,
-          borderBottomColor: 'rgba(0,0,0,0.22)',
-          borderLeftColor: 'transparent',
-          borderRightColor: 'transparent',
-        }}
-      />
-      {/* Contorno branco */}
-      <View
-        style={{
-          position: 'absolute',
-          top: 0,
-          width: 0,
-          height: 0,
-          borderStyle: 'solid',
-          borderLeftWidth: hw + 4,
-          borderRightWidth: hw + 4,
-          borderBottomWidth: h + 4,
-          borderBottomColor: '#ffffff',
-          borderLeftColor: 'transparent',
-          borderRightColor: 'transparent',
-        }}
-      />
-      {/* Triângulo accent principal */}
-      <View
-        style={{
-          position: 'absolute',
-          top: 4,
-          width: 0,
-          height: 0,
-          borderStyle: 'solid',
-          borderLeftWidth: hw,
-          borderRightWidth: hw,
-          borderBottomWidth: h,
-          borderBottomColor: colors.accent,
-          borderLeftColor: 'transparent',
-          borderRightColor: 'transparent',
-        }}
-      />
-      {/* Ápice escuro — cria ilusão de espessura/3-D */}
-      <View
-        style={{
-          position: 'absolute',
-          top: 4,
-          width: 0,
-          height: 0,
-          borderStyle: 'solid',
-          borderLeftWidth: hw * 0.36,
-          borderRightWidth: hw * 0.36,
-          borderBottomWidth: h * 0.30,
-          borderBottomColor: colors.primary,
-          borderLeftColor: 'transparent',
-          borderRightColor: 'transparent',
-        }}
-      />
+      <Svg width={containerW} height={containerH} viewBox={`0 0 ${BASE_W} ${BASE_H}`}>
+        {/* Sombra */}
+        <Path d={ARROW_PATH} fill="rgba(0,0,0,0.25)" transform="translate(0, 3)" />
+        {/* Seta principal: preenchimento dourado + contorno branco fino para legibilidade */}
+        <Path d={ARROW_PATH} fill={colors.accent} stroke="#ffffff" strokeWidth={2} strokeLinejoin="round" />
+      </Svg>
     </View>
   );
 }

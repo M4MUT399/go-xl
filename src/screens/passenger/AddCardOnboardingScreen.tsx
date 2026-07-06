@@ -4,6 +4,7 @@ import {
   ActivityIndicator, Image, Animated, useWindowDimensions, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Svg, {
   Defs, LinearGradient as SvgGrad, Stop,
   Rect, Circle, Line,
@@ -208,6 +209,7 @@ export function AddCardOnboardingScreen() {
   const { profile, session, refreshProfile, patchProfile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<{ canGoBack: () => boolean; goBack: () => void }>();
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [cardInfo, setCardInfo] = useState<CardInfo>({
@@ -226,6 +228,18 @@ export function AddCardOnboardingScreen() {
       setCardInfo(prev => ({ ...prev, holderName: profile.full_name! }));
     }
   }, [profile?.full_name]);
+
+  // Esta tela agora é um PASSO dentro do app (chamada pelo gate de "pedir
+  // corrida"), não mais o "muro" inicial. Ao confirmar o cartão, mostra a
+  // celebração por um instante e volta para a tela anterior (pedir corrida),
+  // que já enxerga o cartão salvo e deixa o passageiro solicitar.
+  useEffect(() => {
+    if (phase !== 'confirmed') return;
+    const t = setTimeout(() => {
+      if (navigation.canGoBack()) navigation.goBack();
+    }, 1600);
+    return () => clearTimeout(t);
+  }, [phase, navigation]);
 
   type CardUpdates = {
     stripe_payment_method_id: string;

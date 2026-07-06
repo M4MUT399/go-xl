@@ -12,6 +12,26 @@ import * as Haptics from 'expo-haptics';
  * avisado sem um som contínuo e sem re-tocar a cada re-render/tick do contador.
  * Troca de corrida (key diferente) rearma o alerta.
  */
+/**
+ * Toca o mesmo som (notification.wav) + vibração de aviso usado pelo alerta
+ * de corrida agendada iminente, mas de forma avulsa/imperativa — usado pelo
+ * botão "Testar notificação agora" da aba Alertas, fora do ciclo de vida do
+ * hook (que só dispara em borda false→true de `imminent`).
+ */
+export async function playScheduledReminderSound(): Promise<void> {
+  let player: AudioPlayer | null = null;
+  try {
+    player = createAudioPlayer(require('../../assets/notification.wav'));
+    player.play();
+    setTimeout(() => {
+      try { player?.remove(); } catch { /* ignora */ }
+    }, 4000);
+  } catch {
+    // ignora — quem chamou pode mostrar o banner mesmo sem som
+  }
+  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+}
+
 export function useScheduledReminderAlert(imminent: boolean, key: string | null) {
   const playerRef = useRef<AudioPlayer | null>(null);
   const firedForRef = useRef<string | null>(null);

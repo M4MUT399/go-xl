@@ -142,15 +142,16 @@ export type RootStackParamList = {
   Register: { type: UserType };
   ExpressRegister: { driverCode: string };
   AddCardOnboarding: undefined;
+  CompleteRegistration: undefined;
   PassengerTabs: undefined;
   DriverTabs: undefined;
-  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string };
+  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string; express?: boolean };
   QRCode: undefined;
   FindingDriver: { ride: Ride };
   ActiveRide: { ride: Ride };
   RateRide: { ride: Ride };
   DriverRequest: { ride: Ride };
-  DriverNavigate: { ride: Ride };
+  DriverNavigate: { ride: Ride; initialDriverLocation?: { lat: number; lng: number } };
   VehicleForm: undefined;
   DriverVerification: undefined;
   EditProfile: undefined;

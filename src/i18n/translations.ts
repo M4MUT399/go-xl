@@ -36,6 +36,7 @@ export const translations: Record<Lang, Dict> = {
     // Welcome
     'welcome.tagline': 'Premium executive\nride-hailing',
     'welcome.badge': '✦ Executive XL',
+    'welcome.createAccount': 'Create account',
     'welcome.signIn': 'Sign in',
     'welcome.becomeDriver': 'Become a partner driver',
     'welcome.terms': 'By continuing, you accept our',
@@ -225,6 +226,7 @@ export const translations: Record<Lang, Dict> = {
 
     'welcome.tagline': 'Transporte ejecutivo\nde alto nivel',
     'welcome.badge': '✦ Executive XL',
+    'welcome.createAccount': 'Crear cuenta',
     'welcome.signIn': 'Entrar',
     'welcome.becomeDriver': 'Soy conductor socio',
     'welcome.terms': 'Al continuar, aceptas nuestros',
@@ -406,6 +408,7 @@ export const translations: Record<Lang, Dict> = {
 
     'welcome.tagline': 'Transporte executivo\nde alto padrão',
     'welcome.badge': '✦ Executive XL',
+    'welcome.createAccount': 'Criar conta',
     'welcome.signIn': 'Entrar',
     'welcome.becomeDriver': 'Sou motorista parceiro',
     'welcome.terms': 'Ao continuar, você aceita nossos',

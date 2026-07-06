@@ -27,6 +27,14 @@ const CHANNEL_ID = 'reminders';
 export type ReminderKey = 'h2' | 'h1' | 'm30' | 'm15';
 export type ReminderPrefs = Record<ReminderKey, boolean>;
 
+/**
+ * Avisos OBRIGATÓRIOS — o motorista não pode desligá-los, garantindo que toda
+ * viagem agendada sempre tenha ao menos um lembrete sonoro antes da hora.
+ * Mantemos o de 30min e o de 15min (os mais próximos do embarque, quando o
+ * risco de perder o horário é maior). 2h e 1h continuam opcionais.
+ */
+export const MANDATORY_REMINDER_KEYS: ReminderKey[] = ['m30', 'm15'];
+
 /** Ordem de exibição = ordem cronológica dos avisos (mais cedo → mais tarde). */
 export const REMINDER_OFFSETS: {
   key: ReminderKey;
@@ -35,6 +43,7 @@ export const REMINDER_OFFSETS: {
   desc: string;
   title: string;
   body: (place: string) => string;
+  mandatory: boolean;
 }[] = [
   {
     key: 'h2',
@@ -43,6 +52,7 @@ export const REMINDER_OFFSETS: {
     desc: 'Aviso antecipado para você se organizar',
     title: '🗓️ Corrida agendada em 2 horas',
     body: (p) => `Você tem uma corrida agendada em 2 horas${p ? ` — embarque em ${p}` : ''}.`,
+    mandatory: false,
   },
   {
     key: 'h1',
@@ -51,42 +61,54 @@ export const REMINDER_OFFSETS: {
     desc: 'Hora de começar a se preparar',
     title: '🗓️ Corrida agendada em 1 hora',
     body: (p) => `Você tem uma corrida agendada em 1 hora${p ? ` — embarque em ${p}` : ''}.`,
+    mandatory: false,
   },
   {
     key: 'm30',
     minutes: 30,
     label: '30 minutos antes',
-    desc: 'Fique pronto para sair',
+    desc: 'Obrigatório — fique pronto para sair',
     title: '⏰ Corrida agendada em 30 minutos',
     body: (p) => `Faltam 30 minutos para sua corrida agendada${p ? ` — embarque em ${p}` : ''}. Prepare-se.`,
+    mandatory: true,
   },
   {
     key: 'm15',
     minutes: 15,
     label: '15 minutos antes',
-    desc: 'Último aviso — vá buscar o passageiro',
+    desc: 'Obrigatório — último aviso, vá buscar o passageiro',
     title: '🚗 Corrida agendada em 15 minutos',
     body: (p) => `Faltam 15 minutos${p ? ` — vá buscar o passageiro em ${p}` : ''}.`,
+    mandatory: true,
   },
 ];
 
 export const DEFAULT_REMINDER_PREFS: ReminderPrefs = { h2: true, h1: true, m30: true, m15: true };
+
+/** Força os obrigatórios para `true`, não importa o que veio salvo/pedido. */
+function enforceMandatory(prefs: ReminderPrefs): ReminderPrefs {
+  const next = { ...prefs };
+  for (const key of MANDATORY_REMINDER_KEYS) next[key] = true;
+  return next;
+}
 
 // ─── Preferências (por dispositivo) ────────────────────────────────────────────
 
 export async function loadReminderPrefs(): Promise<ReminderPrefs> {
   try {
     const raw = await AsyncStorage.getItem(PREFS_KEY);
-    if (raw) return { ...DEFAULT_REMINDER_PREFS, ...(JSON.parse(raw) as Partial<ReminderPrefs>) };
+    if (raw) {
+      return enforceMandatory({ ...DEFAULT_REMINDER_PREFS, ...(JSON.parse(raw) as Partial<ReminderPrefs>) });
+    }
   } catch {
     /* fallback nos defaults */
   }
-  return { ...DEFAULT_REMINDER_PREFS };
+  return enforceMandatory({ ...DEFAULT_REMINDER_PREFS });
 }
 
 export async function saveReminderPrefs(prefs: ReminderPrefs): Promise<void> {
   try {
-    await AsyncStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    await AsyncStorage.setItem(PREFS_KEY, JSON.stringify(enforceMandatory(prefs)));
   } catch (e) {
     reportError(e, { op: 'saveReminderPrefs' });
   }
@@ -145,7 +167,10 @@ export async function syncDriverReminders(driverId: string | undefined): Promise
     // Limpa os antigos SEMPRE (remove lembretes órfãos, evita duplicata).
     await clearDriverReminders();
 
-    const enabled = REMINDER_OFFSETS.filter((o) => prefs[o.key]);
+    // `o.mandatory ||` é redundância defensiva: mesmo que `prefs` chegue aqui
+    // sem passar por enforceMandatory (bug futuro, cache antigo etc.), os
+    // obrigatórios (30min/15min) nunca ficam de fora.
+    const enabled = REMINDER_OFFSETS.filter((o) => o.mandatory || prefs[o.key]);
     if (enabled.length === 0) return;
 
     const now = Date.now();

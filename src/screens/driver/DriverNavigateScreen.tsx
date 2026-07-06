@@ -93,7 +93,7 @@ function formatStepDist(meters: number): string {
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 export function DriverNavigateScreen({ navigation, route }: Props) {
-  const { ride } = route.params;
+  const { ride, initialDriverLocation } = route.params;
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -147,8 +147,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   // Throttle: recalcula rota só se mover > 150 m
   const lastRouteCoord = useRef<{ lat: number; lng: number } | null>(null);
+  // Semeia a origem da rota com a localização já capturada no momento do
+  // aceite (passada via navigation params) — assim o mapa traça o caminho
+  // até o passageiro IMEDIATAMENTE ao abrir a tela, sem esperar o novo fix
+  // de GPS deste hook (que pode levar 1-2s para resolver permissão + posição).
   const [routeOrigin, setRouteOrigin] = useState(
-    location ? { lat: location.lat, lng: location.lng } : null
+    location
+      ? { lat: location.lat, lng: location.lng }
+      : initialDriverLocation ?? null
   );
   const mapRef = useRef<MapView>(null);
   const lastCameraUpdate = useRef(0);
@@ -366,7 +372,12 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         {location && (
           <Marker
             coordinate={{ latitude: location.lat, longitude: location.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
+            // Ancora perto da BASE da cauda (não no centro do ícone) — assim a
+            // ponta que fica "colada" exatamente na coordenada do GPS é a
+            // parte de trás da seta, e o corpo/ponta gira e se inclina em
+            // volta desse ponto fixo conforme o rumo muda e o mapa se
+            // inclina (pitch), reforçando o efeito de estar preso ao chão.
+            anchor={{ x: 0.5, y: 0.82 }}
             rotation={location.heading ?? lastHeadingRef.current}
             flat
             tracksViewChanges={tracksCar}
@@ -374,17 +385,45 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             <NavChevron scale={1.5} />
           </Marker>
         )}
-        {location && (
+        {/* Traça a rota IMEDIATAMENTE ao abrir a tela: usa a posição já conhecida
+            do motorista (GPS ao vivo ou, na falta dele por 1-2s, a localização
+            capturada no momento do aceite) — nunca fica com o mapa "vazio"
+            enquanto espera um novo fix de GPS. */}
+        {(location || routeOrigin) && (
           <Polyline
+            // Contorno dourado (mais largo, atrás) + linha navy por cima:
+            // combinação da paleta da marca que se destaca tanto sobre ruas
+            // claras/cinza quanto sobre água/parques do mapa (modo claro).
             coordinates={
               path?.coordinates ?? [
-                { latitude: location.lat, longitude: location.lng },
+                {
+                  latitude: (location ?? routeOrigin)!.lat,
+                  longitude: (location ?? routeOrigin)!.lng,
+                },
                 { latitude: target.lat, longitude: target.lng },
               ]
             }
             strokeColor={colors.accent}
+            strokeWidth={path ? 7 : 6}
+            lineDashPattern={path ? undefined : [6, 3]}
+            zIndex={1}
+          />
+        )}
+        {(location || routeOrigin) && (
+          <Polyline
+            coordinates={
+              path?.coordinates ?? [
+                {
+                  latitude: (location ?? routeOrigin)!.lat,
+                  longitude: (location ?? routeOrigin)!.lng,
+                },
+                { latitude: target.lat, longitude: target.lng },
+              ]
+            }
+            strokeColor={colors.primary}
             strokeWidth={path ? 4 : 3}
             lineDashPattern={path ? undefined : [6, 3]}
+            zIndex={2}
           />
         )}
       </MapView>
