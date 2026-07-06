@@ -9,7 +9,7 @@
  * Ao concluir, o telefone passa a estar preenchido → o perfil vira "completo"
  * (ver src/lib/onboarding.ts) e os gates de corrida deixam de aparecer.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert,
 } from 'react-native';
@@ -21,6 +21,7 @@ import { Input } from '../../components/common/Input';
 import { useTheme } from '../../hooks/useTheme';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { isProfileComplete } from '../../lib/onboarding';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'CompleteRegistration'>;
@@ -37,6 +38,22 @@ export function CompleteRegistrationScreen({ navigation }: Props) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Mesma proteção do AddCardOnboardingScreen: este gate não deveria aparecer
+  // para quem já tem cadastro completo. Um profile null/desatualizado no
+  // momento do gate anterior (rede ruim) pode navegar para cá por engano —
+  // assim que confirmarmos (aqui, ou após o refresh abaixo) que já está
+  // completo, saímos em silêncio.
+  useEffect(() => {
+    if (isProfileComplete(profile)) {
+      if (navigation.canGoBack()) navigation.goBack();
+    }
+  }, [profile, navigation]);
+
+  useEffect(() => {
+    if (!isProfileComplete(profile)) refreshProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSave() {
     const cleanName = fullName.trim();

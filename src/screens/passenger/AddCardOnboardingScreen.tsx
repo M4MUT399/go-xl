@@ -14,6 +14,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/common/Button';
+import { hasPaymentCard } from '../../lib/onboarding';
 
 const SUPABASE_URL   = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SETUP_CARD_URL = `${SUPABASE_URL}/functions/v1/setup-card`;
@@ -228,6 +229,27 @@ export function AddCardOnboardingScreen() {
       setCardInfo(prev => ({ ...prev, holderName: profile.full_name! }));
     }
   }, [profile?.full_name]);
+
+  // Esta tela NUNCA deveria aparecer para quem já tem cartão salvo. Mas o gate
+  // em RequestRideScreen (hasPaymentCard) pode ler um profile null/desatualizado
+  // quando o carregamento do perfil falha ou demora (rede ruim) e navegar para
+  // cá por engano — foi o que causou o passageiro ver esta tela "do nada" e o
+  // app parecer travado. Assim que confirmarmos (já no mount, ou logo depois
+  // de um refresh) que o cartão já existe, saímos em silêncio, sem mostrar
+  // nada ao usuário.
+  useEffect(() => {
+    if (phase === 'idle' && hasPaymentCard(profile)) {
+      if (navigation.canGoBack()) navigation.goBack();
+    }
+  }, [profile, phase, navigation]);
+
+  // Se chegamos aqui sem cartão no estado local, revalida contra o servidor:
+  // o profile pode estar desatualizado (falha/timeout no gate anterior) mesmo
+  // que o cartão já exista no banco. Isso alimenta o efeito acima.
+  useEffect(() => {
+    if (!hasPaymentCard(profile)) refreshProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Esta tela agora é um PASSO dentro do app (chamada pelo gate de "pedir
   // corrida"), não mais o "muro" inicial. Ao confirmar o cartão, mostra a
