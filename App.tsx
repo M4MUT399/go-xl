@@ -9,10 +9,16 @@ import { I18nProvider } from './src/i18n';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
 import { installNetworkErrorGuard } from './src/lib/networkErrorGuard';
+import { preloadDriverMarkerAssets } from './src/lib/preloadAssets';
 
 // Engole rejeições de promise de rede transitórias (auto-refresh de sessão /
 // realtime do Supabase) para não virarem o toast vermelho do Expo Go.
 installNetworkErrorGuard();
+
+// Decodifica a logo do marcador de motorista o quanto antes (ver
+// preloadAssets.ts) — evita o marcador "congelar" no ícone padrão do mapa
+// antes da imagem customizada estar pronta.
+preloadDriverMarkerAssets();
 
 // Reforço em dev: oculta o overlay de log para essas mensagens benignas.
 // Nunca aparece em build de produção.

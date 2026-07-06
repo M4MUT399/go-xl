@@ -40,6 +40,25 @@ export function HomeScreen({ navigation }: Props) {
   const mapRef = useRef<MapView>(null);
   const [destination, setDestination] = useState('');
 
+  // Antes o mapa só montava depois do primeiro fix de GPS (`location` !=
+  // null), deixando o passageiro olhando "Carregando mapa..." por vários
+  // segundos ao abrir o app. Agora o MapView monta IMEDIATAMENTE com uma
+  // região padrão (Orlando, FL — mesma usada em DriverHomeScreen) e, assim
+  // que a localização real chegar pela primeira vez, anima suavemente até
+  // ela — sem bloquear a primeira renderização.
+  const hasCenteredRef = useRef(false);
+  useEffect(() => {
+    if (location && mapRef.current && !hasCenteredRef.current) {
+      hasCenteredRef.current = true;
+      mapRef.current.animateToRegion({
+        latitude: location.lat,
+        longitude: location.lng,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 500);
+    }
+  }, [location]);
+
   // Os marcadores de motorista renderizam uma <Image> (logo GoXL). Com
   // tracksViewChanges=false o mapa "fotografa" o marcador uma vez — se a imagem
   // ainda não pintou, o círculo sai vazio. Então rastreamos por ~1,2s sempre
@@ -80,14 +99,30 @@ export function HomeScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {location ? (
+      {status === 'denied' ? (
+        <View style={[styles.map, styles.mapPlaceholder]}>
+          <View style={styles.mapError}>
+            <Text style={styles.mapErrorEmoji}>📍</Text>
+            <Text style={styles.mapErrorTitle}>Localização desativada</Text>
+            <Text style={styles.mapErrorText}>
+              O Go XL precisa da sua localização para encontrar motoristas e definir o embarque.
+            </Text>
+            <TouchableOpacity style={styles.mapErrorBtn} onPress={() => Linking.openSettings()}>
+              <Text style={styles.mapErrorBtnText}>Abrir ajustes</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
         <MapView
           ref={mapRef}
           style={styles.map}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+          // Monta com uma região padrão (Orlando, FL) e anima até a localização
+          // real assim que o GPS responder (ver efeito acima) — o mapa aparece
+          // na hora, em vez de esperar o primeiro fix de localização.
           initialRegion={{
-            latitude: location.lat,
-            longitude: location.lng,
+            latitude: location?.lat ?? 28.5383,
+            longitude: location?.lng ?? -81.3792,
             latitudeDelta: 0.01,
             longitudeDelta: 0.01,
           }}
@@ -99,14 +134,14 @@ export function HomeScreen({ navigation }: Props) {
           // isso, no Android usamos o estilo padrão (claro) do Maps.
           customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
         >
-          <Marker
-            coordinate={{ latitude: location.lat, longitude: location.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <View style={styles.userMarker}>
-              <View style={styles.userMarkerDot} />
-            </View>
-          </Marker>
+          {/* O ponto de localização do usuário é o nativo (showsUserLocation
+           * acima), que reflete o GPS ao vivo do sistema — nunca fica
+           * desatualizado. Antes havia também um marcador dourado customizado
+           * amarrado ao `location` (estado em JS, alimentado por cache/fix
+           * assíncrono); quando esse cache ficava desatualizado, o marcador
+           * dourado podia aparecer numa posição BEM diferente da real (ex.:
+           * dentro de um lago), enquanto o ponto nativo já mostrava o lugar
+           * certo. Removido para eliminar essa classe de bug de vez. */}
 
           {drivers.map((d) => (
             <Marker
@@ -119,31 +154,19 @@ export function HomeScreen({ navigation }: Props) {
             </Marker>
           ))}
         </MapView>
-      ) : (
-        <View style={[styles.map, styles.mapPlaceholder]}>
-          {status === 'loading' ? (
-            <Text style={styles.mapPlaceholderText}>Carregando mapa...</Text>
-          ) : (
-            <View style={styles.mapError}>
-              <Text style={styles.mapErrorEmoji}>📍</Text>
-              <Text style={styles.mapErrorTitle}>
-                {status === 'denied' ? 'Localização desativada' : 'Sem localização'}
-              </Text>
-              <Text style={styles.mapErrorText}>
-                {status === 'denied'
-                  ? 'O Go XL precisa da sua localização para encontrar motoristas e definir o embarque.'
-                  : 'Não foi possível obter sua localização. Verifique se o GPS está ligado.'}
-              </Text>
-              <TouchableOpacity
-                style={styles.mapErrorBtn}
-                onPress={() => (status === 'denied' ? Linking.openSettings() : retry())}
-              >
-                <Text style={styles.mapErrorBtnText}>
-                  {status === 'denied' ? 'Abrir ajustes' : 'Tentar novamente'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
+      )}
+      {status === 'error' && (
+        <View style={styles.mapErrorOverlay} pointerEvents="box-none">
+          <View style={styles.mapError}>
+            <Text style={styles.mapErrorEmoji}>📍</Text>
+            <Text style={styles.mapErrorTitle}>Sem localização</Text>
+            <Text style={styles.mapErrorText}>
+              Não foi possível obter sua localização. Verifique se o GPS está ligado.
+            </Text>
+            <TouchableOpacity style={styles.mapErrorBtn} onPress={() => retry()}>
+              <Text style={styles.mapErrorBtnText}>Tentar novamente</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -241,6 +264,16 @@ function makeStyles(colors: AppTheme) {
       backgroundColor: colors.primaryLight,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    mapErrorOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(15,15,30,0.85)',
     },
     mapPlaceholderText: { color: colors.gray[400] },
     mapError: { alignItems: 'center', paddingHorizontal: 40 },
@@ -404,19 +437,5 @@ function makeStyles(colors: AppTheme) {
       justifyContent: 'center',
     },
     searchArrowText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
-    userMarker: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      backgroundColor: 'rgba(201,168,76,0.3)',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    userMarkerDot: {
-      width: 12,
-      height: 12,
-      borderRadius: 6,
-      backgroundColor: colors.accent,
-    },
   });
 }

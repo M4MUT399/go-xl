@@ -33,24 +33,43 @@ export function useLocation(options?: UseLocationOptions) {
         return;
       }
 
-      // 1) Posição em cache SÓ se for recente (<60s) e precisa (<100m)
+      // 1) Posição em cache SÓ se for BEM recente (<15s) e precisa (<50m). Antes,
+      // o cache só servia de "preview" e o mapa continuava em `loading` até o
+      // fix preciso (passo 2) responder — em áreas fechadas/urbanas isso podia
+      // levar vários segundos. Agora, assim que o cache chega, já liberamos
+      // `ready` (mapa aparece na hora); o fix preciso do passo 2 só refina a
+      // posição em segundo plano, sem bloquear a UI.
+      //
+      // Cuidado: a tolerância aqui era 60s/100m e isso deixava o marcador
+      // dourado (posição customizada da GoXL) aparecer temporariamente num
+      // lugar ERRADO do mapa — bem diferente do pontinho azul nativo do
+      // iOS/Android (que usa o GPS ao vivo, sem depender deste cache). Uma
+      // janela apertada (15s/50m) reduz drasticamente a chance de mostrar
+      // uma posição desatualizada, mantendo o ganho de velocidade.
       try {
         const last = await ExpoLocation.getLastKnownPositionAsync({
-          maxAge: 60000,
-          requiredAccuracy: 100,
+          maxAge: 15000,
+          requiredAccuracy: 50,
         });
-        if (last) setLocation({ lat: last.coords.latitude, lng: last.coords.longitude, heading: validHeading(last.coords.heading) });
+        if (last) {
+          setLocation({ lat: last.coords.latitude, lng: last.coords.longitude, heading: validHeading(last.coords.heading) });
+          setStatus('ready');
+        }
       } catch {
         // ignora — segue para a posição precisa
       }
 
-      // 2) Posição precisa única (ponto de partida)
+      // 2) Fix inicial: usa `Balanced` (bem mais rápido que `High` em ambientes
+      // urbanos/fechados) apenas para o ponto de partida. Precisão fina vem
+      // depois via watchPositionAsync (quando `watch: true`).
       const loc = await ExpoLocation.getCurrentPositionAsync({
-        accuracy: ExpoLocation.Accuracy.High,
+        accuracy: ExpoLocation.Accuracy.Balanced,
       });
       setLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude, heading: validHeading(loc.coords.heading) });
       setStatus('ready');
     } catch {
+      // Se já tínhamos exibido o cache, mantém "ready" — o usuário já está
+      // vendo o mapa; só cai em erro quando não há absolutamente nada.
       setErrorMsg('Não foi possível obter sua localização');
       setStatus((prev) => (prev === 'loading' ? 'error' : prev));
     }
