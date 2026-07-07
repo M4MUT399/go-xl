@@ -166,6 +166,9 @@ export const translations: Record<Lang, Dict> = {
     'driver.verificationRequiredTitle': 'Verification required',
     'driver.verificationRequiredBody': 'You need to submit your selfie and document for review before going online.',
     'driver.verificationGo': 'Submit now',
+    'driver.payoutSetupRequiredTitle': 'Finish payout setup',
+    'driver.payoutSetupRequiredBody': 'Complete your Stripe payout onboarding before going online so you can get paid.',
+    'driver.payoutSetupGo': 'Set up payouts',
     // Incoming ride call (P1)
     'driverCall.title': 'New ride!',
     'driverCall.expiresIn': 'Expires in',
@@ -348,6 +351,9 @@ export const translations: Record<Lang, Dict> = {
     'driver.verificationRequiredTitle': 'Verificación requerida',
     'driver.verificationRequiredBody': 'Debes enviar tu selfie y documento para revisión antes de conectarte.',
     'driver.verificationGo': 'Enviar ahora',
+    'driver.payoutSetupRequiredTitle': 'Completa la configuración de pagos',
+    'driver.payoutSetupRequiredBody': 'Completa tu registro de pagos en Stripe antes de conectarte para poder recibir tus ganancias.',
+    'driver.payoutSetupGo': 'Configurar pagos',
     // Llamada de viaje entrante (P1)
     'driverCall.title': '¡Nuevo viaje!',
     'driverCall.expiresIn': 'Expira en',
@@ -530,6 +536,9 @@ export const translations: Record<Lang, Dict> = {
     'driver.verificationRequiredTitle': 'Verificação necessária',
     'driver.verificationRequiredBody': 'Você precisa enviar sua selfie e documento para análise antes de ficar online.',
     'driver.verificationGo': 'Enviar agora',
+    'driver.payoutSetupRequiredTitle': 'Conclua o cadastro de repasse',
+    'driver.payoutSetupRequiredBody': 'Conclua seu cadastro de repasse no Stripe antes de ficar online para poder receber.',
+    'driver.payoutSetupGo': 'Configurar repasse',
     // Chamada de corrida recebida (P1)
     'driverCall.title': 'Nova corrida!',
     'driverCall.expiresIn': 'Expira em',

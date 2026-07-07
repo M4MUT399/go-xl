@@ -85,7 +85,18 @@ Deno.serve(async (req) => {
     await admin.from('profiles').update({
       stripe_onboarding_complete: onboardingComplete,
       stripe_payouts_enabled: payoutsEnabled,
+      stripe_charges_enabled: chargesEnabled,
     }).eq('id', user.id);
+
+    // Atribui a faixa de comissão do motorista na 1ª vez que o Stripe habilita
+    // cobranças (charges_enabled=true). A função no banco é idempotente e
+    // race-safe: nunca recalcula uma faixa já atribuída. 85% para os 100
+    // primeiros a concluir o onboarding; 80% do 101º em diante.
+    let driverSharePercent: number | null = null;
+    if (chargesEnabled) {
+      const { data: share } = await admin.rpc('assign_driver_tier', { p_driver: user.id });
+      driverSharePercent = share as number | null;
+    }
 
     return json({
       hasAccount: true,
@@ -94,6 +105,7 @@ Deno.serve(async (req) => {
       chargesEnabled,
       needsAttention,
       disabledReason,
+      driverSharePercent,
     });
   } catch (e) {
     return json({ error: String(e) }, 500);

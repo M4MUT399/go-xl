@@ -49,6 +49,48 @@ async function chargeRide(rideId: string): Promise<{ ok: boolean; error?: string
   }
 }
 
+/**
+ * Reaplica a divisão de receita de uma corrida com a fatia REAL do motorista que
+ * a assumiu (profiles.driver_share_percent), decidida no onboarding — 85% para os
+ * 100 primeiros motoristas, 80% do 101º em diante.
+ *
+ * Por que aqui e não no pedido: no `requestRide`/`scheduleRide` o motorista ainda
+ * é desconhecido (pool aberto), então o split é gravado com o padrão. Quando um
+ * motorista aceita, seu `driver_id` passa a existir e recalculamos driver_amount/
+ * platform_fee com a fatia dele. O passageiro paga sempre o mesmo `price`; isto só
+ * ajusta quanto o motorista recebe no repasse semanal.
+ *
+ * Fire-and-forget (best-effort): se o motorista ainda não tem faixa definida
+ * (share == null) ou algo falhar, o split padrão já gravado permanece — nunca
+ * bloqueia o aceite nem o pagamento.
+ */
+async function applyDriverSplit(rideId: string, driverId: string): Promise<void> {
+  try {
+    const [{ data: prof }, { data: ride }] = await Promise.all([
+      supabase.from('profiles').select('driver_share_percent').eq('id', driverId).single(),
+      supabase.from('rides').select('price, toll_amount, airport_port_fee').eq('id', rideId).single(),
+    ]);
+    const share = (prof as { driver_share_percent: number | null } | null)?.driver_share_percent;
+    if (share == null) return; // sem faixa definida — mantém o split padrão gravado
+    const r = ride as { price: number | null; toll_amount: number | null; airport_port_fee: number | null } | null;
+    if (!r) return;
+    const toll = Number(r.toll_amount) || 0;
+    const venueFee = Number(r.airport_port_fee) || 0;
+    // O split incide só sobre a tarifa (pedágio é pass-through ao motorista; taxa
+    // de aeroporto/porto é regulatória e fica com a plataforma).
+    const fare = Math.round(((Number(r.price) || 0) - toll - venueFee) * 100) / 100;
+    const split = calculateSplit(fare, Number(share));
+    const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
+    const platformFee = Math.round((split.platformFee + venueFee) * 100) / 100;
+    await supabase
+      .from('rides')
+      .update({ driver_amount: driverAmount, platform_fee: platformFee })
+      .eq('id', rideId);
+  } catch (e) {
+    reportError(e, { op: 'applyDriverSplit', rideId });
+  }
+}
+
 /** Cobra gorjeta do passageiro via Edge Function (off-session). */
 export async function tipRide(rideId: string, amountCents: number): Promise<{ ok: boolean; error?: string }> {
   try {
@@ -662,6 +704,8 @@ export function useScheduledRides(passengerId: string | undefined) {
       .eq('id', rideId)
       .is('driver_id', null) // apenas se ainda sem motorista (evita dupla confirmação)
       .eq('status', 'scheduled');
+    // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
+    if (!error) applyDriverSplit(rideId, driverId);
     return !error;
   }, []);
 
@@ -1001,6 +1045,11 @@ export function useDriverRide(driverId: string | undefined) {
 
     let ride = data as Ride;
 
+    // 2b) Reaplica a fatia real deste motorista ao split (fire-and-forget) — o
+    //     driver_id agora é conhecido, então driver_amount/platform_fee passam a
+    //     refletir a faixa de comissão dele (85% ou 80%).
+    applyDriverSplit(rideId, driverId!);
+
     // 3) Calcula o ETA até o embarque para gravar em rides — assim o passageiro
     //    recebe o tempo estimado junto com o aviso de "motorista a caminho".
     //    IMPORTANTE: isso é 100% fire-and-forget agora. O motorista precisa ver o
@@ -1068,6 +1117,9 @@ export function useDriverRide(driverId: string | undefined) {
 
     const ride = data as Ride;
 
+    // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
+    applyDriverSplit(ride.id, driverId!);
+
     // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
     broadcastToPassenger(ride.passenger_id, ride.id);
 
@@ -1099,6 +1151,9 @@ export function useDriverRide(driverId: string | undefined) {
     setPendingScheduledRide(null);
 
     const ride = data as Ride;
+    // Reaplica a fatia deste motorista ao split (agendamento travado por QR:
+    // driver_id já era dele desde a criação, mas o split fora gravado no padrão).
+    applyDriverSplit(ride.id, driverId!);
     // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
     broadcastToPassenger(ride.passenger_id, ride.id);
     // Tenta push remoto como fallback

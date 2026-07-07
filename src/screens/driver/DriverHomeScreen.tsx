@@ -130,6 +130,20 @@ export function DriverHomeScreen({ navigation }: Props) {
       );
       return;
     }
+    // Stripe Connect: só pode ficar online com a conta de repasse habilitada
+    // (charges + payouts). O backend também força isso (trigger em
+    // driver_locations) — aqui é só o aviso amigável direcionando ao onboarding.
+    if (val && !(profile?.stripe_charges_enabled && profile?.stripe_payouts_enabled)) {
+      Alert.alert(
+        t('driver.payoutSetupRequiredTitle', 'Finish payout setup'),
+        t('driver.payoutSetupRequiredBody', 'Complete your Stripe payout onboarding before going online so you can get paid.'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('driver.payoutSetupGo', 'Set up payouts'), onPress: () => navigation.navigate('DriverTabs', { screen: 'Ganhos' } as never) },
+        ]
+      );
+      return;
+    }
     // P3: bloqueia ficar online enquanto o descanso obrigatório não terminar.
     if (val && duty.status.mustRest) {
       const until = duty.status.restUntil

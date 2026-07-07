@@ -32,11 +32,20 @@ export interface Profile {
   verification_submitted_at?: string;
   is_admin?: boolean;
   created_at: string;
-  // Pagamento Stripe
+  // Pagamento Stripe (passageiro)
   stripe_customer_id?: string;
   stripe_payment_method_id?: string;
   card_last4?: string;
   card_brand?: string;
+  // Stripe Connect (motorista parceiro)
+  stripe_account_id?: string;
+  stripe_onboarding_complete?: boolean;
+  stripe_charges_enabled?: boolean;
+  stripe_payouts_enabled?: boolean;
+  /** Fatia do motorista fixada no onboarding: 0.85 (100 primeiros) ou 0.80. */
+  driver_share_percent?: number;
+  /** Ordem de conclusão do onboarding (auditoria de faixa). */
+  driver_onboarded_seq?: number;
 }
 
 export interface Vehicle {
