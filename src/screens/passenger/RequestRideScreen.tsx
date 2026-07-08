@@ -48,7 +48,17 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
   const [results, setResults] = useState<GeocodeResult[]>([]);
   const [searching, setSearching] = useState(false);
+  // Endereço da localização GPS atual (reverse geocode). É o embarque padrão,
+  // mas o passageiro pode sobrepor escolhendo outro ponto (selectedOrigin).
   const [originAddress, setOriginAddress] = useState('Sua localização atual');
+  const [originText, setOriginText] = useState('');
+  const [selectedOrigin, setSelectedOrigin] = useState<Location | null>(null);
+  const [originResults, setOriginResults] = useState<GeocodeResult[]>([]);
+  const [originSearching, setOriginSearching] = useState(false);
+  // Qual campo está sendo editado agora — controla qual lista de sugestões
+  // aparece embaixo. Começa em 'destination' pra manter o fluxo atual (o
+  // passageiro já cai digitando o destino).
+  const [activeField, setActiveField] = useState<'origin' | 'destination'>('destination');
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [scheduledDate, setScheduledDate] = useState<Date>(() => new Date(Date.now() + 30 * 60 * 1000));
@@ -57,6 +67,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [venueFee, setVenueFee] = useState<number>(0);
 
   const debouncedQuery = useDebounce(destinationText, 450);
+  const debouncedOriginQuery = useDebounce(originText, 450);
 
   useEffect(() => {
     if (location) {
@@ -64,7 +75,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
         if (addr) setOriginAddress(addr);
       });
     }
-  }, [location]);
+  }, [location?.lat, location?.lng]);
 
   useEffect(() => {
     if (selectedDest || debouncedQuery.trim().length < 3) {
@@ -80,15 +91,37 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       }
     });
     return () => { cancelled = true; };
-  }, [debouncedQuery, selectedDest, location]);
+  }, [debouncedQuery, selectedDest, location?.lat, location?.lng]);
+
+  // Busca de endereços pro campo de embarque — mesmo padrão do destino.
+  useEffect(() => {
+    if (selectedOrigin || debouncedOriginQuery.trim().length < 3) {
+      setOriginResults([]);
+      return;
+    }
+    let cancelled = false;
+    setOriginSearching(true);
+    searchAddresses(debouncedOriginQuery, location ?? undefined).then((res) => {
+      if (!cancelled) {
+        setOriginResults(res);
+        setOriginSearching(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [debouncedOriginQuery, selectedOrigin, location?.lat, location?.lng]);
+
+  // Embarque efetivo: usa o ponto escolhido manualmente pelo passageiro
+  // (selectedOrigin) ou, por padrão, a localização GPS atual.
+  const effectiveOrigin: Location | null = selectedOrigin
+    ?? (location ? { lat: location.lat, lng: location.lng, address: originAddress } : null);
 
   const { route } = useRoute(
-    location ? { lat: location.lat, lng: location.lng } : null,
+    effectiveOrigin ? { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng } : null,
     selectedDest ? { lat: selectedDest.lat, lng: selectedDest.lng } : null
   );
 
   const distanceKm = route?.distanceKm
-    ?? (selectedDest && location ? haversine(location, { lat: selectedDest.lat, lng: selectedDest.lng }) : null);
+    ?? (selectedDest && effectiveOrigin ? haversine(effectiveOrigin, { lat: selectedDest.lat, lng: selectedDest.lng }) : null);
 
   const estimatedPrice = distanceKm ? estimatePrice(distanceKm, surgeInfo.multiplier) : null;
   const estimatedMin = route?.durationMin ?? (distanceKm ? estimateDuration(distanceKm) : null);
@@ -109,46 +142,46 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
   // Pedágio (P5): estima quando há destino + distância. Desligado → 0, sem UI.
   useEffect(() => {
-    if (!selectedDest || !location || !distanceKm) {
+    if (!selectedDest || !effectiveOrigin || !distanceKm) {
       setTollAmount(0);
       return;
     }
     let cancelled = false;
     estimateTollAmount({
-      origin: { lat: location.lat, lng: location.lng },
+      origin: { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
       destination: { lat: selectedDest.lat, lng: selectedDest.lng },
       distanceKm,
     }).then((q) => {
       if (!cancelled) setTollAmount(q.amount);
     });
     return () => { cancelled = true; };
-  }, [selectedDest, location, distanceKm]);
+  }, [selectedDest, selectedOrigin, location?.lat, location?.lng, distanceKm]);
 
   // Taxa de aeroporto/porto (P6): estima por geofence. Sem zonas → 0, sem UI.
   useEffect(() => {
-    if (!selectedDest || !location) {
+    if (!selectedDest || !effectiveOrigin) {
       setVenueFee(0);
       return;
     }
     let cancelled = false;
     estimateAirportFees(
-      { lat: location.lat, lng: location.lng },
+      { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
       { lat: selectedDest.lat, lng: selectedDest.lng },
     ).then((r) => {
       if (!cancelled) setVenueFee(r.total);
     });
     return () => { cancelled = true; };
-  }, [selectedDest, location]);
+  }, [selectedDest, selectedOrigin, location?.lat, location?.lng]);
 
   async function handleRequest() {
     if (!selectedDest) {
       Alert.alert('Atenção', 'Selecione o destino.');
       return;
     }
-    if (!location) {
+    if (!effectiveOrigin) {
       Alert.alert(
         'Localização não disponível',
-        'Aguardando seu GPS. Tente novamente em alguns segundos ou verifique se a permissão de localização está ativada.',
+        'Aguardando seu GPS. Tente novamente em alguns segundos, verifique a permissão de localização, ou digite manualmente o local de embarque.',
       );
       return;
     }
@@ -165,11 +198,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       return;
     }
     setLoading(true);
-    const origin: Location = {
-      lat: location.lat,
-      lng: location.lng,
-      address: originAddress,
-    };
+    const origin: Location = effectiveOrigin;
     const ride = await requestRide(
       origin,
       selectedDest,
@@ -191,7 +220,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   }
 
   async function confirmSchedule() {
-    if (!selectedDest || !location) return;
+    if (!selectedDest || !effectiveOrigin) return;
     if (scheduledDate.getTime() < Date.now() + 5 * 60 * 1000) {
       Alert.alert('Atenção', 'Escolha um horário pelo menos 5 minutos no futuro.');
       return;
@@ -209,7 +238,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       return;
     }
     setLoading(true);
-    const origin: Location = { lat: location.lat, lng: location.lng, address: originAddress };
+    const origin: Location = effectiveOrigin;
     const ride = await scheduleRide(
       origin,
       selectedDest,
@@ -257,20 +286,24 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
           </View>
         )}
 
-        {location && selectedDest ? (
+        {effectiveOrigin && selectedDest ? (
           <MapView
             style={[styles.miniMap, selectedDest && { height: 130 }]}
             provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-            // Força o mapa CLARO no Android; no iOS o Apple Maps já é claro.
+            // Força o mapa CLARO em ambas as plataformas. No iOS, sem
+            // `userInterfaceStyle`, o Apple Maps segue o modo escuro do
+            // sistema (comportamento "automatic") — não é claro por padrão
+            // como o comentário antigo assumia.
             customMapStyle={Platform.OS === 'android' ? [] : undefined}
+            userInterfaceStyle="light"
             initialRegion={{
-              latitude: (location.lat + selectedDest.lat) / 2,
-              longitude: (location.lng + selectedDest.lng) / 2,
-              latitudeDelta: Math.abs(location.lat - selectedDest.lat) * 2 + 0.02,
-              longitudeDelta: Math.abs(location.lng - selectedDest.lng) * 2 + 0.02,
+              latitude: (effectiveOrigin.lat + selectedDest.lat) / 2,
+              longitude: (effectiveOrigin.lng + selectedDest.lng) / 2,
+              latitudeDelta: Math.abs(effectiveOrigin.lat - selectedDest.lat) * 2 + 0.02,
+              longitudeDelta: Math.abs(effectiveOrigin.lng - selectedDest.lng) * 2 + 0.02,
             }}
           >
-            <Marker coordinate={{ latitude: location.lat, longitude: location.lng }}>
+            <Marker coordinate={{ latitude: effectiveOrigin.lat, longitude: effectiveOrigin.lng }}>
               <View style={styles.markerOrigin} />
             </Marker>
             <Marker coordinate={{ latitude: selectedDest.lat, longitude: selectedDest.lng }}>
@@ -279,7 +312,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
             <Polyline
               coordinates={
                 route?.coordinates ?? [
-                  { latitude: location.lat, longitude: location.lng },
+                  { latitude: effectiveOrigin.lat, longitude: effectiveOrigin.lng },
                   { latitude: selectedDest.lat, longitude: selectedDest.lng },
                 ]
               }
@@ -298,13 +331,30 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
               <View style={styles.dotDest} />
             </View>
             <View style={styles.routeInputs}>
-              <View style={styles.originBox}>
-                <Text style={styles.originLabel} numberOfLines={1}>{originAddress}</Text>
+              <View style={styles.originInputWrap}>
+                <TextInput
+                  style={[styles.originInput, activeField === 'origin' && styles.routeInputActive]}
+                  value={originText}
+                  onChangeText={(t) => { setOriginText(t); setSelectedOrigin(null); }}
+                  onFocus={() => setActiveField('origin')}
+                  placeholder={originAddress || 'Sua localização atual'}
+                  placeholderTextColor={colors.gray[400]}
+                  numberOfLines={1}
+                />
+                {selectedOrigin && (
+                  <TouchableOpacity
+                    style={styles.clearOriginBtn}
+                    onPress={() => { setSelectedOrigin(null); setOriginText(''); }}
+                  >
+                    <Text style={styles.clearOriginText}>✕</Text>
+                  </TouchableOpacity>
+                )}
               </View>
               <TextInput
-                style={styles.destInput}
+                style={[styles.destInput, activeField === 'destination' && styles.routeInputActive]}
                 value={destinationText}
                 onChangeText={(t) => { setDestinationText(t); setSelectedDest(null); }}
+                onFocus={() => setActiveField('destination')}
                 placeholder="Digite o destino..."
                 placeholderTextColor={colors.gray[400]}
                 autoFocus
@@ -380,33 +430,79 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
           )}
 
           <ScrollView style={styles.suggestionList} keyboardShouldPersistTaps="handled">
-            {searching && (
-              <View style={styles.searchingRow}>
-                <ActivityIndicator color={colors.accent} size="small" />
-                <Text style={styles.searchingText}>Buscando endereços...</Text>
-              </View>
-            )}
-            {!selectedDest && !searching && results.map((d, i) => (
-              <TouchableOpacity
-                key={`${d.lat}-${d.lng}-${i}`}
-                style={styles.suggestionItem}
-                onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); }}
-              >
-                <Text style={styles.suggestionIcon}>📍</Text>
-                <View style={styles.suggestionTextWrap}>
-                  <Text style={styles.suggestionText} numberOfLines={1}>
-                    {d.shortName}
-                    {d.category ? <Text style={styles.suggestionTag}>{`  ·  ${d.category}`}</Text> : null}
-                  </Text>
-                  <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-            {!selectedDest && !searching && debouncedQuery.trim().length >= 3 && results.length === 0 && (
-              <Text style={styles.noResults}>Nenhum endereço encontrado</Text>
-            )}
-            {!selectedDest && !searching && destinationText.trim().length < 3 && (
-              <Text style={styles.hint}>Digite ao menos 3 letras para buscar o destino</Text>
+            {activeField === 'origin' ? (
+              <>
+                {!selectedOrigin && (
+                  <TouchableOpacity
+                    style={styles.suggestionItem}
+                    onPress={() => { setSelectedOrigin(null); setOriginText(''); setOriginResults([]); }}
+                  >
+                    <Text style={styles.suggestionIcon}>📍</Text>
+                    <View style={styles.suggestionTextWrap}>
+                      <Text style={styles.suggestionText}>Usar minha localização atual</Text>
+                      {originAddress ? (
+                        <Text style={styles.suggestionSub} numberOfLines={1}>{originAddress}</Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                )}
+                {originSearching && (
+                  <View style={styles.searchingRow}>
+                    <ActivityIndicator color={colors.accent} size="small" />
+                    <Text style={styles.searchingText}>Buscando endereços...</Text>
+                  </View>
+                )}
+                {!selectedOrigin && !originSearching && originResults.map((d, i) => (
+                  <TouchableOpacity
+                    key={`o-${d.lat}-${d.lng}-${i}`}
+                    style={styles.suggestionItem}
+                    onPress={() => { setSelectedOrigin(d); setOriginText(d.shortName); setActiveField('destination'); }}
+                  >
+                    <Text style={styles.suggestionIcon}>📍</Text>
+                    <View style={styles.suggestionTextWrap}>
+                      <Text style={styles.suggestionText} numberOfLines={1}>
+                        {d.shortName}
+                        {d.category ? <Text style={styles.suggestionTag}>{`  ·  ${d.category}`}</Text> : null}
+                      </Text>
+                      <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                {!selectedOrigin && !originSearching && debouncedOriginQuery.trim().length >= 3 && originResults.length === 0 && (
+                  <Text style={styles.noResults}>Nenhum endereço encontrado</Text>
+                )}
+              </>
+            ) : (
+              <>
+                {searching && (
+                  <View style={styles.searchingRow}>
+                    <ActivityIndicator color={colors.accent} size="small" />
+                    <Text style={styles.searchingText}>Buscando endereços...</Text>
+                  </View>
+                )}
+                {!selectedDest && !searching && results.map((d, i) => (
+                  <TouchableOpacity
+                    key={`${d.lat}-${d.lng}-${i}`}
+                    style={styles.suggestionItem}
+                    onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); }}
+                  >
+                    <Text style={styles.suggestionIcon}>📍</Text>
+                    <View style={styles.suggestionTextWrap}>
+                      <Text style={styles.suggestionText} numberOfLines={1}>
+                        {d.shortName}
+                        {d.category ? <Text style={styles.suggestionTag}>{`  ·  ${d.category}`}</Text> : null}
+                      </Text>
+                      <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                {!selectedDest && !searching && debouncedQuery.trim().length >= 3 && results.length === 0 && (
+                  <Text style={styles.noResults}>Nenhum endereço encontrado</Text>
+                )}
+                {!selectedDest && !searching && destinationText.trim().length < 3 && (
+                  <Text style={styles.hint}>Digite ao menos 3 letras para buscar o destino</Text>
+                )}
+              </>
             )}
           </ScrollView>
         </View>
@@ -485,15 +581,31 @@ function makeStyles(colors: AppTheme) {
     routeLine: { flex: 1, width: 2, backgroundColor: colors.gray[300], marginVertical: 4 },
     dotDest: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary },
     routeInputs: { flex: 1 },
-    originBox: {
+    originInputWrap: { position: 'relative', marginBottom: 8 },
+    originInput: {
       height: 44,
       backgroundColor: colors.gray[100],
       borderRadius: 10,
-      justifyContent: 'center',
       paddingHorizontal: 12,
-      marginBottom: 8,
+      paddingRight: 36,
+      fontSize: 14,
+      color: colors.text,
+      borderWidth: 1.5,
+      borderColor: 'transparent',
     },
-    originLabel: { color: colors.gray[500], fontSize: 14 },
+    routeInputActive: {
+      borderColor: colors.accent,
+    },
+    clearOriginBtn: {
+      position: 'absolute',
+      right: 4,
+      top: 4,
+      width: 36,
+      height: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    clearOriginText: { color: colors.gray[500], fontSize: 15, fontWeight: '700' },
     destInput: {
       height: 44,
       backgroundColor: colors.gray[100],
