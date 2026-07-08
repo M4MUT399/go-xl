@@ -399,10 +399,12 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         ref={mapRef}
         style={styles.map}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-        // Força o mapa CLARO no Android (o Google Maps herda o modo escuro do
-        // sistema); no iOS o Apple Maps já é claro por padrão, então deixamos
-        // undefined para não alterá-lo.
+        // Força o mapa CLARO em ambas as plataformas. No iOS, sem
+        // `userInterfaceStyle`, o Apple Maps segue o modo escuro do sistema
+        // (comportamento "automatic") — não é claro por padrão como o
+        // comentário antigo assumia.
         customMapStyle={Platform.OS === 'android' ? [] : undefined}
+        userInterfaceStyle="light"
         initialRegion={{
           latitude: target.lat,
           longitude: target.lng,

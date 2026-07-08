@@ -46,6 +46,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // instante a cada atualização para o ícone do carro realmente pintar no iOS.
   const [tracksCar, setTracksCar] = useState(true);
   const mapRef = useRef<MapView>(null);
+  // `fitToCoordinates` chamado ANTES do MapView nativo terminar seu layout
+  // inicial pode calcular uma região absurda (mapa mostrando o continente
+  // inteiro) — bug conhecido do react-native-maps. `onMapReady` garante que só
+  // recentralizamos depois que o mapa está de fato pronto para receber câmera.
+  const [mapReady, setMapReady] = useState(false);
 
   const styles = makeStyles(colors);
 
@@ -212,7 +217,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   //   • a caminho do embarque → motorista + ponto de embarque
   //   • in_progress (corrida em andamento) → motorista + destino final
   useEffect(() => {
-    if (!driverLoc || !mapRef.current) return;
+    if (!mapReady || !driverLoc || !mapRef.current) return;
     const coords = ride.status === 'in_progress'
       ? [
           { latitude: driverLoc.lat, longitude: driverLoc.lng },
@@ -226,10 +231,10 @@ export function ActiveRideScreen({ navigation, route }: Props) {
       edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
       animated: true,
     });
-  }, [driverLoc, ride.status]);
+  }, [mapReady, driverLoc, ride.status]);
 
   function recenter() {
-    if (!driverLoc || !mapRef.current) return;
+    if (!mapReady || !driverLoc || !mapRef.current) return;
     const coords = ride.status === 'in_progress'
       ? [
           { latitude: driverLoc.lat, longitude: driverLoc.lng },
@@ -252,9 +257,13 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         ref={mapRef}
         style={styles.map}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-        // Força o mapa CLARO no Android (o Google Maps herda o modo escuro do
-        // sistema); no iOS o Apple Maps já é claro por padrão.
+        // Força o mapa CLARO em ambas as plataformas. No iOS, sem
+        // `userInterfaceStyle`, o Apple Maps segue o modo escuro do sistema
+        // (comportamento "automatic") — não é claro por padrão como o
+        // comentário antigo assumia.
         customMapStyle={Platform.OS === 'android' ? [] : undefined}
+        userInterfaceStyle="light"
+        onMapReady={() => setMapReady(true)}
         initialRegion={{
           latitude: (origin.lat + dest.lat) / 2,
           longitude: (origin.lng + dest.lng) / 2,
