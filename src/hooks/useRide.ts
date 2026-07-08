@@ -10,10 +10,12 @@ import { estimateAirportFees } from '../lib/airportFees';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import { canReceiveNewRideOffer } from '../lib/rideDispatch';
+import { resolveRevocation, type RideRevokeReason } from '../lib/rideRevocation';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
 export type { SurgeInfo } from '../lib/surge';
+export type { RideRevokeReason } from '../lib/rideRevocation';
 
 const SUPABASE_URL     = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const CHARGE_RIDE_URL  = `${SUPABASE_URL}/functions/v1/charge-ride`;
@@ -333,28 +335,56 @@ async function broadcastRideAccepted(passengerId: string, ride: object) {
 }
 
 /**
- * Avisa TODOS os motoristas online que uma corrida foi aceita, para que o
- * overlay de chamada saia da tela dos outros (a corrida "some da fila").
- * Canal compartilhado `ride-offers`; o motorista que aceitou vai no payload
- * (`by`) para não se auto-limpar/duplicar log.
+ * Mecanismo ÚNICO de revogação de oferta de corrida (Tarefas 3 e 4).
+ *
+ * Emite no canal compartilhado `ride-offers` o evento `ride_offer_revoked` com
+ * o motivo. Qualquer motorista que tenha essa corrida como oferta pendente
+ * (card + som de chamada) a remove NA HORA — parando o alarme imediatamente:
+ *   • 'taken'     → outro motorista aceitou (dispatch em leque).
+ *   • 'cancelled' → o passageiro cancelou.
+ *   • 'expired'   → o agendamento venceu sem motorista.
+ *
+ * `by` (opcional) identifica o motorista que aceitou, para ele não se
+ * auto-limpar nem duplicar o log de auditoria no caso 'taken'.
+ *
+ * Continua emitindo TAMBÉM o evento legado `ride_taken` (apenas no aceite) para
+ * builds antigas em campo, que só escutam esse evento, pararem o som — sem
+ * duplicar lógica: os dois eventos saem da MESMA função.
  */
-async function broadcastRideTaken(rideId: string, by: string | undefined) {
+export async function broadcastRideRevoked(rideId: string, reason: RideRevokeReason, by?: string) {
   const ch = supabase.channel('ride-offers');
   await new Promise<void>((resolve) => {
     ch.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        ch.send({
-          type: 'broadcast',
-          event: 'ride_taken',
-          payload: { rideId, by },
-        }).then(() => {
-          supabase.removeChannel(ch);
-          resolve();
-        }).catch(() => {
-          supabase.removeChannel(ch);
-          resolve();
-        });
-      }
+      if (status !== 'SUBSCRIBED') return;
+      const done = () => { supabase.removeChannel(ch); resolve(); };
+      ch.send({ type: 'broadcast', event: 'ride_offer_revoked', payload: { rideId, reason, by } })
+        .then(() =>
+          reason === 'taken'
+            ? ch.send({ type: 'broadcast', event: 'ride_taken', payload: { rideId, by } })
+            : undefined
+        )
+        .then(done)
+        .catch(done);
+    });
+    setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
+  });
+}
+
+/**
+ * Avisa DIRETAMENTE o motorista já designado que o passageiro cancelou uma
+ * corrida ACEITA — no canal pessoal dele (`driver-notify-${driverId}`), evento
+ * `ride_cancelled`. Entrega confiável em foreground sem depender de
+ * postgres_changes (instável no Expo Go). O motorista que estiver navegando
+ * mostra o aviso "Corrida cancelada pelo passageiro" e volta ao início.
+ */
+async function broadcastRideCancelledToDriver(driverId: string, rideId: string) {
+  const ch = supabase.channel(`driver-notify-${driverId}`);
+  await new Promise<void>((resolve) => {
+    ch.subscribe((status) => {
+      if (status !== 'SUBSCRIBED') return;
+      const done = () => { supabase.removeChannel(ch); resolve(); };
+      ch.send({ type: 'broadcast', event: 'ride_cancelled', payload: { rideId } })
+        .then(done).catch(done);
     });
     setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
   });
@@ -690,13 +720,38 @@ export function usePassengerRide(passengerId: string | undefined) {
   }, [passengerId]);
 
   const cancelRide = useCallback(async (rideId: string) => {
+    // Descobre se já havia motorista designado ANTES do update — para avisá-lo
+    // diretamente (canal pessoal) que a corrida aceita foi cancelada.
+    const { data: rideRow } = await supabase
+      .from('rides')
+      .select('driver_id')
+      .eq('id', rideId)
+      .maybeSingle();
+    const assignedDriverId = (rideRow as { driver_id: string | null } | null)?.driver_id ?? null;
+
     // Extorna o pagamento se a corrida já tiver sido cobrada
     await refundRide(rideId);
-    await supabase
+
+    // Cancelamento atômico: só marca como cancelada se ainda não terminou/cancelou.
+    // `.select().maybeSingle()` só retorna linha quando o UPDATE realmente afetou
+    // algo — assim só emitimos a revogação quando o cancelamento de fato ocorreu.
+    const { data: updated } = await supabase
       .from('rides')
       .update({ status: 'cancelled' as RideStatus })
-      .eq('id', rideId);
+      .eq('id', rideId)
+      .not('status', 'in', '(completed,cancelled)')
+      .select('id')
+      .maybeSingle();
     setActiveRide(null);
+
+    if (updated) {
+      // Tarefa 4: para o alarme de TODOS os motoristas que tenham essa corrida
+      // como oferta pendente (som + card somem na hora).
+      broadcastRideRevoked(rideId, 'cancelled');
+      // Se um motorista já havia ACEITO, avisa-o diretamente para interromper a
+      // navegação e voltar ao início ("Corrida cancelada pelo passageiro").
+      if (assignedDriverId) broadcastRideCancelledToDriver(assignedDriverId, rideId);
+    }
   }, []);
 
   return { activeRide, loadingActive, refreshActiveRide, requestRide, scheduleRide, cancelRide };
@@ -705,6 +760,10 @@ export function usePassengerRide(passengerId: string | undefined) {
 export function useScheduledRides(passengerId: string | undefined) {
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  // Debounce de reivindicação: evita que um duplo-toque dispare duas chamadas
+  // simultâneas de claim para a MESMA corrida (idempotência no cliente, além da
+  // garantia atômica no banco). Guardado por rideId.
+  const claimingRef = useRef<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     if (!passengerId) return;
@@ -756,40 +815,64 @@ export function useScheduledRides(passengerId: string | undefined) {
   }, [refresh]);
 
   const claimScheduledRide = useCallback(async (rideId: string, driverId: string): Promise<boolean> => {
-    const { data, error } = await supabase
-      .from('rides')
-      // accepted_at marca a decisão do motorista — reivindicar do pool aberto
-      // já É a confirmação, então grava junto (mesma semântica usada pelo
-      // fluxo de agendamento travado por QR, ver confirmQrScheduledRide).
-      .update({ driver_id: driverId, accepted_at: new Date().toISOString() })
-      .eq('id', rideId)
-      .is('driver_id', null) // apenas se ainda sem motorista (evita dupla confirmação)
-      .eq('status', 'scheduled')
-      // .select().single() é essencial aqui: sem RETURNING, um UPDATE que não
-      // bate em nenhuma linha (corrida já reivindicada por outro motorista, ou
-      // bloqueada por RLS) volta com error=null e 0 linhas afetadas — ou seja,
-      // "sucesso" falso-positivo. Checar `data` é o único jeito de detectar isso.
-      .select()
-      .single();
+    // Debounce por rideId: se já há um claim desta corrida em andamento, ignora
+    // o segundo toque (não dispara segunda chamada de rede).
+    if (claimingRef.current.has(rideId)) return false;
+    claimingRef.current.add(rideId);
+    try {
+      const { data, error } = await supabase
+        .from('rides')
+        // accepted_at marca a decisão do motorista — reivindicar do pool aberto
+        // já É a confirmação, então grava junto (mesma semântica usada pelo
+        // fluxo de agendamento travado por QR, ver confirmQrScheduledRide).
+        .update({ driver_id: driverId, accepted_at: new Date().toISOString() })
+        .eq('id', rideId)
+        // Reivindica se ainda sem motorista OU se já é DESTE motorista
+        // (idempotência: um segundo toque do mesmo motorista devolve sucesso,
+        // em vez do falso "já confirmada por outro"). Um agendamento de OUTRO
+        // motorista não casa — e o trigger do banco (0042) barra reatribuição.
+        .or(`driver_id.is.null,driver_id.eq.${driverId}`)
+        .eq('status', 'scheduled')
+        // .select().single() é essencial aqui: sem RETURNING, um UPDATE que não
+        // bate em nenhuma linha (corrida já reivindicada por outro motorista, ou
+        // bloqueada por RLS) volta com error=null e 0 linhas afetadas — ou seja,
+        // "sucesso" falso-positivo. Checar `data` é o único jeito de detectar isso.
+        .select()
+        .maybeSingle();
 
-    if (error || !data) return false;
+      if (error || !data) return false;
 
-    const ride = data as Ride;
-    // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
-    applyDriverSplit(rideId, driverId);
-    // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora.
-    broadcastRideTaken(rideId, driverId);
-    // Avisa o passageiro — mesma notificação usada pela confirmação via popup
-    // (confirmScheduledRide), que até então só disparava por aquele caminho.
-    broadcastToPassenger(ride.passenger_id, ride.id);
-    notifyPassengerScheduleConfirmed(ride.passenger_id);
+      const ride = data as Ride;
+      // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
+      applyDriverSplit(rideId, driverId);
+      // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora.
+      broadcastRideRevoked(rideId, 'taken', driverId);
+      // Avisa o passageiro — mesma notificação usada pela confirmação via popup
+      // (confirmScheduledRide), que até então só disparava por aquele caminho.
+      broadcastToPassenger(ride.passenger_id, ride.id);
+      notifyPassengerScheduleConfirmed(ride.passenger_id);
 
-    return true;
+      return true;
+    } finally {
+      claimingRef.current.delete(rideId);
+    }
   }, []);
 
   const cancel = useCallback(async (rideId: string) => {
-    await supabase.from('rides').update({ status: 'cancelled' as RideStatus }).eq('id', rideId);
+    // Cancelamento atômico: só cancela se a corrida ainda não terminou/cancelou.
+    // `.select().maybeSingle()` retorna a linha só quando o UPDATE realmente bateu,
+    // então detectamos "cancelei agora" vs. "já estava finalizada" — sem isso um
+    // UPDATE que não afeta nada volta como sucesso e emitiríamos revogação à toa.
+    const { data: updated } = await supabase
+      .from('rides')
+      .update({ status: 'cancelled' as RideStatus })
+      .eq('id', rideId)
+      .not('status', 'in', '(completed,cancelled)')
+      .select('id')
+      .maybeSingle();
     await refresh();
+    // Para o alarme de TODOS os motoristas que tenham esse agendamento como oferta.
+    if (updated) broadcastRideRevoked(rideId, 'cancelled');
   }, [refresh]);
 
   return { rides, loading, refresh, activate, cancel, claimScheduledRide };
@@ -803,6 +886,10 @@ export function useDriverRide(driverId: string | undefined) {
   const pendingRideIdRef = useRef<string | null>(null);
   const pendingScheduledRideIdRef = useRef<string | null>(null);
   const activeRideRef = useRef<Ride | null>(null);
+  // Dedupe de revogações: broadcastRideRevoked emite DOIS eventos no aceite
+  // (ride_offer_revoked + ride_taken legado). Sem isto, uma mesma revogação
+  // registraria o log de auditoria duas vezes. Chave = `${rideId}:${reason}`.
+  const handledRevocations = useRef<Set<string>>(new Set());
 
   // Mantém ref sincronizada para usar dentro de setInterval sem stale closure
   useEffect(() => {
@@ -1029,25 +1116,72 @@ export function useDriverRide(driverId: string | undefined) {
   // todos os motoristas online. Quando um aceita, os postgres_changes filtrados
   // por driver_id NÃO disparam para os demais (a corrida agora pertence a outro),
   // então o overlay ficaria preso. Este canal compartilhado resolve isso: ao
-  // aceitar, broadcastRideTaken avisa todos; quem tiver essa corrida como
+  // aceitar, broadcastRideRevoked avisa todos; quem tiver essa corrida como
   // pendente limpa o overlay na hora.
   useEffect(() => {
     if (!driverId) return;
+
+    // Handler ÚNICO de revogação de oferta (Tarefas 3 e 4). Atende os dois
+    // eventos do canal compartilhado — `ride_offer_revoked` (novo, com motivo)
+    // e `ride_taken` (legado, só aceite) — sem duplicar lógica. O dedupe por
+    // `${rideId}:${reason}` evita registrar o log de auditoria duas vezes já
+    // que o aceite emite ambos os eventos.
+    const handleRevocation = (
+      rideId: string | undefined,
+      by: string | undefined,
+      reason: RideRevokeReason
+    ) => {
+      // Decisão determinística isolada (testada em lib/rideRevocation).
+      const actions = resolveRevocation(
+        { rideId, by, reason },
+        {
+          driverId,
+          pendingRideId: pendingRideIdRef.current,
+          pendingScheduledRideId: pendingScheduledRideIdRef.current,
+          activeRideId: activeRideRef.current?.id ?? null,
+        }
+      );
+
+      // Dedupe: broadcastRideRevoked emite dois eventos no aceite
+      // (ride_offer_revoked + ride_taken legado) — só auditamos uma vez.
+      const key = `${rideId}:${reason}`;
+      const firstTime = !handledRevocations.current.has(key);
+      handledRevocations.current.add(key);
+
+      // Remove o card de chamada (para o som) desta corrida, se estiver pendente.
+      if (actions.clearPendingRide) {
+        setPendingRide(null);
+        if (actions.logTakenByOther && firstTime) {
+          logRideOfferEvent(rideId!, driverId, 'taken_by_other', { reason });
+        }
+      }
+      // Mesma corrida agendada (pool aberto) revogada enquanto via o popup.
+      if (actions.clearPendingScheduledRide) {
+        setPendingScheduledRide(null);
+      }
+      // Tarefa 4: se o passageiro CANCELOU uma corrida que este motorista já
+      // aceitou (é a corrida ativa dele), encerra a corrida ativa — o
+      // DriverNavigateScreen escuta esse evento e mostra o aviso + volta ao início.
+      if (actions.endActiveRide) {
+        setActiveRide(null);
+      }
+    };
+
     const ch = supabase
       .channel('ride-offers')
+      .on('broadcast', { event: 'ride_offer_revoked' }, ({ payload }) => {
+        handleRevocation(
+          payload?.rideId as string | undefined,
+          payload?.by as string | undefined,
+          (payload?.reason as RideRevokeReason | undefined) ?? 'taken'
+        );
+      })
       .on('broadcast', { event: 'ride_taken' }, ({ payload }) => {
-        const rideId = payload?.rideId as string | undefined;
-        const by = payload?.by as string | undefined;
-        if (!rideId || by === driverId) return; // ignora o próprio aceite
-        if (rideId === pendingRideIdRef.current) {
-          setPendingRide(null);
-          logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'broadcast' });
-        }
-        // Mesma corrida agendada (pool aberto) confirmada por outro motorista
-        // enquanto este via o popup — some da tela dele também.
-        if (rideId === pendingScheduledRideIdRef.current) {
-          setPendingScheduledRide(null);
-        }
+        handleRevocation(
+          payload?.rideId as string | undefined,
+          payload?.by as string | undefined,
+          'taken'
+        );
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -1097,7 +1231,7 @@ export function useDriverRide(driverId: string | undefined) {
     //     OUTROS motoristas AGORA para que o overlay de chamada — e o som —
     //     parem imediatamente. Não espera o SELECT/telemetria abaixo, que
     //     podem levar vários segundos e deixariam o alerta tocando nos demais.
-    broadcastRideTaken(rideId, driverId);
+    broadcastRideRevoked(rideId, 'taken', driverId);
 
     // 2) SELECT separado para confirmar e obter a corrida atualizada
     let data: unknown = null;
@@ -1170,7 +1304,7 @@ export function useDriverRide(driverId: string | undefined) {
     logRideOfferEvent(rideId, driverId, 'accepted');
 
     // Remove a chamada da fila dos OUTROS motoristas online.
-    broadcastRideTaken(rideId, driverId);
+    broadcastRideRevoked(rideId, 'taken', driverId);
 
     // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback
     broadcastRideAccepted(ride.passenger_id, ride);
@@ -1180,6 +1314,7 @@ export function useDriverRide(driverId: string | undefined) {
   }, [driverId]);
 
   const confirmScheduledRide = useCallback(async (rideId: string): Promise<boolean> => {
+    if (!driverId) return false; // sem motorista logado não há o que confirmar
     const { data, error } = await supabase
       .from('rides')
       // accepted_at marca a decisão do motorista — reivindicar do pool aberto
@@ -1190,10 +1325,13 @@ export function useDriverRide(driverId: string | undefined) {
       // decisão nas checagens de polling/realtime abaixo.
       .update({ driver_id: driverId, accepted_at: new Date().toISOString() })
       .eq('id', rideId)
-      .is('driver_id', null)
+      // Idempotência: confirma se ainda sem motorista OU se já é DESTE motorista
+      // (duplo-toque devolve sucesso em vez de falso "já confirmada por outro").
+      // O trigger do banco (0042) barra reatribuição para um motorista diferente.
+      .or(`driver_id.is.null,driver_id.eq.${driverId}`)
       .eq('status', 'scheduled')
       .select()
-      .single();
+      .maybeSingle();
 
     if (error || !data) return false;
     setPendingScheduledRide(null);
@@ -1205,7 +1343,7 @@ export function useDriverRide(driverId: string | undefined) {
 
     // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora
     // (mesmo mecanismo usado em acceptRide para corridas imediatas).
-    broadcastRideTaken(ride.id, driverId);
+    broadcastRideRevoked(ride.id, 'taken', driverId);
 
     // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
     broadcastToPassenger(ride.passenger_id, ride.id);
