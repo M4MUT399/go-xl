@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
   TextInput, ScrollView, Alert, ActivityIndicator, Modal, Platform,
-  KeyboardAvoidingView,
+  KeyboardAvoidingView, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -62,6 +62,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [loading, setLoading] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [scheduledDate, setScheduledDate] = useState<Date>(() => new Date(Date.now() + 30 * 60 * 1000));
+  // Android não suporta mode='datetime' — usamos diálogos nativos em duas
+  // etapas (data → hora). Este estado controla qual diálogo está aberto.
+  const [androidPickerMode, setAndroidPickerMode] = useState<'date' | 'time' | null>(null);
   const [surgeInfo, setSurgeInfo] = useState<SurgeInfo>({ multiplier: 1.0, label: null });
   const [tollAmount, setTollAmount] = useState<number>(0);
   const [venueFee, setVenueFee] = useState<number>(0);
@@ -217,6 +220,26 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   function openScheduler() {
     setScheduledDate(new Date(Date.now() + 30 * 60 * 1000));
     setShowPicker(true);
+  }
+
+  // Fluxo Android: abre o diálogo de data; ao confirmar, encadeia o de hora.
+  function onAndroidPickerChange(event: DateTimePickerEvent, selected?: Date) {
+    if (event.type === 'dismissed' || !selected) {
+      setAndroidPickerMode(null);
+      return;
+    }
+    if (androidPickerMode === 'date') {
+      // Preserva a hora atual e troca só o dia; em seguida pede a hora.
+      const next = new Date(scheduledDate);
+      next.setFullYear(selected.getFullYear(), selected.getMonth(), selected.getDate());
+      setScheduledDate(next);
+      setAndroidPickerMode('time');
+    } else if (androidPickerMode === 'time') {
+      const next = new Date(scheduledDate);
+      next.setHours(selected.getHours(), selected.getMinutes(), 0, 0);
+      setScheduledDate(next);
+      setAndroidPickerMode(null);
+    }
   }
 
   async function confirmSchedule() {
@@ -484,7 +507,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   <TouchableOpacity
                     key={`${d.lat}-${d.lng}-${i}`}
                     style={styles.suggestionItem}
-                    onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); }}
+                    onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); Keyboard.dismiss(); }}
                   >
                     <Text style={styles.suggestionIcon}>📍</Text>
                     <View style={styles.suggestionTextWrap}>
@@ -513,16 +536,45 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
               <Text style={styles.modalTitle}>Agendar corrida</Text>
               <Text style={styles.modalSub}>Escolha data e hora</Text>
 
-              <View style={styles.pickerWrap}>
-                <DateTimePicker
-                  value={scheduledDate}
-                  mode={Platform.OS === 'ios' ? 'datetime' : 'date'}
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  minimumDate={new Date()}
-                  onChange={(_e, d) => d && setScheduledDate(d)}
-                  themeVariant="light"
-                />
-              </View>
+              {Platform.OS === 'ios' ? (
+                <View style={styles.pickerWrap}>
+                  <DateTimePicker
+                    value={scheduledDate}
+                    mode="datetime"
+                    display="spinner"
+                    minimumDate={new Date()}
+                    onChange={(_e, d) => d && setScheduledDate(d)}
+                    themeVariant="light"
+                  />
+                </View>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={styles.androidDateRow}
+                    activeOpacity={0.7}
+                    onPress={() => setAndroidPickerMode('date')}
+                  >
+                    <Text style={styles.androidDateValue}>
+                      {scheduledDate.toLocaleString('pt-BR', {
+                        weekday: 'short', day: '2-digit', month: 'short',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                    </Text>
+                    <Text style={styles.androidDateHint}>Toque para alterar data e hora</Text>
+                  </TouchableOpacity>
+                  {androidPickerMode && (
+                    <DateTimePicker
+                      value={scheduledDate}
+                      mode={androidPickerMode}
+                      display="default"
+                      is24Hour
+                      minimumDate={androidPickerMode === 'date' ? new Date() : undefined}
+                      onChange={onAndroidPickerChange}
+                      themeVariant="light"
+                    />
+                  )}
+                </>
+              )}
 
               <Button title="Confirmar agendamento" onPress={confirmSchedule} loading={loading} />
               <TouchableOpacity style={styles.modalCancel} onPress={() => setShowPicker(false)}>
@@ -672,6 +724,16 @@ function makeStyles(colors: AppTheme) {
     modalTitle: { fontSize: 20, fontWeight: '800', color: colors.text, textAlign: 'center' },
     modalSub: { fontSize: 14, color: colors.gray[500], textAlign: 'center', marginTop: 4, marginBottom: 8 },
     pickerWrap: { alignItems: 'center', marginBottom: 12 },
+    androidDateRow: {
+      backgroundColor: colors.gray[100],
+      borderRadius: 14,
+      paddingVertical: 16,
+      paddingHorizontal: 18,
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    androidDateValue: { fontSize: 18, fontWeight: '700', color: colors.text, textTransform: 'capitalize' },
+    androidDateHint: { fontSize: 12, color: colors.gray[500], marginTop: 4 },
     modalCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
     modalCancelText: { color: colors.gray[500], fontSize: 15, fontWeight: '600' },
     suggestionIcon: { fontSize: 18, marginRight: 12 },
