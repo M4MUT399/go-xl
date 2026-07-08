@@ -31,6 +31,13 @@ export function FindingDriverScreen({ navigation, route }: Props) {
 
   const styles = makeStyles(colors);
 
+  // Controla quando a navegação para fora desta tela pode prosseguir sem o
+  // aviso de "cancelar corrida" (aceite do motorista, cancelamento do lado do
+  // motorista/servidor). Toda outra tentativa de sair — botão "Cancelar
+  // corrida", botão físico/gesto de voltar do Android/iOS — passa pelo mesmo
+  // fluxo de confirmação em `beforeRemove` abaixo.
+  const allowLeaveRef = useRef(false);
+
   const pulse1 = useRef(new Animated.Value(1)).current;
   const pulse2 = useRef(new Animated.Value(1)).current;
   const pulse3 = useRef(new Animated.Value(1)).current;
@@ -71,7 +78,13 @@ export function FindingDriverScreen({ navigation, route }: Props) {
         price
           ? `${price} debitado do seu cartão.${etaPhrase}`
           : `Pagamento processado.${etaPhrase}`,
-        [{ text: 'OK', onPress: () => navigation.replace('ActiveRide', { ride }) }],
+        [{
+          text: 'OK',
+          onPress: () => {
+            allowLeaveRef.current = true;
+            navigation.replace('ActiveRide', { ride });
+          },
+        }],
       );
     };
 
@@ -86,6 +99,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
           if (updated.status === 'accepted' || updated.status === 'driver_en_route') {
             goActive(updated);
           } else if (updated.status === 'cancelled') {
+            allowLeaveRef.current = true;
             Alert.alert('Corrida cancelada', 'Nenhum motorista disponível no momento.');
             navigation.goBack();
           }
@@ -116,6 +130,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
       if (updated.status === 'accepted' || updated.status === 'driver_en_route') {
         goActive(updated);
       } else if (updated.status === 'cancelled') {
+        allowLeaveRef.current = true;
         clearInterval(interval);
         Alert.alert('Corrida cancelada', 'Nenhum motorista disponível no momento.');
         navigation.goBack();
@@ -129,22 +144,39 @@ export function FindingDriverScreen({ navigation, route }: Props) {
     };
   }, [initialRide.id, profile?.id]);
 
-  async function handleCancel() {
-    Alert.alert(
-      'Cancelar corrida',
-      'Tem certeza que quer cancelar?',
-      [
-        { text: 'Não', style: 'cancel' },
-        {
-          text: 'Sim, cancelar',
-          style: 'destructive',
-          onPress: async () => {
-            await cancelRide(initialRide.id);
-            navigation.goBack();
+  // Intercepta QUALQUER tentativa de sair desta tela — botão "Cancelar
+  // corrida", botão físico de voltar do Android e o gesto de voltar do
+  // iOS/Android incluídos, já que todos disparam o mesmo evento
+  // `beforeRemove` do React Navigation. Antes, só o botão na tela cancelava
+  // a corrida; voltar pelo gesto/botão físico apenas saía da tela sem
+  // cancelar no servidor, deixando a corrida "requesting" órfã no banco.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      if (allowLeaveRef.current) return; // aceite do motorista ou cancelamento já veio do servidor
+
+      e.preventDefault();
+      Alert.alert(
+        'Cancelar corrida',
+        'Se você sair agora, sua busca por motorista será cancelada. Tem certeza?',
+        [
+          { text: 'Continuar buscando', style: 'cancel' },
+          {
+            text: 'Sim, cancelar',
+            style: 'destructive',
+            onPress: async () => {
+              await cancelRide(initialRide.id);
+              allowLeaveRef.current = true;
+              navigation.dispatch(e.data.action);
+            },
           },
-        },
-      ]
-    );
+        ]
+      );
+    });
+    return unsubscribe;
+  }, [navigation, cancelRide, initialRide.id]);
+
+  function handleCancel() {
+    navigation.goBack();
   }
 
   const mins = Math.floor(elapsed / 60);
