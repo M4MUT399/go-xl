@@ -11,9 +11,11 @@
  *   consumidores ao mesmo tempo.
  */
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, isInvalidRefreshTokenError, clearStaleSession } from '../lib/supabase';
 import { withTimeout } from '../lib/withTimeout';
 import { uploadImage } from '../lib/storage';
+import { clearDriverReminders } from '../lib/driverReminders';
 import type { Profile, UserType } from '../types';
 import type { Session, AuthError } from '@supabase/supabase-js';
 import type { PostgrestError } from '@supabase/supabase-js';
@@ -193,6 +195,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // garantimos o logout local abaixo — o usuário nunca deve ficar preso
       // numa sessão que parece ativa mas não consegue mais ser usada.
     } finally {
+      // Tarefa 2 — invalida QUALQUER estado residual do papel de motorista no
+      // dispositivo antes de liberar a sessão. Sem isso, se um passageiro logar
+      // no mesmo aparelho depois de um motorista, herdaria lembretes agendados
+      // que disparariam sozinhos e a flag "online". Ambas as limpezas são no-op
+      // para quem nunca foi motorista, então rodar em todo signOut é seguro.
+      try {
+        await clearDriverReminders();               // cancela notificações locais agendadas (goxl-sched-)
+        await AsyncStorage.removeItem('driver_is_online');
+      } catch {
+        // best-effort: o logout nunca pode falhar por causa da limpeza local
+      }
       setSession(null);
       setProfile(null);
       setLoading(false);
