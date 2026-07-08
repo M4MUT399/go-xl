@@ -28,9 +28,15 @@ export function HomeScreen({ navigation }: Props) {
   const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
 
   const styles = makeStyles(colors);
-  // Cobre o inset da status bar/notch (ignorado pela SafeAreaView) + a altura
-  // do topBar + uma margem para o degradê terminar suavemente em 0 de opacidade.
-  const topGradientHeight = insets.top + 150;
+  // No Android, o topo (nome, calendário, avatar) fica colado demais na status
+  // bar em vários aparelhos — desce ~0.7cm (1cm ≈ 63dp) só nessa plataforma.
+  const ANDROID_HEADER_OFFSET = Platform.OS === 'android' ? 44 : 0;
+  // Altura real do topBar (paddingTop + maior filho [79, ícones] + paddingBottom).
+  const headerBarHeight = insets.top + 8 + ANDROID_HEADER_OFFSET + 79 + 14;
+  // Barra preta sólida cobrindo o cabeçalho + um degradê curto logo abaixo
+  // para não cortar bruscamente sobre o mapa.
+  const topGradientHeight = headerBarHeight + 40;
+  const headerFadeStart = headerBarHeight / topGradientHeight;
 
   // Recarrega o badge de mensagens toda vez que a tela entra em foco
   // (ex.: usuário volta do chat → AsyncStorage já atualizado → badge some)
@@ -171,15 +177,17 @@ export function HomeScreen({ navigation }: Props) {
       )}
 
       {/* Full-bleed: vai até a borda real da tela, ignorando o inset da
-          SafeAreaView (por baixo da status bar/notch) — degradê transparente,
-          25% mais escuro no topo, reduzindo até 0% após passar do cabeçalho
-          (saudação, categoria, calendário, chat e avatar). */}
+          SafeAreaView (por baixo da status bar/notch) — barra preta a 60% de
+          opacidade por trás do cabeçalho (nome, calendário, chat e avatar),
+          com um degradê curto logo abaixo (60% → 0%) para não cortar
+          bruscamente sobre o mapa. */}
       <View pointerEvents="none" style={[styles.topGradient, { height: topGradientHeight }]}>
         <Svg width="100%" height="100%">
           <Defs>
             <SvgLinearGradient id="topFade" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor="#1A1A2E" stopOpacity={0.25} />
-              <Stop offset="1" stopColor="#1A1A2E" stopOpacity={0} />
+              <Stop offset="0" stopColor="#000000" stopOpacity={0.6} />
+              <Stop offset={headerFadeStart} stopColor="#000000" stopOpacity={0.6} />
+              <Stop offset="1" stopColor="#000000" stopOpacity={0} />
             </SvgLinearGradient>
           </Defs>
           <Rect x="0" y="0" width="100%" height="100%" fill="url(#topFade)" />
@@ -210,7 +218,10 @@ export function HomeScreen({ navigation }: Props) {
                 )}
               </TouchableOpacity>
             )}
-            <TouchableOpacity style={styles.avatar}>
+            <TouchableOpacity
+              style={styles.avatar}
+              onPress={() => (navigation as unknown as { navigate: (route: string) => void }).navigate('Perfil')}
+            >
               <Text style={styles.avatarText}>{firstName[0]}</Text>
             </TouchableOpacity>
           </View>
@@ -308,9 +319,11 @@ function makeStyles(colors: AppTheme) {
       justifyContent: 'space-between',
       alignItems: 'center',
       paddingHorizontal: 20,
-      paddingTop: 8,
+      // No Android desce ~0.7cm (44dp) a mais — nome/calendário/avatar ficam
+      // colados demais na status bar em vários aparelhos nessa plataforma.
+      paddingTop: 8 + (Platform.OS === 'android' ? 44 : 0),
       paddingBottom: 14,
-      // O fundo (degradê escuro → transparente) vem do topGradient, que fica
+      // O fundo (barra preta 60% → transparente) vem do topGradient, que fica
       // por baixo desta barra e se estende até a borda real da tela.
       backgroundColor: 'transparent',
     },
