@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView, Share,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,6 +15,7 @@ import { usePassengerRide } from '../../hooks/useRide';
 import { useDriverVehicle } from '../../hooks/useVehicle';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
+import { useTripShare } from '../../hooks/useTripShare';
 import { KM_TO_MILES } from '../../lib/format';
 import { CarMarker } from '../../components/common/CarMarker';
 import { rideOrigin, rideDestination } from '../../lib/ride';
@@ -59,6 +60,81 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   const vehicle = useDriverVehicle(ride.driver_id);
 
   const canCancel = ride.status === 'accepted' || ride.status === 'driver_en_route';
+
+  // ── Compartilhar viagem ao vivo (Tarefa 1) ────────────────────────────────
+  const { creating: sharingBusy, active: shareActive, createShare, revokeShare } = useTripShare(ride.id);
+  // Só faz sentido compartilhar enquanto a viagem está de fato acontecendo.
+  const canShare =
+    ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress';
+  // Garante que o convite de auto-compartilhamento apareça no máximo uma vez por
+  // corrida (o passageiro pode recusar sem ser incomodado de novo).
+  const autoSharePromptedRef = useRef(false);
+
+  async function handleShareTrip() {
+    const share = await createShare();
+    if (!share) {
+      Alert.alert('Compartilhar viagem', 'Não foi possível gerar o link agora. Tente novamente.');
+      return;
+    }
+    try {
+      // Envio SEMPRE pelo share sheet nativo — a escolha do contato e o envio
+      // são ações do próprio passageiro. O app nunca envia sozinho.
+      await Share.share({
+        message: `Acompanhe minha viagem Go XL ao vivo: ${share.url}`,
+        url: share.url,
+      });
+    } catch {
+      // usuário fechou o share sheet — link continua válido para reenvio
+    }
+  }
+
+  function handleStopSharing() {
+    Alert.alert(
+      'Parar de compartilhar',
+      'O link deixará de mostrar sua localização. Você pode gerar um novo quando quiser.',
+      [
+        { text: 'Voltar', style: 'cancel' },
+        {
+          text: 'Parar',
+          style: 'destructive',
+          onPress: async () => {
+            const ok = await revokeShare();
+            if (!ok) Alert.alert('Compartilhar viagem', 'Não foi possível parar agora. Tente novamente.');
+          },
+        },
+      ],
+    );
+  }
+
+  // Auto-compartilhar: se o passageiro ativou a preferência, ao iniciar a
+  // corrida oferecemos abrir o share sheet para o contato escolhido — em um
+  // toque, mas NUNCA de forma silenciosa (o envio exige a ação do passageiro).
+  useEffect(() => {
+    if (autoSharePromptedRef.current) return;
+    if (!profile?.trip_autoshare) return;
+    if (!canShare) return;
+    autoSharePromptedRef.current = true;
+    (async () => {
+      const share = await createShare(profile.trip_autoshare_contact_id ?? null);
+      if (!share) return;
+      Alert.alert(
+        'Compartilhar viagem',
+        'Deseja enviar o link de acompanhamento ao vivo para seu contato de confiança?',
+        [
+          { text: 'Agora não', style: 'cancel' },
+          {
+            text: 'Compartilhar',
+            onPress: () => {
+              Share.share({
+                message: `Acompanhe minha viagem Go XL ao vivo: ${share.url}`,
+                url: share.url,
+              }).catch(() => {});
+            },
+          },
+        ],
+      );
+    })();
+  }, [profile?.trip_autoshare, profile?.trip_autoshare_contact_id, canShare, createShare]);
 
   function handleCancel() {
     Alert.alert('Cancelar corrida', 'Tem certeza que deseja cancelar? O motorista será avisado.', [
@@ -381,6 +457,26 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           <Text style={styles.vehicleLabel}>{vehicle.model} • {vehicle.color}</Text>
         )}
 
+        {canShare && (
+          <TouchableOpacity
+            style={styles.shareBtn}
+            onPress={handleShareTrip}
+            disabled={sharingBusy}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.shareIcon}>📍</Text>
+            <Text style={styles.shareBtnText}>
+              {shareActive ? 'Compartilhar link novamente' : 'Compartilhar viagem'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {canShare && shareActive && (
+          <TouchableOpacity style={styles.stopShareBtn} onPress={handleStopSharing}>
+            <Text style={styles.stopShareText}>Parar de compartilhar</Text>
+          </TouchableOpacity>
+        )}
+
         {canCancel && (
           <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
             <Text style={styles.cancelBtnText}>Cancelar corrida</Text>
@@ -550,6 +646,23 @@ function makeStyles(colors: AppTheme) {
       marginBottom: 14,
       marginLeft: 58,
     },
+
+    // ── Compartilhar viagem ─────────────────────────────────────────────────────
+    shareBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.gray[100],
+      borderRadius: 12,
+      paddingVertical: 14,
+      borderWidth: 1,
+      borderColor: colors.gray[200],
+    },
+    shareIcon: { fontSize: 16 },
+    shareBtnText: { color: colors.primary, fontSize: 15, fontWeight: '700' },
+    stopShareBtn: { alignItems: 'center', paddingVertical: 10, marginTop: 2 },
+    stopShareText: { color: colors.gray[500], fontSize: 13, fontWeight: '600' },
 
     // ── Cancelar ──────────────────────────────────────────────────────────────
     cancelBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4 },

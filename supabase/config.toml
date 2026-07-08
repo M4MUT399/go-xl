@@ -15,3 +15,9 @@ verify_jwt = false
 
 [functions.connect-onboard-driver]
 verify_jwt = false
+
+# track-trip serve a página PÚBLICA de rastreio ao vivo (GET, sem login). O
+# contato de confiança chega pelo link com um TOKEN opaco; a função valida o
+# token + expiração com service_role e devolve só campos whitelistados.
+[functions.track-trip]
+verify_jwt = false

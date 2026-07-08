@@ -21,14 +21,15 @@ import type { RootStackParamList } from '../types';
 import type { UserStats } from '../hooks/useUserStats';
 import type { Profile } from '../types';
 
-type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'Support' | 'Terms' | 'QRCode' | 'DriverVerification';
+type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'TrustedContacts' | 'Support' | 'Terms' | 'QRCode' | 'DriverVerification';
 
-const MENU_ITEMS: { icon: string; labelKey: string; route: ProfileRoute; driverOnly?: boolean }[] = [
+const MENU_ITEMS: { icon: string; labelKey: string; route: ProfileRoute; driverOnly?: boolean; passengerOnly?: boolean }[] = [
   { icon: '👤', labelKey: 'profile.personalData', route: 'EditProfile' },
   { icon: '📲', labelKey: 'profile.myQr', route: 'QRCode', driverOnly: true },
   { icon: '🪪', labelKey: 'profile.verification', route: 'DriverVerification', driverOnly: true },
   { icon: '💳', labelKey: 'profile.payment', route: 'Payment' },
   { icon: '🔔', labelKey: 'profile.notifications', route: 'NotificationSettings' },
+  { icon: '🛡️', labelKey: 'profile.trustedContacts', route: 'TrustedContacts', passengerOnly: true },
   { icon: '🛟', labelKey: 'profile.support', route: 'Support' },
   { icon: '📄', labelKey: 'profile.terms', route: 'Terms' },
 ];
@@ -283,6 +284,7 @@ export function ProfileScreen() {
           {MENU_ITEMS
             .filter((item) => !(isDriver && item.route === 'Payment'))
             .filter((item) => !item.driverOnly || isDriver)
+            .filter((item) => !item.passengerOnly || !isDriver)
             .map((item, i, arr) => (
               <TouchableOpacity
                 key={item.route}

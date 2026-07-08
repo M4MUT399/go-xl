@@ -46,6 +46,22 @@ export interface Profile {
   driver_share_percent?: number;
   /** Ordem de conclusão do onboarding (auditoria de faixa). */
   driver_onboarded_seq?: number;
+  // Compartilhar viagem ao vivo (Tarefa 1) — quando ON, o app oferece, em um
+  // toque, abrir o share sheet para o contato escolhido ao iniciar a corrida.
+  // NUNCA envia sozinho (o share sheet exige a ação do passageiro).
+  trip_autoshare?: boolean;
+  trip_autoshare_contact_id?: string | null;
+}
+
+// Contato de confiança para compartilhamento de viagem (Tarefa 1). O rótulo
+// `contact` (telefone/e-mail) serve só para o passageiro reconhecer o contato
+// na lista — NÃO é usado para envio automático.
+export interface TrustedContact {
+  id: string;
+  owner_id: string;
+  name: string;
+  contact?: string | null;
+  created_at: string;
 }
 
 export interface Vehicle {
@@ -186,6 +202,7 @@ export type RootStackParamList = {
   Payment: undefined;
   ScheduledRides: undefined;
   DriverScheduledRides: undefined;
+  TrustedContacts: undefined;
   Chat: { rideId: string; title: string };
 };
 

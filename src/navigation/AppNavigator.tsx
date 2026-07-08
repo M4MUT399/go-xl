@@ -422,6 +422,7 @@ export function AppNavigator() {
               <Stack.Screen name="Chat" getComponent={() => require('../screens/ChatScreen').ChatScreen} />
               <Stack.Screen name="EditProfile" getComponent={() => require('../screens/profile/EditProfileScreen').EditProfileScreen} />
               <Stack.Screen name="NotificationSettings" getComponent={() => require('../screens/profile/NotificationSettingsScreen').NotificationSettingsScreen} />
+              <Stack.Screen name="TrustedContacts" getComponent={() => require('../screens/profile/TrustedContactsScreen').TrustedContactsScreen} />
               <Stack.Screen name="Support" getComponent={() => require('../screens/profile/SupportScreen').SupportScreen} />
               <Stack.Screen name="Terms" getComponent={() => require('../screens/profile/TermsScreen').TermsScreen} />
               <Stack.Screen name="Payment" getComponent={() => require('../screens/profile/PaymentScreen').PaymentScreen} />
