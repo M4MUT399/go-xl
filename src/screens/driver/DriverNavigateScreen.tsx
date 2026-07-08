@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Platform, Alert,
+  Platform, Alert, Image,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -115,17 +115,22 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // colunas cruas da tabela `rides` (sem join em profiles). Busca local,
   // mesmo padrão usado em DriverHomeScreen.tsx para o popup de agendamento.
   const [passengerName, setPassengerName] = useState<string | null>(null);
+  const [passengerAvatar, setPassengerAvatar] = useState<string | null>(null);
+  const [passengerRating, setPassengerRating] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
     if (!ride.passenger_id) return;
     supabase
       .from('profiles')
-      .select('full_name')
+      .select('full_name, avatar_url, rating')
       .eq('id', ride.passenger_id)
       .single()
       .then(({ data }) => {
         if (!alive) return;
-        setPassengerName((data as { full_name?: string } | null)?.full_name ?? null);
+        const p = data as { full_name?: string; avatar_url?: string | null; rating?: number | null } | null;
+        setPassengerName(p?.full_name ?? null);
+        setPassengerAvatar(p?.avatar_url ?? null);
+        setPassengerRating(p?.rating ?? null);
       });
     return () => { alive = false; };
   }, [ride.passenger_id]);
@@ -260,23 +265,59 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     });
   }, [location?.lat, location?.lng, path?.durationMin, path?.distanceKm, ride.id]);
 
-  // Detecta cancelamento pelo passageiro
+  // Detecta cancelamento pelo passageiro por TRÊS caminhos redundantes — o que
+  // chegar primeiro vence, e o guard `cancelledHandledRef` garante que o aviso
+  // e o reset de navegação aconteçam uma única vez:
+  //   1) broadcast `ride_cancelled` no canal pessoal do motorista (Tarefa 4,
+  //      entrega direta e confiável em foreground);
+  //   2) broadcast `ride_offer_revoked` (motivo 'cancelled') no canal
+  //      compartilhado `ride-offers` — mecanismo único das Tarefas 3 e 4;
+  //   3) postgres_changes como rede de segurança (pode não disparar no Expo Go
+  //      sem REPLICA IDENTITY FULL, mas cobre o caso de app reaberto).
+  const cancelledHandledRef = useRef(false);
   useEffect(() => {
-    const channel = supabase
+    const handlePassengerCancellation = () => {
+      if (cancelledHandledRef.current) return;
+      cancelledHandledRef.current = true;
+      Alert.alert('Corrida cancelada', 'O passageiro cancelou a corrida.');
+      navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
+    };
+
+    const pgChannel = supabase
       .channel(`driver-ride-${ride.id}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${ride.id}` },
         (payload) => {
-          if ((payload.new as Ride).status === 'cancelled') {
-            Alert.alert('Corrida cancelada', 'O passageiro cancelou a corrida.');
-            navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
-          }
+          if ((payload.new as Ride).status === 'cancelled') handlePassengerCancellation();
         }
       )
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [ride.id]);
+
+    const offersChannel = supabase
+      .channel('ride-offers')
+      .on('broadcast', { event: 'ride_offer_revoked' }, ({ payload }) => {
+        if (payload?.rideId === ride.id && payload?.reason === 'cancelled') {
+          handlePassengerCancellation();
+        }
+      })
+      .subscribe();
+
+    const personalChannel = profile?.id
+      ? supabase
+          .channel(`driver-notify-${profile.id}`)
+          .on('broadcast', { event: 'ride_cancelled' }, ({ payload }) => {
+            if (payload?.rideId === ride.id) handlePassengerCancellation();
+          })
+          .subscribe()
+      : null;
+
+    return () => {
+      supabase.removeChannel(pgChannel);
+      supabase.removeChannel(offersChannel);
+      if (personalChannel) supabase.removeChannel(personalChannel);
+    };
+  }, [ride.id, profile?.id]);
 
   function handleCancel() {
     Alert.alert('Cancelar corrida', 'Tem certeza? O passageiro será reembolsado automaticamente.', [
@@ -552,6 +593,27 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       <View style={[styles.bottomSheetCompact, Platform.OS === 'android' && { paddingBottom: 20 + insets.bottom }]}>
         <View style={styles.handle} />
 
+        {/* Identidade do passageiro — foto + nome + avaliação média */}
+        <View style={styles.paxRow}>
+          {passengerAvatar ? (
+            <Image source={{ uri: passengerAvatar }} style={styles.paxAvatar} />
+          ) : (
+            <View style={styles.paxAvatarFallback}>
+              <Text style={styles.paxAvatarFallbackText}>
+                {(passengerName ?? 'P').trim().charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+          <View style={styles.paxInfo}>
+            <Text style={styles.paxName} numberOfLines={1}>
+              {passengerName ?? 'Passageiro'}
+            </Text>
+            {passengerRating != null && passengerRating > 0 && (
+              <Text style={styles.paxRating}>⭐ {passengerRating.toFixed(1)}</Text>
+            )}
+          </View>
+        </View>
+
         <View style={styles.compactStatsRow}>
           <View style={styles.compactStat}>
             <Text style={styles.compactStatValue}>{elapsedLabel}</Text>
@@ -716,6 +778,27 @@ function makeStyles(colors: AppTheme) {
       alignSelf: 'center',
       marginBottom: 14,
     },
+
+    // Identidade do passageiro (foto + nome + avaliação)
+    paxRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginBottom: 12,
+    },
+    paxAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.gray[200] },
+    paxAvatarFallback: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.gray[200],
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    paxAvatarFallbackText: { fontSize: 18, fontWeight: '800', color: colors.gray[500] },
+    paxInfo: { flex: 1 },
+    paxName: { fontSize: 16, fontWeight: '700', color: colors.text },
+    paxRating: { fontSize: 13, color: colors.gray[500], marginTop: 2 },
 
     // Barra compacta: tempo de corrida + velocidade atual
     compactStatsRow: {

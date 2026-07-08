@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, FlatList,
+  View, Text, StyleSheet, SafeAreaView, FlatList, Image,
   TouchableOpacity, ActivityIndicator, RefreshControl, Alert, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -54,6 +54,38 @@ function formatDate(iso?: string): string {
   return `${d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short' })} • ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+// ─── Identificação do passageiro (nome + foto + avaliação) ─────────────────────
+// Componente único usado por TODOS os cards do motorista (Tarefa 5): quem
+// solicitou a corrida aparece com foto (quando houver), nome e avaliação média.
+
+function PassengerRow({
+  ride,
+  styles,
+}: {
+  ride: RideRecord;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  const rating = ride.passenger_rating;
+  const hasRating = typeof rating === 'number' && rating > 0;
+  return (
+    <View style={styles.passengerRow}>
+      {ride.passenger_avatar_url ? (
+        <Image source={{ uri: ride.passenger_avatar_url }} style={styles.passengerAvatar} />
+      ) : (
+        <View style={styles.passengerAvatarFallback}>
+          <Text style={styles.passengerIcon}>👤</Text>
+        </View>
+      )}
+      <View style={styles.passengerInfo}>
+        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? 'Passageiro'}</Text>
+        {hasRating && (
+          <Text style={styles.passengerRating}>⭐ {rating!.toFixed(1)}</Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
 // ─── Card de corrida confirmada ───────────────────────────────────────────────
 
 function ClaimedCard({
@@ -92,10 +124,7 @@ function ClaimedCard({
       </View>
 
       {/* Passageiro */}
-      <View style={styles.passengerRow}>
-        <Text style={styles.passengerIcon}>👤</Text>
-        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? 'Passageiro'}</Text>
-      </View>
+      <PassengerRow ride={ride} styles={styles} />
 
       {/* Rota */}
       <View style={styles.route}>
@@ -422,9 +451,16 @@ function makeStyles(colors: AppTheme) {
     },
     cardDate: { fontSize: 14, fontWeight: '700', color: colors.text },
 
-    passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+    passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
     passengerIcon: { fontSize: 13 },
+    passengerAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.gray[200] },
+    passengerAvatarFallback: {
+      width: 34, height: 34, borderRadius: 17, backgroundColor: colors.gray[200],
+      alignItems: 'center', justifyContent: 'center',
+    },
+    passengerInfo: { flex: 1 },
     passengerName: { fontSize: 13, color: colors.gray[600], fontWeight: '600' },
+    passengerRating: { fontSize: 12, color: colors.gray[500], marginTop: 1 },
 
     countdownBadge: {
       flexDirection: 'row',

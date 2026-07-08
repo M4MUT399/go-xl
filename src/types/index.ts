@@ -116,6 +116,10 @@ export interface Ride {
   // tabela rides nem da view rides_with_locations). Usado nos cards de
   // agendamento para o motorista saber quem solicitou.
   passenger_name?: string | null;
+  // Foto e avaliação média do passageiro (join client-side em profiles) — usados
+  // nos cards/telas do motorista para identificar quem solicitou a corrida.
+  passenger_avatar_url?: string | null;
+  passenger_rating?: number | null;
   driver?: Profile;
   vehicle?: Vehicle;
 }
@@ -142,6 +146,9 @@ export interface RideRecord {
   // Nome do passageiro — preenchido client-side via join em profiles
   // (ver useDriverScheduledRides.refresh). Ver comentário em Ride acima.
   passenger_name?: string | null;
+  // Foto e avaliação média do passageiro (mesmo join client-side).
+  passenger_avatar_url?: string | null;
+  passenger_rating?: number | null;
 }
 
 export interface RideRequest {

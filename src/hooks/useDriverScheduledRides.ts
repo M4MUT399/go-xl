@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
+import { broadcastRideRevoked } from './useRide';
 import type { RideRecord } from '../types';
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
@@ -96,9 +97,13 @@ async function expireOldScheduledRides() {
     .is('driver_id', null)
     .lt('scheduled_for', now);
 
-  // Notifica cada passageiro (fire-and-forget)
+  // Notifica cada passageiro (fire-and-forget) e revoga a oferta para TODOS os
+  // motoristas — mesmo mecanismo único das Tarefas 3 e 4 (ride_offer_revoked),
+  // motivo 'expired': quem tiver o card do agendamento na aba "Agenda" o remove
+  // na hora, sem depender do poll de 60s.
   for (const ride of rides) {
     notifyPassengerScheduleExpired(ride.passenger_id, ride.id);
+    broadcastRideRevoked(ride.id, 'expired');
   }
 }
 
@@ -147,24 +152,34 @@ export function useDriverScheduledRides(driverId: string | undefined) {
     const availRides = (avail as RideRecord[]) ?? [];
     const mineRides = (mine as RideRecord[]) ?? [];
 
-    // Busca o nome de todos os passageiros das duas listas de uma vez só
-    // (evita N consultas por card) e anexa em cada ride — os cards da aba
-    // "Agenda" precisam mostrar quem solicitou a corrida.
+    // Busca nome + foto + avaliação de todos os passageiros das duas listas de
+    // uma vez só (evita N consultas por card) e anexa em cada ride — os cards da
+    // aba "Agenda" precisam identificar quem solicitou a corrida.
     const passengerIds = Array.from(
       new Set([...availRides, ...mineRides].map((r) => r.passenger_id).filter(Boolean))
     );
-    let namesById = new Map<string, string>();
+    type PassengerInfo = { full_name: string | null; avatar_url: string | null; rating: number | null };
+    let profileById = new Map<string, PassengerInfo>();
     if (passengerIds.length > 0) {
       const { data: profs } = await supabase
         .from('profiles')
-        .select('id, full_name')
+        .select('id, full_name, avatar_url, rating')
         .in('id', passengerIds);
-      namesById = new Map(
-        ((profs as { id: string; full_name: string }[]) ?? []).map((p) => [p.id, p.full_name])
+      profileById = new Map(
+        ((profs as { id: string; full_name: string | null; avatar_url: string | null; rating: number | null }[]) ?? [])
+          .map((p) => [p.id, { full_name: p.full_name, avatar_url: p.avatar_url, rating: p.rating }])
       );
     }
     const withNames = (rides: RideRecord[]) =>
-      rides.map((r) => ({ ...r, passenger_name: namesById.get(r.passenger_id) ?? null }));
+      rides.map((r) => {
+        const info = profileById.get(r.passenger_id);
+        return {
+          ...r,
+          passenger_name: info?.full_name ?? null,
+          passenger_avatar_url: info?.avatar_url ?? null,
+          passenger_rating: info?.rating ?? null,
+        };
+      });
 
     setAvailable(withNames(availRides));
     setClaimed(withNames(mineRides));
@@ -198,12 +213,21 @@ export function useDriverScheduledRides(driverId: string | undefined) {
   // pouco confiável no Expo Go) nem do poll de 60s.
   useEffect(() => {
     if (!driverId) return;
+    // Remove o card da lista de disponíveis quando a oferta é revogada por
+    // QUALQUER motivo — mecanismo único das Tarefas 3 e 4 (ride_offer_revoked:
+    // taken | cancelled | expired). Continua escutando o evento legado
+    // `ride_taken` para builds antigas que só o emitem.
+    const removeFromAvailable = (rideId: string | undefined) => {
+      if (!rideId) return;
+      setAvailable((prev) => prev.filter((r) => r.id !== rideId));
+    };
     const ch = supabase
       .channel('ride-offers')
+      .on('broadcast', { event: 'ride_offer_revoked' }, ({ payload }) => {
+        removeFromAvailable(payload?.rideId as string | undefined);
+      })
       .on('broadcast', { event: 'ride_taken' }, ({ payload }) => {
-        const rideId = payload?.rideId as string | undefined;
-        if (!rideId) return;
-        setAvailable((prev) => prev.filter((r) => r.id !== rideId));
+        removeFromAvailable(payload?.rideId as string | undefined);
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };

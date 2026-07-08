@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Platform,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../hooks/useTheme';
@@ -115,20 +116,22 @@ export function IncomingRideCall({
     return () => clearInterval(interval);
   }, [ride.id, accepting, onExpire]);
 
-  // ─── Dados do passageiro (nome + rating) ────────────────────────────────────
+  // ─── Dados do passageiro (nome + foto + rating) ─────────────────────────────
   const [passengerName, setPassengerName] = useState<string | null>(null);
   const [passengerRating, setPassengerRating] = useState<number | null>(null);
+  const [passengerAvatar, setPassengerAvatar] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     supabase
       .from('profiles')
-      .select('full_name, rating')
+      .select('full_name, rating, avatar_url')
       .eq('id', ride.passenger_id)
       .single()
       .then(({ data }) => {
         if (!alive || !data) return;
         setPassengerName((data as { full_name?: string }).full_name ?? null);
         setPassengerRating((data as { rating?: number }).rating ?? null);
+        setPassengerAvatar((data as { avatar_url?: string }).avatar_url ?? null);
       });
     return () => {
       alive = false;
@@ -199,9 +202,13 @@ export function IncomingRideCall({
             {/* Passageiro */}
             <View style={styles.card}>
               <View style={styles.paxRow}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{initials}</Text>
-                </View>
+                {passengerAvatar ? (
+                  <Image source={{ uri: passengerAvatar }} style={styles.avatar} />
+                ) : (
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{initials}</Text>
+                  </View>
+                )}
                 <View style={{ flex: 1 }}>
                   <Text style={styles.paxLabel}>{t('driverCall.passenger', 'Passenger')}</Text>
                   <Text style={styles.paxName} numberOfLines={1}>
