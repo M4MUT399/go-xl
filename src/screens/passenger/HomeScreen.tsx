@@ -16,6 +16,7 @@ import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
 import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
 import { useUnreadMessages } from '../../hooks/useUnreadMessages';
+import { usePassengerRide } from '../../hooks/useRide';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'PassengerTabs'> };
 
@@ -26,6 +27,11 @@ export function HomeScreen({ navigation }: Props) {
   const { location, status, retry } = useLocation();
   const { drivers } = useNearbyDrivers(true);
   const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
+  // Corrida em andamento (requesting/accepted/driver_en_route/in_progress).
+  // Antes, ao sair da tela de busca/corrida, a viagem "sumia" (só vivia nos
+  // params de navegação e na subscription realtime). Agora o hook faz um fetch
+  // inicial, então conseguimos oferecer "retomar corrida" ao reabrir o app.
+  const { activeRide } = usePassengerRide(profile?.id);
 
   const styles = makeStyles(colors);
   // No Android, o topo (nome, calendário, avatar) fica colado demais na status
@@ -91,6 +97,26 @@ export function HomeScreen({ navigation }: Props) {
       destination: { lat: 0, lng: 0, address: destination },
     });
   }
+
+  function handleResumeRide() {
+    if (!activeRide) return;
+    // 'requesting' ainda está procurando motorista → tela de busca.
+    // Demais estados (accepted/driver_en_route/in_progress) → corrida ativa.
+    if (activeRide.status === 'requesting') {
+      navigation.navigate('FindingDriver', { ride: activeRide });
+    } else {
+      navigation.navigate('ActiveRide', { ride: activeRide });
+    }
+  }
+
+  const resumeLabel =
+    activeRide?.status === 'requesting'
+      ? 'Procurando um motorista...'
+      : activeRide?.status === 'accepted'
+        ? 'Motorista confirmado'
+        : activeRide?.status === 'driver_en_route'
+          ? 'Motorista a caminho'
+          : 'Corrida em andamento';
 
   function recenter() {
     if (location && mapRef.current) {
@@ -242,15 +268,34 @@ export function HomeScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.searchContainer}>
-            <TouchableOpacity style={styles.searchBox} onPress={handleSearchFocus} activeOpacity={0.9}>
-              <View style={styles.originDot} />
-              <Text style={styles.searchPlaceholder}>Para onde você vai?</Text>
-              <View style={styles.searchArrow}>
-                <Text style={styles.searchArrowText}>→</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
+          {activeRide ? (
+            <View style={styles.searchContainer}>
+              <TouchableOpacity style={styles.resumeBanner} onPress={handleResumeRide} activeOpacity={0.9}>
+                <View style={styles.resumePulse} />
+                <View style={styles.resumeInfo}>
+                  <Text style={styles.resumeTitle}>{resumeLabel}</Text>
+                  <Text style={styles.resumeSubtitle} numberOfLines={1}>
+                    {activeRide.destination_address
+                      ? `Para ${activeRide.destination_address}`
+                      : 'Toque para retomar sua corrida'}
+                  </Text>
+                </View>
+                <View style={styles.searchArrow}>
+                  <Text style={styles.searchArrowText}>→</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.searchContainer}>
+              <TouchableOpacity style={styles.searchBox} onPress={handleSearchFocus} activeOpacity={0.9}>
+                <View style={styles.originDot} />
+                <Text style={styles.searchPlaceholder}>Para onde você vai?</Text>
+                <View style={styles.searchArrow}>
+                  <Text style={styles.searchArrowText}>→</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </SafeAreaView>
     </View>
@@ -450,5 +495,31 @@ function makeStyles(colors: AppTheme) {
       justifyContent: 'center',
     },
     searchArrowText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+    resumeBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      minHeight: 58,
+      paddingVertical: 10,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    resumePulse: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.accent,
+      marginRight: 12,
+    },
+    resumeInfo: { flex: 1 },
+    resumeTitle: { fontSize: 15, fontWeight: '700', color: colors.white },
+    resumeSubtitle: { fontSize: 12, color: colors.gray[400], marginTop: 2 },
   });
 }

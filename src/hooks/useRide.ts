@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { AppState } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { sendPushAsync } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
@@ -440,14 +441,43 @@ export function estimateDuration(distanceKm: number) {
   return Math.ceil((miles / AVG_SPEED_MPH) * 60);
 }
 
+const ACTIVE_RIDE_STATUSES: RideStatus[] = ['requesting', 'accepted', 'driver_en_route', 'in_progress'];
+
 export function usePassengerRide(passengerId: string | undefined) {
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
+  const [loadingActive, setLoadingActive] = useState(true);
+  // A HomeScreen (aba, sempre montada) e as telas FindingDriver/ActiveRide
+  // (empilhadas por cima) podem usar este hook ao mesmo tempo. Dois canais
+  // Supabase com o MESMO tópico colidem, então cada instância usa um sufixo
+  // único para manter subscriptions independentes.
+  const channelIdRef = useRef(`passenger-ride-${Math.random().toString(36).slice(2)}`);
+
+  // Busca a corrida em andamento mais recente do passageiro.
+  // A subscription realtime abaixo só entrega mudanças FUTURAS, então sem
+  // este fetch inicial a corrida "sumia" ao sair e voltar para a tela — era
+  // exatamente o bug relatado pelo testador do Android.
+  const refreshActiveRide = useCallback(async () => {
+    if (!passengerId) return;
+    const { data } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('passenger_id', passengerId)
+      .in('status', ACTIVE_RIDE_STATUSES)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    setActiveRide((data as Ride) ?? null);
+  }, [passengerId]);
 
   useEffect(() => {
-    if (!passengerId) return;
+    if (!passengerId) { setLoadingActive(false); return; }
+
+    let cancelled = false;
+    setLoadingActive(true);
+    refreshActiveRide().finally(() => { if (!cancelled) setLoadingActive(false); });
 
     const channel = supabase
-      .channel('passenger-ride')
+      .channel(channelIdRef.current)
       .on(
         'postgres_changes',
         {
@@ -458,7 +488,7 @@ export function usePassengerRide(passengerId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          if (['requesting', 'accepted', 'driver_en_route', 'in_progress'].includes(ride.status)) {
+          if (ACTIVE_RIDE_STATUSES.includes(ride.status)) {
             setActiveRide(ride);
           } else {
             setActiveRide(null);
@@ -467,8 +497,18 @@ export function usePassengerRide(passengerId: string | undefined) {
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [passengerId]);
+    // Ao voltar para o primeiro plano, o realtime pode ter perdido eventos
+    // enquanto o app estava em background — re-busca para garantir consistência.
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshActiveRide();
+    });
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+      appStateSub.remove();
+    };
+  }, [passengerId, refreshActiveRide]);
 
   const requestRide = useCallback(async (
     origin: Location,
@@ -659,7 +699,7 @@ export function usePassengerRide(passengerId: string | undefined) {
     setActiveRide(null);
   }, []);
 
-  return { activeRide, requestRide, scheduleRide, cancelRide };
+  return { activeRide, loadingActive, refreshActiveRide, requestRide, scheduleRide, cancelRide };
 }
 
 export function useScheduledRides(passengerId: string | undefined) {
