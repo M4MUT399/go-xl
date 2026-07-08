@@ -5,6 +5,7 @@ import { useDriverRideContext } from '../../contexts/DriverRideContext';
 import { getConfig, getConfigDefault } from '../../lib/systemConfig';
 import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { navigationRef } from '../../navigation/AppNavigator';
+import { supabase } from '../../lib/supabase';
 import { IncomingRideCall } from './IncomingRideCall';
 
 /**
@@ -71,13 +72,45 @@ export function GlobalDriverRideOverlay() {
   }
 
   function handleReject() {
-    if (pendingRide) logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
+    if (pendingRide) {
+      logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
+      releaseQrLockedRide(pendingRide);
+    }
     setPendingRide(null);
   }
 
   function handleExpire() {
-    if (pendingRide) logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
+    if (pendingRide) {
+      logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
+      releaseQrLockedRide(pendingRide);
+    }
     setPendingRide(null);
+  }
+
+  /**
+   * Corrida travada por QR (driver_id pré-fixado ao motorista dono do QR, ver
+   * requestRide/notifySpecificDriver) é exclusiva dele — por design, nenhum
+   * outro motorista vê o card (ver useDriverRide: filtro `!ride.driver_id ||
+   * ride.driver_id === driverId`). Sem isso, ao recusar/deixar expirar, o
+   * driver_id nunca era liberado: o polling de 4s (`driver_id=eq.<este
+   * motorista>` + `status=requesting`) reencontrava a MESMA corrida no ciclo
+   * seguinte e reabria o card indefinidamente, e o passageiro ficava preso
+   * numa corrida que nenhum motorista jamais aceitaria.
+   *
+   * Cancela a corrida para o passageiro (reaproveitando o mesmo fluxo/alerta
+   * de "nenhum motorista disponível" que FindingDriverScreen já trata) em vez
+   * de devolver ao pool aberto — o QR foi escaneado pensando NESTE motorista
+   * específico, então um "não" dele não deve virar chamada geral.
+   */
+  function releaseQrLockedRide(ride: { id: string; driver_id?: string | null }) {
+    if (!ride.driver_id) return; // corrida do pool aberto — nada a liberar
+    supabase
+      .from('rides')
+      .update({ status: 'cancelled' })
+      .eq('id', ride.id)
+      .eq('driver_id', ride.driver_id)
+      .eq('status', 'requesting')
+      .then(() => {});
   }
 
   return (
