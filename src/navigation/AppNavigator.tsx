@@ -7,6 +7,7 @@ import {
   Animated, TouchableOpacity, SafeAreaView, Image,
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
+import * as SplashScreen from 'expo-splash-screen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 
@@ -40,16 +41,9 @@ import { DriverNavigateScreen } from '../screens/driver/DriverNavigateScreen';
 import { DriverScheduledRidesScreen } from '../screens/driver/DriverScheduledRidesScreen';
 import { EarningsScreen } from '../screens/driver/EarningsScreen';
 import { DriverReminderSettingsScreen } from '../screens/driver/DriverReminderSettingsScreen';
-import { VehicleFormScreen } from '../screens/driver/VehicleFormScreen';
-import { DriverVerificationScreen } from '../screens/driver/DriverVerificationScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
-import { EditProfileScreen } from '../screens/profile/EditProfileScreen';
-import { NotificationSettingsScreen } from '../screens/profile/NotificationSettingsScreen';
-import { SupportScreen } from '../screens/profile/SupportScreen';
-import { TermsScreen } from '../screens/profile/TermsScreen';
-import { PaymentScreen } from '../screens/profile/PaymentScreen';
-import { ChatScreen } from '../screens/ChatScreen';
-import { QRCodeScreen } from '../screens/driver/QRCodeScreen';
+// Telas secundárias (não fazem parte do fluxo "quente" de login → corrida):
+// carregadas sob demanda via getComponent, para não pesar o bundle inicial.
 import { DriverRideProvider } from '../contexts/DriverRideContext';
 import { GlobalDriverRideOverlay } from '../components/driver/GlobalDriverRideOverlay';
 
@@ -243,6 +237,12 @@ export function AppNavigator() {
     if (pref) setLang(pref);
   }, [profile?.language, setLang]);
 
+  // Libera a splash nativa (ver App.tsx) assim que o check de sessão termina —
+  // evita a piscada splash → tela em branco → LoadingScreen.
+  useEffect(() => {
+    if (!loading) SplashScreen.hideAsync().catch(() => {});
+  }, [loading]);
+
   const { inAppMessage, clearInAppMessage, showBanner } = useNotifications(
     session?.user.id,
     profile?.type as 'passenger' | 'driver' | undefined
@@ -396,15 +396,15 @@ export function AppNavigator() {
               <Stack.Screen name="DriverTabs" component={DriverTabs} />
               <Stack.Screen name="DriverNavigate" component={DriverNavigateScreen} />
               <Stack.Screen name="DriverScheduledRides" component={DriverScheduledRidesScreen} />
-              <Stack.Screen name="VehicleForm" component={VehicleFormScreen} />
-              <Stack.Screen name="DriverVerification" component={DriverVerificationScreen} />
-              <Stack.Screen name="QRCode" component={QRCodeScreen} />
-              <Stack.Screen name="Chat" component={ChatScreen} />
-              <Stack.Screen name="EditProfile" component={EditProfileScreen} />
-              <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
-              <Stack.Screen name="Support" component={SupportScreen} />
-              <Stack.Screen name="Terms" component={TermsScreen} />
-              <Stack.Screen name="Payment" component={PaymentScreen} />
+              <Stack.Screen name="VehicleForm" getComponent={() => require('../screens/driver/VehicleFormScreen').VehicleFormScreen} />
+              <Stack.Screen name="DriverVerification" getComponent={() => require('../screens/driver/DriverVerificationScreen').DriverVerificationScreen} />
+              <Stack.Screen name="QRCode" getComponent={() => require('../screens/driver/QRCodeScreen').QRCodeScreen} />
+              <Stack.Screen name="Chat" getComponent={() => require('../screens/ChatScreen').ChatScreen} />
+              <Stack.Screen name="EditProfile" getComponent={() => require('../screens/profile/EditProfileScreen').EditProfileScreen} />
+              <Stack.Screen name="NotificationSettings" getComponent={() => require('../screens/profile/NotificationSettingsScreen').NotificationSettingsScreen} />
+              <Stack.Screen name="Support" getComponent={() => require('../screens/profile/SupportScreen').SupportScreen} />
+              <Stack.Screen name="Terms" getComponent={() => require('../screens/profile/TermsScreen').TermsScreen} />
+              <Stack.Screen name="Payment" getComponent={() => require('../screens/profile/PaymentScreen').PaymentScreen} />
             </>
           ) : (
             <>
@@ -419,12 +419,12 @@ export function AppNavigator() {
               <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
               <Stack.Screen name="RateRide" component={RateRideScreen} />
               <Stack.Screen name="ScheduledRides" component={ScheduledRidesScreen} />
-              <Stack.Screen name="Chat" component={ChatScreen} />
-              <Stack.Screen name="EditProfile" component={EditProfileScreen} />
-              <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
-              <Stack.Screen name="Support" component={SupportScreen} />
-              <Stack.Screen name="Terms" component={TermsScreen} />
-              <Stack.Screen name="Payment" component={PaymentScreen} />
+              <Stack.Screen name="Chat" getComponent={() => require('../screens/ChatScreen').ChatScreen} />
+              <Stack.Screen name="EditProfile" getComponent={() => require('../screens/profile/EditProfileScreen').EditProfileScreen} />
+              <Stack.Screen name="NotificationSettings" getComponent={() => require('../screens/profile/NotificationSettingsScreen').NotificationSettingsScreen} />
+              <Stack.Screen name="Support" getComponent={() => require('../screens/profile/SupportScreen').SupportScreen} />
+              <Stack.Screen name="Terms" getComponent={() => require('../screens/profile/TermsScreen').TermsScreen} />
+              <Stack.Screen name="Payment" getComponent={() => require('../screens/profile/PaymentScreen').PaymentScreen} />
             </>
           )}
         </Stack.Navigator>

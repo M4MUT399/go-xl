@@ -131,7 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await withTimeout(
         supabase.from('profiles').select('*').eq('id', userId).single(),
-        10000,
+        5000,
         'Tempo esgotado ao carregar o perfil.',
       );
       setProfile(data);

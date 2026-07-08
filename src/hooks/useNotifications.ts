@@ -173,10 +173,13 @@ export function useNotifications(
       }
     }
 
-    checkMessages();
+    // Atraso inicial: evita que a primeira sondagem compita por rede/CPU com
+    // as queries da tela recém-montada logo após login/troca de sessão. As
+    // execuções seguintes continuam no intervalo normal de 4s.
+    const kickoff = setTimeout(checkMessages, 1_500);
     const interval = setInterval(checkMessages, 4_000);
 
-    return () => { active = false; clearInterval(interval); };
+    return () => { active = false; clearTimeout(kickoff); clearInterval(interval); };
   }, [userId, userType, showBanner]);
 
   // ─── Polling a cada 10 s — detecção de motorista confirmado ou liberado ──────
@@ -242,10 +245,10 @@ export function useNotifications(
       }
     }
 
-    checkConfirmedRides();
+    const kickoff = setTimeout(checkConfirmedRides, 1_500);
     const interval = setInterval(checkConfirmedRides, 10_000);
 
-    return () => { active = false; clearInterval(interval); };
+    return () => { active = false; clearTimeout(kickoff); clearInterval(interval); };
   }, [userId, fireNotification]);
 
   // ─── Lembretes 15 / 10 / 5 min antes da corrida agendada ─────────────────
@@ -313,10 +316,10 @@ export function useNotifications(
       initialized = true;
     }
 
-    checkReminders();
+    const kickoff = setTimeout(checkReminders, 1_500);
     const interval = setInterval(checkReminders, 60_000); // verifica a cada 1 minuto
 
-    return () => { active = false; clearInterval(interval); };
+    return () => { active = false; clearTimeout(kickoff); clearInterval(interval); };
   }, [userId, userType, fireNotification]);
 
 

@@ -2,6 +2,7 @@ import 'react-native-gesture-handler';
 import React from 'react';
 import { LogBox } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
@@ -10,6 +11,12 @@ import { AuthProvider } from './src/contexts/AuthContext';
 import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
 import { installNetworkErrorGuard } from './src/lib/networkErrorGuard';
 import { preloadDriverMarkerAssets } from './src/lib/preloadAssets';
+
+// Mantém a splash nativa visível até o AuthContext terminar o check de sessão
+// (AppNavigator chama SplashScreen.hideAsync() quando `loading` vira false).
+// Sem isso, a splash some assim que o JS monta — antes da autenticação
+// resolver — e o usuário vê uma piscada (splash → tela em branco → loading).
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 // Engole rejeições de promise de rede transitórias (auto-refresh de sessão /
 // realtime do Supabase) para não virarem o toast vermelho do Expo Go.
