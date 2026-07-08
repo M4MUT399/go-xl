@@ -396,10 +396,20 @@ export function AddCardOnboardingScreen() {
         return;
       }
 
-      await WebBrowser.openBrowserAsync(json.url);
+      // openAuthSessionAsync (em vez de openBrowserAsync) fecha o navegador
+      // SOZINHO assim que o Stripe redireciona para goxl://card-return — o
+      // passageiro nunca vê nenhuma página web intermediária, só volta direto
+      // pro app e cai na tela nativa de "Confirmando..." → "Cartão aprovado!".
+      const result = await WebBrowser.openAuthSessionAsync(json.url, 'goxl://card-return');
       setLoading(false);
-      setPhase('processing');
 
+      // Cancelamento explícito (usuário voltou do Checkout sem completar):
+      // evita esperar até 30s de polling à toa por um cartão que não existe.
+      if (result.type === 'success' && result.url.includes('status=cancel')) {
+        return;
+      }
+
+      setPhase('processing');
       const updates = await pollForCard();
       if (updates) {
         await celebrateAndEnter(updates);

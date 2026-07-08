@@ -54,13 +54,17 @@ export function useConnectAccount(driverId: string | undefined) {
   /**
    * Abre o onboarding Express no navegador e reconsulta o status ao voltar.
    * Usa o mesmo padrão do cadastro de cartão (setup-card → WebBrowser).
+   *
+   * openAuthSessionAsync (em vez de openBrowserAsync) fecha o navegador
+   * SOZINHO assim que o Stripe redireciona para goxl://payout-return — o
+   * motorista nunca vê nenhuma página web intermediária.
    */
   const startOnboarding = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     setOnboarding(true);
     try {
       const json = await callEdgeFunction<{ url?: string }>('connect-onboard-driver');
       if (!json.url) throw new Error('Não foi possível abrir o cadastro de recebimento.');
-      await WebBrowser.openBrowserAsync(json.url);
+      await WebBrowser.openAuthSessionAsync(json.url, 'goxl://payout-return');
       await refresh();
       return { ok: true };
     } catch (e: any) {
