@@ -110,6 +110,26 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   const styles = makeStyles(colors);
 
+  // Nome do passageiro para o título do chat — a corrida chega aqui vinda do
+  // fluxo de aceite imediato (acceptRide/useRide.ts), que retorna só as
+  // colunas cruas da tabela `rides` (sem join em profiles). Busca local,
+  // mesmo padrão usado em DriverHomeScreen.tsx para o popup de agendamento.
+  const [passengerName, setPassengerName] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!ride.passenger_id) return;
+    supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', ride.passenger_id)
+      .single()
+      .then(({ data }) => {
+        if (!alive) return;
+        setPassengerName((data as { full_name?: string } | null)?.full_name ?? null);
+      });
+    return () => { alive = false; };
+  }, [ride.passenger_id]);
+
   useChatAlert(ride.id, profile?.id, isFocused, 'Passageiro');
 
   useEffect(() => {
@@ -486,6 +506,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           <Text style={styles.recenterIcon}>◎</Text>
         </TouchableOpacity>
       )}
+
+      <TouchableOpacity
+        style={styles.chatBtn}
+        onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: passengerName ?? 'Passageiro' })}
+      >
+        <Text style={styles.chatIcon}>💬</Text>
+      </TouchableOpacity>
       </View>
 
       {/* ── Banner de instrução de navegação ── */}
@@ -578,6 +605,23 @@ function makeStyles(colors: AppTheme) {
       elevation: 5,
     },
     recenterIcon: { fontSize: 22, color: colors.primary },
+    chatBtn: {
+      position: 'absolute',
+      left: 16,
+      bottom: 16,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
+    chatIcon: { fontSize: 20 },
 
     // Instruction banner
     instructionBanner: {
