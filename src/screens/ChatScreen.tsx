@@ -1,9 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity,
+  View, Text, StyleSheet, TextInput, TouchableOpacity,
   FlatList, KeyboardAvoidingView, Platform,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// SafeAreaView do 'react-native' (não deste pacote) é NO-OP no Android — só
+// aplica insets no iOS. Isso deixava o header do chat sobrepondo a barra de
+// status no Android. O SafeAreaView de react-native-safe-area-context aplica
+// os insets corretamente nas duas plataformas.
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -56,7 +60,10 @@ export function ChatScreen({ navigation, route }: Props) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    // `edges={['top']}`: o inset inferior já é aplicado manualmente na
+    // inputBar (linha abaixo, considerando o teclado/Android nav bar) — deixar
+    // o SafeAreaView aplicar o bottom também duplicaria o espaçamento.
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
           <Text style={styles.backText}>←</Text>
