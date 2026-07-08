@@ -112,6 +112,10 @@ export interface Ride {
   stripe_payment_intent_id?: string;
   tip_amount?: number;
   passenger?: Profile;
+  // Nome do passageiro (join client-side em profiles.full_name — não vem da
+  // tabela rides nem da view rides_with_locations). Usado nos cards de
+  // agendamento para o motorista saber quem solicitou.
+  passenger_name?: string | null;
   driver?: Profile;
   vehicle?: Vehicle;
 }
@@ -135,6 +139,9 @@ export interface RideRecord {
   created_at: string;
   accepted_at?: string;
   completed_at?: string;
+  // Nome do passageiro — preenchido client-side via join em profiles
+  // (ver useDriverScheduledRides.refresh). Ver comentário em Ride acima.
+  passenger_name?: string | null;
 }
 
 export interface RideRequest {

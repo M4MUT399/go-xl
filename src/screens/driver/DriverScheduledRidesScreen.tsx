@@ -91,6 +91,12 @@ function ClaimedCard({
         </View>
       </View>
 
+      {/* Passageiro */}
+      <View style={styles.passengerRow}>
+        <Text style={styles.passengerIcon}>👤</Text>
+        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? 'Passageiro'}</Text>
+      </View>
+
       {/* Rota */}
       <View style={styles.route}>
         <View style={styles.routeIcons}>
@@ -162,6 +168,12 @@ function AvailableCard({
         <View style={styles.availBadge}>
           <Text style={styles.availText}>em {label}</Text>
         </View>
+      </View>
+
+      {/* Passageiro */}
+      <View style={styles.passengerRow}>
+        <Text style={styles.passengerIcon}>👤</Text>
+        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? 'Passageiro'}</Text>
       </View>
 
       <View style={styles.route}>
@@ -250,7 +262,7 @@ export function DriverScheduledRidesScreen() {
   }
 
   function handleChat(ride: RideRecord) {
-    navigation.navigate('Chat', { rideId: ride.id, title: 'Passageiro' });
+    navigation.navigate('Chat', { rideId: ride.id, title: ride.passenger_name ?? 'Passageiro' });
   }
 
   function handleRelease(ride: RideRecord) {
@@ -409,6 +421,10 @@ function makeStyles(colors: AppTheme) {
       marginBottom: 14,
     },
     cardDate: { fontSize: 14, fontWeight: '700', color: colors.text },
+
+    passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+    passengerIcon: { fontSize: 13 },
+    passengerName: { fontSize: 13, color: colors.gray[600], fontWeight: '600' },
 
     countdownBadge: {
       flexDirection: 'row',

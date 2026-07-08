@@ -100,6 +100,7 @@ create policy "Passageiro vê suas corridas" on public.rides
 create policy "Motorista vê corridas disponíveis e suas" on public.rides
   for select using (
     status = 'requesting'
+    or (status = 'scheduled' and driver_id is null)
     or auth.uid() = driver_id
     or auth.uid() = passenger_id
   );
@@ -112,6 +113,7 @@ create policy "Motorista aceita corrida" on public.rides
     auth.uid() = passenger_id
     or auth.uid() = driver_id
     or (status = 'requesting' and driver_id is null)
+    or (status = 'scheduled' and driver_id is null)
   );
 
 -- Avaliações

@@ -590,32 +590,53 @@ export function usePassengerRide(passengerId: string | undefined) {
     const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
     const platformFee = Math.round((split.platformFee + venueFee) * 100) / 100;
 
-    const { data, error } = await supabase
+    const insertPayload = {
+      passenger_id: passengerId,
+      origin_lat: origin.lat,
+      origin_lng: origin.lng,
+      origin_address: origin.address,
+      destination_lat: destination.lat,
+      destination_lng: destination.lng,
+      destination_address: destination.address,
+      status: 'scheduled' as RideStatus,
+      price,
+      distance_km: distanceKm,
+      duration_min: duration,
+      toll_amount: toll,
+      airport_port_fee: venueFee,
+      scheduled_for: scheduledFor.toISOString(),
+      driver_amount: driverAmount,
+      platform_fee: platformFee,
+      // QR: pré-vincula o motorista; ele ainda precisa aceitar/recusar o agendamento
+      ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
+    };
+
+    const { error: insertError } = await supabase
       .from('rides')
-      .insert({
-        passenger_id: passengerId,
-        origin_lat: origin.lat,
-        origin_lng: origin.lng,
-        origin_address: origin.address,
-        destination_lat: destination.lat,
-        destination_lng: destination.lng,
-        destination_address: destination.address,
-        status: 'scheduled' as RideStatus,
-        price,
-        distance_km: distanceKm,
-        duration_min: duration,
-        toll_amount: toll,
-        airport_port_fee: venueFee,
-        scheduled_for: scheduledFor.toISOString(),
-        driver_amount: driverAmount,
-        platform_fee: platformFee,
-        // QR: pré-vincula o motorista; ele ainda precisa aceitar/recusar o agendamento
-        ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
-      })
-      .select()
+      .insert(insertPayload);
+
+    if (insertError) {
+      reportError(insertError, { op: 'scheduleRide.insert', passengerId });
+      return null;
+    }
+
+    // SELECT separado — evita problema de RLS no RETURNING pós-insert (mesmo
+    // padrão do requestRide). O insert com .select().single() falhava aqui:
+    // a policy permite INSERT mas o RETURNING (SELECT implícito) não retornava
+    // a linha, quebrando o .single() e fazendo o agendamento "dar erro".
+    const { data, error: selectError } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('passenger_id', passengerId)
+      .eq('status', 'scheduled')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .single();
 
-    if (error) return null;
+    if (selectError || !data) {
+      reportError(selectError, { op: 'scheduleRide.select', passengerId });
+      return null;
+    }
     if (options?.lockedDriverId) {
       // Broadcast in-app (confiável mesmo sem push token no Expo Go)
       broadcastToDriver(options.lockedDriverId, data);
@@ -695,7 +716,7 @@ export function useScheduledRides(passengerId: string | undefined) {
   }, [refresh]);
 
   const claimScheduledRide = useCallback(async (rideId: string, driverId: string): Promise<boolean> => {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('rides')
       // accepted_at marca a decisão do motorista — reivindicar do pool aberto
       // já É a confirmação, então grava junto (mesma semântica usada pelo
@@ -703,10 +724,27 @@ export function useScheduledRides(passengerId: string | undefined) {
       .update({ driver_id: driverId, accepted_at: new Date().toISOString() })
       .eq('id', rideId)
       .is('driver_id', null) // apenas se ainda sem motorista (evita dupla confirmação)
-      .eq('status', 'scheduled');
+      .eq('status', 'scheduled')
+      // .select().single() é essencial aqui: sem RETURNING, um UPDATE que não
+      // bate em nenhuma linha (corrida já reivindicada por outro motorista, ou
+      // bloqueada por RLS) volta com error=null e 0 linhas afetadas — ou seja,
+      // "sucesso" falso-positivo. Checar `data` é o único jeito de detectar isso.
+      .select()
+      .single();
+
+    if (error || !data) return false;
+
+    const ride = data as Ride;
     // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
-    if (!error) applyDriverSplit(rideId, driverId);
-    return !error;
+    applyDriverSplit(rideId, driverId);
+    // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora.
+    broadcastRideTaken(rideId, driverId);
+    // Avisa o passageiro — mesma notificação usada pela confirmação via popup
+    // (confirmScheduledRide), que até então só disparava por aquele caminho.
+    broadcastToPassenger(ride.passenger_id, ride.id);
+    notifyPassengerScheduleConfirmed(ride.passenger_id);
+
+    return true;
   }, []);
 
   const cancel = useCallback(async (rideId: string) => {
@@ -965,6 +1003,11 @@ export function useDriverRide(driverId: string | undefined) {
           setPendingRide(null);
           logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'broadcast' });
         }
+        // Mesma corrida agendada (pool aberto) confirmada por outro motorista
+        // enquanto este via o popup — some da tela dele também.
+        if (rideId === pendingScheduledRideIdRef.current) {
+          setPendingScheduledRide(null);
+        }
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -1119,6 +1162,10 @@ export function useDriverRide(driverId: string | undefined) {
 
     // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
     applyDriverSplit(ride.id, driverId!);
+
+    // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora
+    // (mesmo mecanismo usado em acceptRide para corridas imediatas).
+    broadcastRideTaken(ride.id, driverId);
 
     // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
     broadcastToPassenger(ride.passenger_id, ride.id);

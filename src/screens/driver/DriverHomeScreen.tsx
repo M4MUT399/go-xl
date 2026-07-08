@@ -22,6 +22,7 @@ import { useScheduledOfferAlert } from '../../hooks/useScheduledOfferAlert';
 import { useRideCallAlert } from '../../hooks/useRideCallAlert';
 import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
+import { supabase } from '../../lib/supabase';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -61,6 +62,29 @@ export function DriverHomeScreen({ navigation }: Props) {
   const bgCheck = useBackgroundCheck(profile?.id);
   const [confirming, setConfirming] = useState(false);
   const mapRef = useRef<MapView>(null);
+
+  // Nome do passageiro do agendamento pendente — mesmo padrão já usado em
+  // IncomingRideCall.tsx para a chamada imediata (fetch pontual em profiles,
+  // já que rides/rides_with_locations não carregam esse dado).
+  const [pendingScheduledPassengerName, setPendingScheduledPassengerName] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const passengerId = pendingScheduledRide?.passenger_id;
+    if (!passengerId) {
+      setPendingScheduledPassengerName(null);
+      return;
+    }
+    supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', passengerId)
+      .single()
+      .then(({ data }) => {
+        if (!alive) return;
+        setPendingScheduledPassengerName((data as { full_name?: string } | null)?.full_name ?? null);
+      });
+    return () => { alive = false; };
+  }, [pendingScheduledRide?.passenger_id]);
   // Mantém o marcador "ligado" por um instante a cada movimento, para o
   // ícone do carro repintar e acompanhar a posição/rotação no iOS.
   const [tracksCar, setTracksCar] = useState(true);
@@ -310,6 +334,14 @@ export function DriverHomeScreen({ navigation }: Props) {
           </View>
 
           <View style={styles.requestDetails}>
+            <View style={styles.requestRow}>
+              <Text style={styles.requestIcon}>👤</Text>
+              <View>
+                <Text style={styles.requestLabel}>Passageiro</Text>
+                <Text style={styles.requestAddr} numberOfLines={1}>{pendingScheduledPassengerName ?? 'Passageiro'}</Text>
+              </View>
+            </View>
+            <View style={styles.requestDivider} />
             <View style={styles.requestRow}>
               <Text style={styles.requestIcon}>📍</Text>
               <View>

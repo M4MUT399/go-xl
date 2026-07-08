@@ -144,8 +144,30 @@ export function useDriverScheduledRides(driverId: string | undefined) {
         .order('scheduled_for', { ascending: true }),
     ]);
 
-    setAvailable((avail as RideRecord[]) ?? []);
-    setClaimed((mine as RideRecord[]) ?? []);
+    const availRides = (avail as RideRecord[]) ?? [];
+    const mineRides = (mine as RideRecord[]) ?? [];
+
+    // Busca o nome de todos os passageiros das duas listas de uma vez só
+    // (evita N consultas por card) e anexa em cada ride — os cards da aba
+    // "Agenda" precisam mostrar quem solicitou a corrida.
+    const passengerIds = Array.from(
+      new Set([...availRides, ...mineRides].map((r) => r.passenger_id).filter(Boolean))
+    );
+    let namesById = new Map<string, string>();
+    if (passengerIds.length > 0) {
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .in('id', passengerIds);
+      namesById = new Map(
+        ((profs as { id: string; full_name: string }[]) ?? []).map((p) => [p.id, p.full_name])
+      );
+    }
+    const withNames = (rides: RideRecord[]) =>
+      rides.map((r) => ({ ...r, passenger_name: namesById.get(r.passenger_id) ?? null }));
+
+    setAvailable(withNames(availRides));
+    setClaimed(withNames(mineRides));
     setLoading(false);
   }, [driverId]);
 
@@ -168,6 +190,24 @@ export function useDriverScheduledRides(driverId: string | undefined) {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [driverId, refresh]);
+
+  // Broadcast "corrida agendada reivindicada" (mesmo canal 'ride-offers' usado
+  // por acceptRide/confirmScheduledRide/claimScheduledRide em useRide.ts) —
+  // remove o card da lista de disponíveis dos DEMAIS motoristas na hora, sem
+  // depender do postgres_changes acima (precisa de REPLICA IDENTITY FULL,
+  // pouco confiável no Expo Go) nem do poll de 60s.
+  useEffect(() => {
+    if (!driverId) return;
+    const ch = supabase
+      .channel('ride-offers')
+      .on('broadcast', { event: 'ride_taken' }, ({ payload }) => {
+        const rideId = payload?.rideId as string | undefined;
+        if (!rideId) return;
+        setAvailable((prev) => prev.filter((r) => r.id !== rideId));
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [driverId]);
 
   const release = useCallback(async (rideId: string): Promise<boolean> => {
     const { data: rideData } = await supabase
