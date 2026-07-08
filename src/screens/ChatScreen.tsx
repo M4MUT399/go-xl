@@ -173,7 +173,7 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
       paddingHorizontal: 16,
       paddingVertical: 10,
       fontSize: 15,
-      color: colors.black,
+      color: colors.text,
       maxHeight: 100,
     },
     sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },

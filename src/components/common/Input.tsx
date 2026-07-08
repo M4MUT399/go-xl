@@ -40,7 +40,7 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderRadius: 12,
       paddingHorizontal: 16,
       fontSize: 15,
-      color: colors.black,
+      color: colors.text,
       borderWidth: 1.5,
       borderColor: colors.gray[200],
     },
