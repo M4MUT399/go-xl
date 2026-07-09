@@ -200,10 +200,14 @@ export type RootStackParamList = {
   Support: undefined;
   Terms: undefined;
   Payment: undefined;
+  TripDetails: { ride: RideRecord };
   ScheduledRides: undefined;
   DriverScheduledRides: undefined;
   TrustedContacts: undefined;
   Chat: { rideId: string; title: string };
+  // Rastreio público de viagem ao vivo (deep link goxl.app/track?token=…).
+  // Acessível SEM login — o contato de confiança abre pelo link recebido.
+  TrackTrip: { token: string };
 };
 
 export interface Message {

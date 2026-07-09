@@ -11,6 +11,7 @@ import { CrosshairIcon } from '../../components/common/CrosshairIcon';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList, Location } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 import { AppTheme } from '../../constants/theme';
 import { useLocation } from '../../hooks/useLocation';
 import { useAuth } from '../../hooks/useAuth';
@@ -23,6 +24,7 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Passen
 export function HomeScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const { location, status, retry } = useLocation();
   const { drivers } = useNearbyDrivers(true);
@@ -83,7 +85,9 @@ export function HomeScreen({ navigation }: Props) {
     return () => clearTimeout(t);
   }, [drivers]);
 
-  const firstName = profile?.full_name?.split(' ')[0] ?? 'Olá';
+  // Primeiro nome do passageiro; vazio quando o perfil ainda não tem nome.
+  // NÃO cair para o próprio "Olá" aqui — senão a saudação vira "Olá, Olá".
+  const firstName = profile?.full_name?.trim().split(' ')[0] ?? '';
 
   function handleOpenChat() {
     const target = chatRides.find(r => r.unread > 0) ?? chatRides[0];
@@ -111,12 +115,12 @@ export function HomeScreen({ navigation }: Props) {
 
   const resumeLabel =
     activeRide?.status === 'requesting'
-      ? 'Procurando um motorista...'
+      ? t('home.resumeRequesting')
       : activeRide?.status === 'accepted'
-        ? 'Motorista confirmado'
+        ? t('home.resumeAccepted')
         : activeRide?.status === 'driver_en_route'
-          ? 'Motorista a caminho'
-          : 'Corrida em andamento';
+          ? t('home.resumeEnroute')
+          : t('home.resumeInProgress');
 
   function recenter() {
     if (location && mapRef.current) {
@@ -135,12 +139,12 @@ export function HomeScreen({ navigation }: Props) {
         <View style={[styles.map, styles.mapPlaceholder]}>
           <View style={styles.mapError}>
             <Text style={styles.mapErrorEmoji}>📍</Text>
-            <Text style={styles.mapErrorTitle}>Localização desativada</Text>
+            <Text style={styles.mapErrorTitle}>{t('home.locationOff')}</Text>
             <Text style={styles.mapErrorText}>
-              O Go XL precisa da sua localização para encontrar motoristas e definir o embarque.
+              {t('home.locationOffBody')}
             </Text>
             <TouchableOpacity style={styles.mapErrorBtn} onPress={() => Linking.openSettings()}>
-              <Text style={styles.mapErrorBtnText}>Abrir ajustes</Text>
+              <Text style={styles.mapErrorBtnText}>{t('home.openSettings')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -191,12 +195,12 @@ export function HomeScreen({ navigation }: Props) {
         <View style={styles.mapErrorOverlay} pointerEvents="box-none">
           <View style={styles.mapError}>
             <Text style={styles.mapErrorEmoji}>📍</Text>
-            <Text style={styles.mapErrorTitle}>Sem localização</Text>
+            <Text style={styles.mapErrorTitle}>{t('home.noLocation')}</Text>
             <Text style={styles.mapErrorText}>
-              Não foi possível obter sua localização. Verifique se o GPS está ligado.
+              {t('home.noLocationBody')}
             </Text>
             <TouchableOpacity style={styles.mapErrorBtn} onPress={() => retry()}>
-              <Text style={styles.mapErrorBtnText}>Tentar novamente</Text>
+              <Text style={styles.mapErrorBtnText}>{t('home.retry')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -223,9 +227,11 @@ export function HomeScreen({ navigation }: Props) {
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         <View style={styles.topBar}>
           <View style={styles.greeting}>
-            <Text style={styles.greetingText}>Olá, {firstName}</Text>
+            <Text style={styles.greetingText}>
+              {firstName ? `${t('home.greeting')}, ${firstName}` : t('home.greeting')}
+            </Text>
             <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>✦ Executive XL</Text>
+              <Text style={styles.categoryText}>{t('profile.passenger')}</Text>
             </View>
           </View>
           <View style={styles.topActions}>
@@ -248,7 +254,7 @@ export function HomeScreen({ navigation }: Props) {
               style={styles.avatar}
               onPress={() => (navigation as unknown as { navigate: (route: string) => void }).navigate('Perfil')}
             >
-              <Text style={styles.avatarText}>{firstName[0]}</Text>
+              <Text style={styles.avatarText}>{firstName ? firstName[0].toUpperCase() : '·'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -259,12 +265,15 @@ export function HomeScreen({ navigation }: Props) {
               <View style={[styles.statusDot, drivers.length > 0 ? styles.statusOnline : styles.statusOffline]} />
               <Text style={styles.driversStatusText}>
                 {drivers.length > 0
-                  ? `${drivers.length} ${drivers.length === 1 ? 'motorista' : 'motoristas'} por perto`
-                  : 'Procurando motoristas...'}
+                  ? `${drivers.length} ${drivers.length === 1 ? t('home.driverSingular') : t('home.driverPlural')} ${t('home.nearby')}`
+                  : t('home.searchingDrivers')}
               </Text>
             </View>
             <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
-              <CrosshairIcon size={27.5} color={colors.primary} />
+              {/* colors.text (não colors.primary): no escuro o botão é navy
+                  (colors.card) e primary também é navy — a mira sumia. text
+                  inverte para claro no dark e mantém contraste nos dois temas. */}
+              <CrosshairIcon size={27.5} color={colors.text} />
             </TouchableOpacity>
           </View>
 
@@ -276,8 +285,8 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.resumeTitle}>{resumeLabel}</Text>
                   <Text style={styles.resumeSubtitle} numberOfLines={1}>
                     {activeRide.destination_address
-                      ? `Para ${activeRide.destination_address}`
-                      : 'Toque para retomar sua corrida'}
+                      ? `${t('home.resumeTo')} ${activeRide.destination_address}`
+                      : t('home.resumeTap')}
                   </Text>
                 </View>
                 <View style={styles.searchArrow}>
@@ -289,7 +298,7 @@ export function HomeScreen({ navigation }: Props) {
             <View style={styles.searchContainer}>
               <TouchableOpacity style={styles.searchBox} onPress={handleSearchFocus} activeOpacity={0.9}>
                 <View style={styles.originDot} />
-                <Text style={styles.searchPlaceholder}>Para onde você vai?</Text>
+                <Text style={styles.searchPlaceholder}>{t('home.searchPlaceholder')}</Text>
                 <View style={styles.searchArrow}>
                   <Text style={styles.searchArrowText}>→</Text>
                 </View>

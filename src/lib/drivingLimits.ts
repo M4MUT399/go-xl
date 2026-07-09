@@ -5,15 +5,33 @@
 // intervalo off-duty >= restHours zera o acúmulo (novo "turno"). Intervalos
 // curtos não zeram — a direção continua somando através deles.
 //
+// Contagem POR MOVIMENTO (item 1): o tempo de direção só deve contar com o
+// veículo em movimento. Uma parada curta (semáforo, embarque rápido) NÃO pausa
+// a contagem; só quando o veículo fica parado por MAIS de `idlePauseMinutes`
+// (padrão 10) é que o excedente deixa de contar — e volta a contar assim que o
+// veículo se move de novo. Modelamos isso com "segmentos ociosos" (períodos
+// parado) que subtraem do acúmulo apenas o tempo ALÉM da tolerância de cada
+// parada: excedente = Σ max(0, duração_da_parada − idlePauseMinutes).
+//
 // Isolado de React/RN de propósito: toda a matemática vive aqui, testável sem
 // montar componente. Convenção de segurança: sobrecontar (ex.: sessão aberta
-// com app morto online) só antecipa o descanso — o lado seguro para compliance.
+// com app morto online, ou ociosidade perdida por reinício do app) só antecipa
+// o descanso — o lado seguro para compliance.
 
 export type DutySession = { started_at: string; ended_at: string | null };
+
+/** Período em que o veículo ficou PARADO (fim null = ainda parado "agora"). */
+export type IdleSegment = { start: string; end: string | null };
 
 export type DutyLimitConfig = {
   limitHours: number;
   restHours: number;
+  /**
+   * Tolerância (min) de parada antes de a contagem pausar. Paradas <= a este
+   * valor contam integralmente; o que passar disso, em cada parada, é excluído.
+   * Ausente/0 → comportamento antigo (nada é excluído).
+   */
+  idlePauseMinutes?: number;
 };
 
 export type DutyStatus = {
@@ -34,7 +52,8 @@ export type DutyStatus = {
 export function computeDutyStatus(
   sessions: DutySession[],
   cfg: DutyLimitConfig,
-  now: Date = new Date()
+  now: Date = new Date(),
+  idleSegments: IdleSegment[] = []
 ): DutyStatus {
   const limitMin = cfg.limitHours * 60;
   const restMin = cfg.restHours * 60;
@@ -69,6 +88,23 @@ export function computeDutyStatus(
   if (!online && lastDutyEnd != null) {
     const offDutyMin = (nowMs - lastDutyEnd) / 60_000;
     if (offDutyMin >= restMin) accMin = 0;
+  }
+
+  // Item 1 — desconta a ociosidade EXCEDENTE (tempo parado além da tolerância
+  // de cada parada). Só faz sentido enquanto há acúmulo (accMin > 0): se o turno
+  // já foi zerado por descanso qualificado, não há o que descontar. Cada parada
+  // contribui max(0, duração − idlePauseMinutes); paradas curtas contam inteiras.
+  const graceMin = cfg.idlePauseMinutes ?? 0;
+  if (accMin > 0 && idleSegments.length > 0) {
+    let excludedMin = 0;
+    for (const seg of idleSegments) {
+      const start = new Date(seg.start).getTime();
+      const end = seg.end ? new Date(seg.end).getTime() : nowMs;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+      const durMin = (end - start) / 60_000;
+      excludedMin += Math.max(0, durMin - graceMin);
+    }
+    accMin = Math.max(0, accMin - excludedMin);
   }
 
   const mustRest = accMin >= limitMin;

@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
@@ -21,6 +22,7 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'EditPr
 export function EditProfileScreen({ navigation }: Props) {
   const { profile, patchProfile, signOut } = useAuth();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const [fullName, setFullName] = useState(profile?.full_name ?? '');
   const [phone, setPhone] = useState(profile?.phone ?? '');
@@ -164,7 +166,10 @@ export function EditProfileScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAwareScrollView
-        contentContainerStyle={styles.scroll}
+        // paddingBottom com a safe-area: no Android o SafeAreaView não aplica o
+        // inset inferior, então o link "Excluir minha conta" (último elemento)
+        // ficava escondido atrás da barra de navegação do sistema.
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}
         keyboardShouldPersistTaps="handled"
         enableOnAndroid
         extraScrollHeight={20}

@@ -19,8 +19,9 @@ import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { RouteStep } from '../../lib/routing';
-import { NavChevron } from '../../components/common/NavChevron';
+import { CarMarker } from '../../components/common/CarMarker';
 import { supabase } from '../../lib/supabase';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverNavigate'>;
@@ -61,31 +62,33 @@ function maneuverColor(type: string, modifier: string | undefined, colors: AppTh
   return colors.primary;
 }
 
-function maneuverInstruction(type: string, modifier?: string, name?: string): { action: string; street: string } {
+// Retorna a CHAVE de tradução da ação (resolvida com t() no componente) + a rua crua.
+function maneuverInstruction(type: string, modifier?: string, name?: string): { actionKey: string; street: string } {
   const street = name || '';
-  if (type === 'arrive')    return { action: 'Chegou ao destino', street };
-  if (type === 'depart')    return { action: 'Siga em frente', street };
-  if (type === 'roundabout' || type === 'rotary') return { action: 'Entre na rotatória', street };
-  if (type === 'fork')      return { action: modifier?.includes('right') ? 'Mantenha à direita' : 'Mantenha à esquerda', street };
-  if (type === 'merge')     return { action: 'Incorpore ao tráfego', street };
-  if (type === 'on ramp')   return { action: 'Entre na rampa', street };
-  if (type === 'off ramp')  return { action: 'Saia pela rampa', street };
-  if (type === 'end of road') return { action: modifier?.includes('right') ? 'Vire à direita' : 'Vire à esquerda', street };
+  if (type === 'arrive')    return { actionKey: 'driverNav.maneuverArrive', street };
+  if (type === 'depart')    return { actionKey: 'driverNav.maneuverDepart', street };
+  if (type === 'roundabout' || type === 'rotary') return { actionKey: 'driverNav.maneuverRoundabout', street };
+  if (type === 'fork')      return { actionKey: modifier?.includes('right') ? 'driverNav.maneuverKeepRight' : 'driverNav.maneuverKeepLeft', street };
+  if (type === 'merge')     return { actionKey: 'driverNav.maneuverMerge', street };
+  if (type === 'on ramp')   return { actionKey: 'driverNav.maneuverOnRamp', street };
+  if (type === 'off ramp')  return { actionKey: 'driverNav.maneuverOffRamp', street };
+  if (type === 'end of road') return { actionKey: modifier?.includes('right') ? 'driverNav.maneuverTurnRight' : 'driverNav.maneuverTurnLeft', street };
   switch (modifier) {
-    case 'uturn':        return { action: 'Faça o retorno', street };
-    case 'sharp right':  return { action: 'Vire totalmente à direita', street };
-    case 'right':        return { action: 'Vire à direita', street };
-    case 'slight right': return { action: 'Siga levemente à direita', street };
-    case 'straight':     return { action: 'Continue em frente', street };
-    case 'slight left':  return { action: 'Siga levemente à esquerda', street };
-    case 'left':         return { action: 'Vire à esquerda', street };
-    case 'sharp left':   return { action: 'Vire totalmente à esquerda', street };
-    default:             return { action: 'Continue', street };
+    case 'uturn':        return { actionKey: 'driverNav.maneuverUturn', street };
+    case 'sharp right':  return { actionKey: 'driverNav.maneuverSharpRight', street };
+    case 'right':        return { actionKey: 'driverNav.maneuverTurnRight', street };
+    case 'slight right': return { actionKey: 'driverNav.maneuverSlightRight', street };
+    case 'straight':     return { actionKey: 'driverNav.maneuverStraight', street };
+    case 'slight left':  return { actionKey: 'driverNav.maneuverSlightLeft', street };
+    case 'left':         return { actionKey: 'driverNav.maneuverTurnLeft', street };
+    case 'sharp left':   return { actionKey: 'driverNav.maneuverSharpLeft', street };
+    default:             return { actionKey: 'driverNav.maneuverContinue', street };
   }
 }
 
-function formatStepDist(meters: number): string {
-  if (meters < 30)   return 'Agora';
+// Retorna { nowKey } quando muito perto (resolvido com t() no componente) ou o texto formatado.
+function formatStepDist(meters: number): { nowKey: string } | string {
+  if (meters < 30)   return { nowKey: 'driverNav.distNow' };
   if (meters < 1000) return `${Math.round(meters / 10) * 10} m`;
   return `${(meters / 1000).toFixed(1)} km`;
 }
@@ -94,6 +97,7 @@ function formatStepDist(meters: number): string {
 
 export function DriverNavigateScreen({ navigation, route }: Props) {
   const { ride, initialDriverLocation } = route.params;
+  const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -135,7 +139,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     return () => { alive = false; };
   }, [ride.passenger_id]);
 
-  useChatAlert(ride.id, profile?.id, isFocused, 'Passageiro');
+  useChatAlert(ride.id, profile?.id, isFocused, t('driverNav.passenger'));
 
   useEffect(() => {
     if (!location) return;
@@ -279,7 +283,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     const handlePassengerCancellation = () => {
       if (cancelledHandledRef.current) return;
       cancelledHandledRef.current = true;
-      Alert.alert('Corrida cancelada', 'O passageiro cancelou a corrida.');
+      Alert.alert(t('driverNav.rideCancelledTitle'), t('driverNav.rideCancelledByPassenger'));
       navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
     };
 
@@ -320,10 +324,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   }, [ride.id, profile?.id]);
 
   function handleCancel() {
-    Alert.alert('Cancelar corrida', 'Tem certeza? O passageiro será reembolsado automaticamente.', [
-      { text: 'Não', style: 'cancel' },
+    Alert.alert(t('driverNav.cancelRideTitle'), t('driverNav.cancelRideConfirm'), [
+      { text: t('driverNav.no'), style: 'cancel' },
       {
-        text: 'Sim, cancelar',
+        text: t('driverNav.yesCancel'),
         style: 'destructive',
         onPress: async () => {
           // Extorna o pagamento antes de cancelar
@@ -346,14 +350,18 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       await updateRideStatus(ride.id, 'completed' as RideStatus);
       // Notifica o passageiro (push remoto para app em background)
       notifyPassengerRideCompleted(ride.passenger_id, ride.price);
-      Alert.alert('Corrida concluída!', `Valor: ${formatCurrency(ride.price)}`, [
-        { text: 'OK', onPress: () => navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] }) },
-      ]);
+      Alert.alert(
+        t('driverNav.rideCompletedTitle'),
+        t('driverNav.rideCompletedValue').replace('{value}', formatCurrency(ride.price)),
+        [
+          { text: t('driverNav.ok'), onPress: () => navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] }) },
+        ]
+      );
     }
     setLoading(false);
   }
 
-  const buttonLabel = phase === 'pickup' ? 'Passei buscar o passageiro' : 'Finalizar corrida';
+  const buttonLabel = phase === 'pickup' ? t('driverNav.pickedUpPassenger') : t('driverNav.finishRide');
 
   // ── Painel reduzido pós-aceite: cronômetro da corrida + velocidade atual ──
   // Marca o início no momento em que a corrida foi aceita (accepted_at); se por
@@ -383,24 +391,24 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   function handleNextPhasePress() {
     const isFinal = phase === 'dropoff';
     Alert.alert(
-      isFinal ? 'Finalizar corrida?' : 'Confirmar embarque?',
+      isFinal ? t('driverNav.finishRideQuestion') : t('driverNav.confirmPickupQuestion'),
       isFinal
-        ? 'Tem certeza que deseja finalizar esta corrida?'
-        : 'Confirma que já buscou o passageiro?',
+        ? t('driverNav.finishRideConfirmMsg')
+        : t('driverNav.confirmPickupMsg'),
       [
-        { text: 'Cancelar', style: 'cancel' },
+        { text: t('driverNav.cancel'), style: 'cancel' },
         {
-          text: 'Sim',
+          text: t('driverNav.yes'),
           onPress: () => {
             Alert.alert(
-              isFinal ? 'Confirmar finalização' : 'Confirmar embarque',
+              isFinal ? t('driverNav.confirmFinishTitle') : t('driverNav.confirmPickupTitle'),
               isFinal
-                ? 'Esta ação não pode ser desfeita. Finalizar corrida agora?'
-                : 'Iniciar deslocamento até o destino agora?',
+                ? t('driverNav.confirmFinishMsg')
+                : t('driverNav.startToDestinationMsg'),
               [
-                { text: 'Voltar', style: 'cancel' },
+                { text: t('driverNav.back'), style: 'cancel' },
                 {
-                  text: isFinal ? 'Finalizar' : 'Confirmar',
+                  text: isFinal ? t('driverNav.finish') : t('driverNav.confirm'),
                   style: isFinal ? 'destructive' : 'default',
                   onPress: handleNextPhase,
                 },
@@ -416,9 +424,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const arrow       = currentStep ? maneuverArrow(currentStep.maneuver.type, currentStep.maneuver.modifier) : '↑';
   const arrowBg     = currentStep ? maneuverColor(currentStep.maneuver.type, currentStep.maneuver.modifier, colors) : colors.primary;
   const instruction = currentStep
-    ? maneuverInstruction(currentStep.maneuver.type, currentStep.maneuver.modifier, currentStep.name)
-    : { action: phase === 'pickup' ? 'Indo buscar o passageiro' : 'Levando ao destino', street: target.address };
-  const distLabel   = currentStep ? formatStepDist(currentStep.distance) : '';
+    ? (() => {
+        const m = maneuverInstruction(currentStep.maneuver.type, currentStep.maneuver.modifier, currentStep.name);
+        return { action: t(m.actionKey), street: m.street };
+      })()
+    : { action: phase === 'pickup' ? t('driverNav.goingToPickup') : t('driverNav.takingToDestination'), street: target.address };
+  const distLabelRaw = currentStep ? formatStepDist(currentStep.distance) : '';
+  const distLabel   = typeof distLabelRaw === 'string' ? distLabelRaw : t(distLabelRaw.nowKey);
 
   // Visão geral ao trocar de fase (embarque → destino); depois a câmera de
   // navegação retoma o controle automaticamente no próximo update de posição.
@@ -486,17 +498,16 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         {location && (
           <Marker
             coordinate={{ latitude: location.lat, longitude: location.lng }}
-            // Ancora perto da BASE da cauda (não no centro do ícone) — assim a
-            // ponta que fica "colada" exatamente na coordenada do GPS é a
-            // parte de trás da seta, e o corpo/ponta gira e se inclina em
-            // volta desse ponto fixo conforme o rumo muda e o mapa se
-            // inclina (pitch), reforçando o efeito de estar preso ao chão.
-            anchor={{ x: 0.5, y: 0.82 }}
-            rotation={location.heading ?? lastHeadingRef.current}
-            flat
+            // Marcador de marca (o MESMO CarMarker das demais telas) — idêntico
+            // ao iOS e já robusto no Android (o triângulo "cru" era o antigo
+            // NavChevron, só usado aqui). A CÂMERA já gira para o rumo do
+            // motorista (heading-up, estilo Waze), então a seta do badge aponta
+            // sempre para CIMA (heading={0}) = sentido do movimento. Billboard
+            // (sem `flat`) mantém a logo em pé e legível sobre o mapa inclinado.
+            anchor={{ x: 0.5, y: 0.5 }}
             tracksViewChanges={tracksCar}
           >
-            <NavChevron scale={1.5} />
+            <CarMarker scale={0.9} heading={0} />
           </Marker>
         )}
         {/* Traça a rota IMEDIATAMENTE ao abrir a tela: usa a posição já conhecida
@@ -550,7 +561,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
       <TouchableOpacity
         style={styles.chatBtn}
-        onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: passengerName ?? 'Passageiro' })}
+        onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: passengerName ?? t('driverNav.passenger') })}
       >
         <Text style={styles.chatIcon}>💬</Text>
       </TouchableOpacity>
@@ -583,7 +594,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           {etaMinDisplay != null && (
             <View style={styles.etaBadge}>
               <Text style={styles.etaBadgeMin}>{etaMinDisplay}</Text>
-              <Text style={styles.etaBadgeUnit}>min</Text>
+              <Text style={styles.etaBadgeUnit}>{t('driverNav.minUnit')}</Text>
             </View>
           )}
         </View>
@@ -606,7 +617,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           )}
           <View style={styles.paxInfo}>
             <Text style={styles.paxName} numberOfLines={1}>
-              {passengerName ?? 'Passageiro'}
+              {passengerName ?? t('driverNav.passenger')}
             </Text>
             {passengerRating != null && passengerRating > 0 && (
               <Text style={styles.paxRating}>⭐ {passengerRating.toFixed(1)}</Text>
@@ -617,7 +628,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         <View style={styles.compactStatsRow}>
           <View style={styles.compactStat}>
             <Text style={styles.compactStatValue}>{elapsedLabel}</Text>
-            <Text style={styles.compactStatLabel}>Tempo de corrida</Text>
+            <Text style={styles.compactStatLabel}>{t('driverNav.rideTime')}</Text>
           </View>
           <View style={styles.compactDivider} />
           <View style={styles.compactStat}>
@@ -634,7 +645,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         />
         {phase === 'pickup' && (
           <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
-            <Text style={styles.cancelBtnText}>Cancelar corrida</Text>
+            <Text style={styles.cancelBtnText}>{t('driverNav.cancelRide')}</Text>
           </TouchableOpacity>
         )}
       </View>

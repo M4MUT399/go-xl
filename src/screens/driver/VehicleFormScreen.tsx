@@ -60,7 +60,7 @@ export function VehicleFormScreen({ navigation }: Props) {
     setSaving(false);
 
     if (error) {
-      Alert.alert(t('common.error'), error);
+      Alert.alert(t('common.error'), error === 'DUPLICATE' ? t('vehicle.duplicate') : error);
     } else {
       Alert.alert(t('common.done'), t('vehicle.saved'), [
         { text: t('common.ok'), onPress: () => navigation.goBack() },

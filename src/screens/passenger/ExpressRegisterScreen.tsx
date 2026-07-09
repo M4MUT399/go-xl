@@ -26,6 +26,7 @@ import { AppTheme } from '../../constants/theme';
 import { supabase } from '../../lib/supabase';
 import { setPendingExpressRide } from '../../lib/expressRide';
 import { EXPRESS_PLACEHOLDER_NAME } from '../../lib/onboarding';
+import { useTranslation } from '../../i18n';
 
 const SUPABASE_URL    = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SETUP_CARD_URL  = `${SUPABASE_URL}/functions/v1/setup-card`;
@@ -38,6 +39,7 @@ type Props = {
 export function ExpressRegisterScreen({ navigation, route }: Props) {
   const { driverCode } = route.params;
   const { colors } = useTheme();
+  const { t } = useTranslation();
 
   const [loading, setLoading] = useState(false);
   const [step,    setStep]    = useState<'card' | 'done'>('card');
@@ -59,7 +61,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
       const driverName = (driver as { id: string; full_name: string } | null)?.full_name ?? '';
 
       if (!driverId) {
-        Alert.alert('Código inválido', 'Não encontramos o motorista deste QR Code. Peça um novo ao motorista.');
+        Alert.alert(t('express.invalidCodeTitle'), t('express.invalidCodeMessage'));
         return;
       }
 
@@ -72,7 +74,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
 
       const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
       if (authError || !authData.user) {
-        throw authError ?? new Error('Não foi possível criar a conta.');
+        throw authError ?? new Error(t('express.errorCreateAccount'));
       }
 
       const userId = authData.user.id;
@@ -91,7 +93,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
 
       // ── 5. Abre Stripe Checkout para adicionar cartão ─────────────────────
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Sessão não disponível.');
+      if (!session) throw new Error(t('express.errorNoSession'));
 
       const res  = await fetch(SETUP_CARD_URL, {
         method:  'POST',
@@ -104,7 +106,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
 
       const json = await res.json() as { url?: string; error?: string };
       if (!json.url) {
-        throw new Error(json.error ?? 'Não foi possível abrir o formulário de pagamento.');
+        throw new Error(json.error ?? t('express.errorPaymentForm'));
       }
 
       await WebBrowser.openBrowserAsync(json.url);
@@ -118,7 +120,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
 
     } catch (e: unknown) {
       const err = e as { message?: string };
-      Alert.alert('Erro', err?.message ?? 'Ocorreu um erro. Tente novamente.');
+      Alert.alert(t('express.errorTitle'), err?.message ?? t('express.errorGeneric'));
       setStep('card');
     } finally {
       setLoading(false);
@@ -139,33 +141,27 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
             Go<Text style={{ color: colors.accent }}>XL</Text>
           </Text>
 
-          <Text style={styles.title}>Corrida Expressa 🚀</Text>
-          <Text style={styles.subtitle}>
-            Adicione seu cartão e chame sua corrida agora.{'\n'}
-            O cadastro completo você faz depois — leva menos de 1 minuto!
-          </Text>
+          <Text style={styles.title}>{t('express.title')}</Text>
+          <Text style={styles.subtitle}>{t('express.subtitle')}</Text>
 
           {/* Steps indicator (2 passos) */}
           <View style={styles.steps}>
             <View style={[styles.step, styles.stepActive]}>
               <Text style={styles.stepNum}>1</Text>
-              <Text style={styles.stepLabel}>Cartão</Text>
+              <Text style={styles.stepLabel}>{t('express.stepCard')}</Text>
             </View>
             <View style={styles.stepLine} />
             <View style={[styles.step, step === 'done' && styles.stepActive]}>
               <Text style={[styles.stepNum, step !== 'done' && styles.stepNumInactive]}>2</Text>
-              <Text style={[styles.stepLabel, step !== 'done' && styles.stepLabelInactive]}>Corrida</Text>
+              <Text style={[styles.stepLabel, step !== 'done' && styles.stepLabelInactive]}>{t('express.stepRide')}</Text>
             </View>
           </View>
 
           {/* Cartão de destaque */}
           <View style={styles.cardBox}>
             <Text style={styles.cardEmoji}>💳</Text>
-            <Text style={styles.cardTitle}>Pagamento automático e seguro</Text>
-            <Text style={styles.cardText}>
-              A cobrança acontece sozinha quando o motorista aceitar.{'\n'}
-              Seus dados são protegidos pela Stripe.
-            </Text>
+            <Text style={styles.cardTitle}>{t('express.cardTitle')}</Text>
+            <Text style={styles.cardText}>{t('express.cardText')}</Text>
           </View>
 
           <TouchableOpacity
@@ -176,9 +172,9 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
             {loading ? (
               <ActivityIndicator color={colors.primary} />
             ) : step === 'done' ? (
-              <Text style={styles.btnText}>✓ Pronto! Carregando corrida...</Text>
+              <Text style={styles.btnText}>{t('express.btnDone')}</Text>
             ) : (
-              <Text style={styles.btnText}>Adicionar cartão e chamar corrida</Text>
+              <Text style={styles.btnText}>{t('express.btnSubmit')}</Text>
             )}
           </TouchableOpacity>
 
@@ -187,13 +183,10 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
             onPress={() => navigation.navigate('Login')}
             disabled={loading}
           >
-            <Text style={styles.loginLinkText}>Já tenho conta — Entrar</Text>
+            <Text style={styles.loginLinkText}>{t('express.loginLink')}</Text>
           </TouchableOpacity>
 
-          <Text style={styles.legalNote}>
-            Cadastro completo (nome, e-mail e telefone) será solicitado quando você
-            agendar ou pedir a segunda viagem. Dados protegidos com criptografia.
-          </Text>
+          <Text style={styles.legalNote}>{t('express.legalNote')}</Text>
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );

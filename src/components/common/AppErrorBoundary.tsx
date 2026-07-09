@@ -1,6 +1,8 @@
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
+import { getLocales } from 'expo-localization';
 import { reportError } from '../../lib/errorReporting';
+import { translations, type Lang } from '../../i18n/translations';
 
 /**
  * Rede de segurança contra crashes de renderização.
@@ -29,6 +31,71 @@ interface State {
   resetKey: number;
 }
 
+function ErrorFallback({ onRetry }: { onRetry: () => void }) {
+  // Autossuficiente: este fallback vive ACIMA do I18nProvider (ver App.tsx),
+  // então NÃO pode usar useTranslation() — o contexto cairia no default e a
+  // tela de erro mostraria as chaves cruas. Resolve o idioma direto do locale
+  // do aparelho (síncrono, sem Context), caindo para inglês em qualquer falha.
+  let lang: Lang = 'en';
+  try {
+    const code = getLocales()?.[0]?.languageCode?.toLowerCase();
+    if (code === 'pt') lang = 'pt';
+    else if (code === 'es') lang = 'es';
+  } catch {
+    // ignore — mantém inglês
+  }
+  const t = (key: string) => translations[lang]?.[key] ?? translations.en[key] ?? key;
+  return (
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: NAVY,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 32,
+      }}
+    >
+      <Text
+        style={{
+          color: '#FFFFFF',
+          fontSize: 22,
+          fontWeight: '700',
+          textAlign: 'center',
+          marginBottom: 12,
+        }}
+      >
+        {t('errorBoundary.title')}
+      </Text>
+      <Text
+        style={{
+          color: 'rgba(255,255,255,0.7)',
+          fontSize: 15,
+          lineHeight: 22,
+          textAlign: 'center',
+          marginBottom: 28,
+        }}
+      >
+        {t('errorBoundary.message')}
+      </Text>
+      <Pressable
+        onPress={onRetry}
+        accessibilityRole="button"
+        style={({ pressed }) => ({
+          backgroundColor: GOLD,
+          paddingVertical: 14,
+          paddingHorizontal: 40,
+          borderRadius: 12,
+          opacity: pressed ? 0.85 : 1,
+        })}
+      >
+        <Text style={{ color: NAVY, fontSize: 16, fontWeight: '700' }}>
+          {t('errorBoundary.retry')}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export class AppErrorBoundary extends React.Component<Props, State> {
   state: State = { hasError: false, resetKey: 0 };
 
@@ -50,55 +117,7 @@ export class AppErrorBoundary extends React.Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
-      return (
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: NAVY,
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 32,
-          }}
-        >
-          <Text
-            style={{
-              color: '#FFFFFF',
-              fontSize: 22,
-              fontWeight: '700',
-              textAlign: 'center',
-              marginBottom: 12,
-            }}
-          >
-            Algo deu errado
-          </Text>
-          <Text
-            style={{
-              color: 'rgba(255,255,255,0.7)',
-              fontSize: 15,
-              lineHeight: 22,
-              textAlign: 'center',
-              marginBottom: 28,
-            }}
-          >
-            Tivemos um problema inesperado. Toque abaixo para tentar novamente.
-          </Text>
-          <Pressable
-            onPress={this.handleRetry}
-            accessibilityRole="button"
-            style={({ pressed }) => ({
-              backgroundColor: GOLD,
-              paddingVertical: 14,
-              paddingHorizontal: 40,
-              borderRadius: 12,
-              opacity: pressed ? 0.85 : 1,
-            })}
-          >
-            <Text style={{ color: NAVY, fontSize: 16, fontWeight: '700' }}>
-              Tentar novamente
-            </Text>
-          </Pressable>
-        </View>
-      );
+      return <ErrorFallback onRetry={this.handleRetry} />;
     }
 
     return (

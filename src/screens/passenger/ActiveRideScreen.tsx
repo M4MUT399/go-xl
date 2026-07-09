@@ -19,23 +19,25 @@ import { useTripShare } from '../../hooks/useTripShare';
 import { KM_TO_MILES } from '../../lib/format';
 import { CarMarker } from '../../components/common/CarMarker';
 import { rideOrigin, rideDestination } from '../../lib/ride';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'ActiveRide'>;
   route: RouteProp<RootStackParamList, 'ActiveRide'>;
 };
 
-const STATUS_LABELS: Record<RideStatus, string> = {
-  scheduled: 'Aguardando confirmação do motorista',
-  requesting: 'Procurando motorista...',
-  accepted: 'Motorista confirmado!',
-  driver_en_route: 'Motorista a caminho',
-  in_progress: 'Corrida em andamento',
-  completed: 'Corrida concluída!',
-  cancelled: 'Corrida cancelada',
+const STATUS_LABEL_KEYS: Record<RideStatus, string> = {
+  scheduled: 'activeRide.statusScheduled',
+  requesting: 'activeRide.statusRequesting',
+  accepted: 'activeRide.statusAccepted',
+  driver_en_route: 'activeRide.statusDriverEnRoute',
+  in_progress: 'activeRide.statusInProgress',
+  completed: 'activeRide.statusCompleted',
+  cancelled: 'activeRide.statusCancelled',
 };
 
 export function ActiveRideScreen({ navigation, route }: Props) {
+  const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -55,8 +57,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
   const styles = makeStyles(colors);
 
-  useChatAlert(ride.id, profile?.id, isFocused, 'Motorista');
-  const [driverName, setDriverName] = useState('Motorista');
+  useChatAlert(ride.id, profile?.id, isFocused, t('activeRide.driverFallback'));
+  const [driverName, setDriverName] = useState(t('activeRide.driverFallback'));
   const vehicle = useDriverVehicle(ride.driver_id);
 
   const canCancel = ride.status === 'accepted' || ride.status === 'driver_en_route';
@@ -73,14 +75,14 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   async function handleShareTrip() {
     const share = await createShare();
     if (!share) {
-      Alert.alert('Compartilhar viagem', 'Não foi possível gerar o link agora. Tente novamente.');
+      Alert.alert(t('activeRide.shareTripTitle'), t('activeRide.shareLinkFailed'));
       return;
     }
     try {
       // Envio SEMPRE pelo share sheet nativo — a escolha do contato e o envio
       // são ações do próprio passageiro. O app nunca envia sozinho.
       await Share.share({
-        message: `Acompanhe minha viagem Go XL ao vivo: ${share.url}`,
+        message: t('activeRide.shareMessage').replace('{url}', share.url),
         url: share.url,
       });
     } catch {
@@ -90,16 +92,16 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
   function handleStopSharing() {
     Alert.alert(
-      'Parar de compartilhar',
-      'O link deixará de mostrar sua localização. Você pode gerar um novo quando quiser.',
+      t('activeRide.stopSharingTitle'),
+      t('activeRide.stopSharingMessage'),
       [
-        { text: 'Voltar', style: 'cancel' },
+        { text: t('activeRide.back'), style: 'cancel' },
         {
-          text: 'Parar',
+          text: t('activeRide.stop'),
           style: 'destructive',
           onPress: async () => {
             const ok = await revokeShare();
-            if (!ok) Alert.alert('Compartilhar viagem', 'Não foi possível parar agora. Tente novamente.');
+            if (!ok) Alert.alert(t('activeRide.shareTripTitle'), t('activeRide.stopSharingFailed'));
           },
         },
       ],
@@ -118,15 +120,15 @@ export function ActiveRideScreen({ navigation, route }: Props) {
       const share = await createShare(profile.trip_autoshare_contact_id ?? null);
       if (!share) return;
       Alert.alert(
-        'Compartilhar viagem',
-        'Deseja enviar o link de acompanhamento ao vivo para seu contato de confiança?',
+        t('activeRide.shareTripTitle'),
+        t('activeRide.autoShareMessage'),
         [
-          { text: 'Agora não', style: 'cancel' },
+          { text: t('activeRide.notNow'), style: 'cancel' },
           {
-            text: 'Compartilhar',
+            text: t('activeRide.share'),
             onPress: () => {
               Share.share({
-                message: `Acompanhe minha viagem Go XL ao vivo: ${share.url}`,
+                message: t('activeRide.shareMessage').replace('{url}', share.url),
                 url: share.url,
               }).catch(() => {});
             },
@@ -137,10 +139,10 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   }, [profile?.trip_autoshare, profile?.trip_autoshare_contact_id, canShare, createShare]);
 
   function handleCancel() {
-    Alert.alert('Cancelar corrida', 'Tem certeza que deseja cancelar? O motorista será avisado.', [
-      { text: 'Não', style: 'cancel' },
+    Alert.alert(t('activeRide.cancelRideTitle'), t('activeRide.cancelRideMessage'), [
+      { text: t('activeRide.no'), style: 'cancel' },
       {
-        text: 'Sim, cancelar',
+        text: t('activeRide.yesCancel'),
         style: 'destructive',
         onPress: async () => {
           await cancelRide(ride.id);
@@ -203,8 +205,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!driverLoc) return;
     setTracksCar(true);
-    const t = setTimeout(() => setTracksCar(false), 1000);
-    return () => clearTimeout(t);
+    const timeout = setTimeout(() => setTracksCar(false), 1000);
+    return () => clearTimeout(timeout);
   }, [driverLoc?.lat, driverLoc?.lng, driverLoc?.heading]);
 
   useEffect(() => {
@@ -222,8 +224,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             navigation.replace('RateRide', { ride: updated });
           } else if (updated.status === 'cancelled') {
             Alert.alert(
-              'Corrida cancelada',
-              'O motorista cancelou a corrida. O valor cobrado será estornado automaticamente para o seu cartão.',
+              t('activeRide.rideCancelledTitle'),
+              t('activeRide.rideCancelledByDriver'),
             );
             navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
           }
@@ -406,17 +408,17 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           </View>
           <Text style={styles.etaArrival}>
             {etaArrival
-              ? `${ride.status === 'in_progress' ? 'Chegada estimada' : 'Chegada ao embarque'}: ${etaArrival.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+              ? `${ride.status === 'in_progress' ? t('activeRide.estimatedArrival') : t('activeRide.arrivalAtPickup')}: ${etaArrival.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
               : ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress'
-                ? 'Calculando rota...'
-                : STATUS_LABELS[ride.status]}
+                ? t('activeRide.calculatingRoute')
+                : t(STATUS_LABEL_KEYS[ride.status])}
           </Text>
         </View>
 
         {/* ── Endereço (embarque ou destino) ── */}
         <View style={styles.addressCard}>
           <Text style={styles.addressLabel}>
-            {ride.status === 'in_progress' ? 'Destino final' : 'Local de embarque'}
+            {ride.status === 'in_progress' ? t('activeRide.finalDestination') : t('activeRide.pickupLocation')}
           </Text>
           <Text style={styles.addressText} numberOfLines={2}>
             {ride.status === 'in_progress' ? dest.address : origin.address}
@@ -466,20 +468,20 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           >
             <Text style={styles.shareIcon}>📍</Text>
             <Text style={styles.shareBtnText}>
-              {shareActive ? 'Compartilhar link novamente' : 'Compartilhar viagem'}
+              {shareActive ? t('activeRide.shareLinkAgain') : t('activeRide.shareTripTitle')}
             </Text>
           </TouchableOpacity>
         )}
 
         {canShare && shareActive && (
           <TouchableOpacity style={styles.stopShareBtn} onPress={handleStopSharing}>
-            <Text style={styles.stopShareText}>Parar de compartilhar</Text>
+            <Text style={styles.stopShareText}>{t('activeRide.stopSharingTitle')}</Text>
           </TouchableOpacity>
         )}
 
         {canCancel && (
           <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
-            <Text style={styles.cancelBtnText}>Cancelar corrida</Text>
+            <Text style={styles.cancelBtnText}>{t('activeRide.cancelRideTitle')}</Text>
           </TouchableOpacity>
         )}
       </View>

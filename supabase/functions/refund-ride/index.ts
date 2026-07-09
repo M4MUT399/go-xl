@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
     // ── Busca dados da corrida ───────────────────────────────────────────────
     const { data: ride, error: rideErr } = await admin
       .from('rides')
-      .select('stripe_payment_intent_id, paid, passenger_id, driver_id')
+      .select('stripe_payment_intent_id, paid, passenger_id, driver_id, status')
       .eq('id', rideId)
       .single();
 
@@ -61,11 +61,35 @@ Deno.serve(async (req) => {
       paid?: boolean;
       passenger_id?: string;
       driver_id?: string;
+      status?: string;
     };
 
-    // Autorização: só quem participa da corrida pode estornar.
-    if (user.id !== r.passenger_id && user.id !== r.driver_id) {
-      return json({ error: 'Não autorizado a estornar esta corrida.' }, 403);
+    // ── Autorização (política "admin + auto-estorno no cancelamento") ─────────
+    // • ADMIN (profiles.is_admin) pode estornar QUALQUER corrida, em qualquer
+    //   estado — é o endpoint de estorno avulso previsto na política de segurança.
+    // • Um PARTICIPANTE (passageiro ou motorista) só pode estornar a própria
+    //   corrida enquanto ela AINDA NÃO foi concluída — este é o estorno
+    //   automático de cancelamento. Isso fecha o buraco de um participante
+    //   estornar uma corrida já concluída (que seria abuso), sem deixar o
+    //   passageiro cobrado quando o motorista cancela antes de concluir.
+    const { data: callerProfile } = await admin
+      .from('profiles')
+      .select('is_admin')
+      .eq('id', user.id)
+      .single();
+    const isAdmin = (callerProfile as { is_admin?: boolean } | null)?.is_admin === true;
+    const isParticipant = user.id === r.passenger_id || user.id === r.driver_id;
+
+    if (!isAdmin) {
+      if (!isParticipant) {
+        return json({ error: 'Não autorizado a estornar esta corrida.' }, 403);
+      }
+      if (r.status === 'completed') {
+        return json({
+          error: 'Corrida já concluída. Estornos de corridas concluídas são feitos apenas pela administração.',
+          code: 'completed_admin_only',
+        }, 403);
+      }
     }
 
     // Corrida sem cobrança — nada a extornar

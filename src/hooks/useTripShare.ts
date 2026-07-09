@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { supabase, supabaseUrl } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 
 /**
  * useTripShare — cria e revoga o link PÚBLICO de rastreio ao vivo (Tarefa 1).
@@ -27,8 +27,15 @@ export interface CreatedShare {
   url: string;
 }
 
+// Domínio próprio (Universal Link iOS / App Link Android). Abre DIRETO no app
+// quando instalado; senão, a página de fallback em goxl.app/track oferece o
+// download e mantém o link de acompanhamento. NÃO usamos mais o endpoint bruto
+// da Edge Function como URL pública porque o gateway do Supabase força
+// content-type text/plain (a página HTML aparecia como código-fonte).
+const TRACK_BASE_URL = 'https://goxl.app/track';
+
 function urlForToken(token: string): string {
-  return `${supabaseUrl}/functions/v1/track-trip?token=${encodeURIComponent(token)}`;
+  return `${TRACK_BASE_URL}?token=${encodeURIComponent(token)}`;
 }
 
 export function useTripShare(rideId: string | undefined) {

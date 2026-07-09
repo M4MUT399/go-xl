@@ -371,6 +371,33 @@ export async function broadcastRideRevoked(rideId: string, reason: RideRevokeRea
 }
 
 /**
+ * Reabre uma corrida ao pool de motoristas livres.
+ *
+ * Usado quando um aceite é abortado DEPOIS de já termos silenciado os demais
+ * motoristas otimisticamente (ex.: a cobrança do cartão falhou). Um UPDATE que
+ * mantém status='requesting' re-dispara a subscription realtime
+ * (filter status=eq.requesting) nos motoristas livres, fazendo o card de
+ * chamada — e o som — voltarem para quem havia sido silenciado.
+ *
+ * As guardas .eq('status','requesting').is('driver_id', null) garantem que só
+ * reabrimos uma corrida REALMENTE ainda aberta: se outro motorista já a travou
+ * ('accepted'), o UPDATE casa zero linhas e vira no-op — nunca ressuscita uma
+ * corrida já dada a alguém.
+ */
+export async function reofferRide(rideId: string) {
+  try {
+    await supabase
+      .from('rides')
+      .update({ status: 'requesting' as RideStatus })
+      .eq('id', rideId)
+      .eq('status', 'requesting')
+      .is('driver_id', null);
+  } catch (e) {
+    reportError(e, { op: 'reofferRide', rideId });
+  }
+}
+
+/**
  * Avisa DIRETAMENTE o motorista já designado que o passageiro cancelou uma
  * corrida ACEITA — no canal pessoal dele (`driver-notify-${driverId}`), evento
  * `ride_cancelled`. Entrega confiável em foreground sem depender de
@@ -1191,12 +1218,25 @@ export function useDriverRide(driverId: string | undefined) {
     rideId: string,
     driverLocation?: { lat: number; lng: number } | null
   ): Promise<Ride | null | 'payment_error'> => {
-    // 0) Cobra o cartão do passageiro ANTES de aceitar.
-    //    Se o pagamento falhar, o motorista vê o erro e a corrida permanece em 'requesting'.
+    // 0) SILÊNCIO IMEDIATO: no instante do toque em ACEITAR, avisa os demais
+    //    motoristas para PARAR o som e retirar o card AGORA — antes de qualquer
+    //    trabalho lento (a cobrança do cartão pode levar até ~20s). Sem isto, os
+    //    outros continuariam tocando durante toda a cobrança. É otimista: se o
+    //    aceite abortar abaixo (pagamento/corrida já tomada), reofferRide reabre
+    //    a corrida e o som/card voltam para os motoristas livres silenciados.
+    //    setPendingRide(null) do lado receptor é idempotente (não passa pelo
+    //    dedupe), então reasseverar 'taken' mais abaixo é seguro.
+    broadcastRideRevoked(rideId, 'taken', driverId);
+
+    // 1) Cobra o cartão do passageiro ANTES de travar a corrida.
+    //    Se o pagamento falhar, reabrimos a corrida (reofferRide) para os demais.
     const charge = await chargeRide(rideId);
     if (!charge.ok) {
       reportError(charge.error, { op: 'acceptRide.charge', rideId });
       logRideOfferEvent(rideId, driverId, 'failed', { reason: 'payment_error' });
+      // Cobrança falhou → a corrida continua aberta: devolve a chamada (som+card)
+      // aos motoristas livres que silenciamos otimisticamente no passo 0.
+      reofferRide(rideId);
       return 'payment_error';
     }
 
@@ -1223,15 +1263,11 @@ export function useDriverRide(driverId: string | undefined) {
     if (updateError) {
       reportError(updateError, { op: 'acceptRide.update', rideId });
       logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'update_error' });
+      // Erro ao travar a corrida → reabre (guardado: só reabre se ainda estiver
+      // 'requesting' e sem motorista) para o som/card voltarem aos demais.
+      reofferRide(rideId);
       return null;
     }
-
-    // 1b) A corrida agora é DEFINITIVAMENTE deste motorista: o UPDATE atômico
-    //     com .eq('status','requesting') garante um único vencedor. Avisa os
-    //     OUTROS motoristas AGORA para que o overlay de chamada — e o som —
-    //     parem imediatamente. Não espera o SELECT/telemetria abaixo, que
-    //     podem levar vários segundos e deixariam o alerta tocando nos demais.
-    broadcastRideRevoked(rideId, 'taken', driverId);
 
     // 2) SELECT separado para confirmar e obter a corrida atualizada
     let data: unknown = null;
@@ -1303,7 +1339,10 @@ export function useDriverRide(driverId: string | undefined) {
     // Auditoria: aceite confirmado.
     logRideOfferEvent(rideId, driverId, 'accepted');
 
-    // Remove a chamada da fila dos OUTROS motoristas online.
+    // Reasseveração pós-confirmação: o silêncio primário já saiu no passo 0
+    // (otimista). Este segundo 'taken' — agora com a corrida DEFINITIVAMENTE
+    // travada — garante que qualquer motorista cujo card tenha surgido no meio
+    // do caminho também seja limpo. setPendingRide(null) é idempotente.
     broadcastRideRevoked(rideId, 'taken', driverId);
 
     // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback

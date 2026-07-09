@@ -265,8 +265,19 @@ export function AppNavigator() {
    * O lookup no Supabase é feito só depois que a autenticação termina.
    */
   const pendingDriverCode = useRef<string | null>(null);
+  /** Token de rastreio público pendente (deep link goxl.app/track?token=…). */
+  const pendingTrackToken = useRef<string | null>(null);
   /** Indica se a sessão já está pronta (autenticada) — usado pelo listener de URL. */
   const isAuthedRef = useRef(false);
+
+  /** Navega para o rastreio público assim que o container estiver pronto. */
+  function dispatchPendingTrack() {
+    const tk = pendingTrackToken.current;
+    if (!tk) return;
+    if (!navigationRef.isReady()) { setTimeout(dispatchPendingTrack, 200); return; }
+    pendingTrackToken.current = null;
+    navigationRef.navigate('TrackTrip', { token: tk });
+  }
 
   /** Extrai o driver code do URL e armazena; navega imediatamente se já autenticado. */
   function captureDeepLink(url: string) {
@@ -280,6 +291,21 @@ export function AppNavigator() {
           .setSession({ access_token: hash.access_token, refresh_token: hash.refresh_token })
           .then(() => markRecovery());
       }
+      return;
+    }
+
+    // Rastreio público de viagem — universal link (https://goxl.app/track?token=)
+    // ou custom scheme (goxl://track?token=). Funciona SEM login: o contato de
+    // confiança só precisa ter o app instalado.
+    const trackToken = parsed.queryParams?.token as string | undefined;
+    const isTrack =
+      parsed.hostname === 'track' ||
+      parsed.path === 'track' ||
+      parsed.path === '/track' ||
+      (typeof parsed.path === 'string' && parsed.path.replace(/^\//, '') === 'track');
+    if (trackToken && isTrack) {
+      pendingTrackToken.current = trackToken;
+      setTimeout(dispatchPendingTrack, 300);
       return;
     }
 
@@ -356,6 +382,15 @@ export function AppNavigator() {
     }
   }, [loading, session]);
 
+  // Cold start do rastreio público: assim que o check de sessão termina (com ou
+  // SEM login), despacha o token pendente. O contato de confiança não precisa
+  // estar autenticado para acompanhar a viagem.
+  useEffect(() => {
+    if (!loading && pendingTrackToken.current) {
+      setTimeout(dispatchPendingTrack, 400);
+    }
+  }, [loading]);
+
   // Escuta deep links (cold start + warm start)
   useEffect(() => {
     ExpoLinking.getInitialURL().then((url: string | null) => { if (url) captureDeepLink(url); });
@@ -390,6 +425,8 @@ export function AppNavigator() {
               <Stack.Screen name="Register"         component={RegisterScreen} />
               {/* Cadastro Expresso — ativado automaticamente via QR de novo passageiro */}
               <Stack.Screen name="ExpressRegister"  component={ExpressRegisterScreen} />
+              {/* Rastreio público — contato de confiança abre o link SEM login */}
+              <Stack.Screen name="TrackTrip" getComponent={() => require('../screens/TrackTripScreen').TrackTripScreen} />
             </>
           ) : isDriver ? (
             <>
@@ -405,6 +442,7 @@ export function AppNavigator() {
               <Stack.Screen name="Support" getComponent={() => require('../screens/profile/SupportScreen').SupportScreen} />
               <Stack.Screen name="Terms" getComponent={() => require('../screens/profile/TermsScreen').TermsScreen} />
               <Stack.Screen name="Payment" getComponent={() => require('../screens/profile/PaymentScreen').PaymentScreen} />
+              <Stack.Screen name="TrackTrip" getComponent={() => require('../screens/TrackTripScreen').TrackTripScreen} />
             </>
           ) : (
             <>
@@ -419,6 +457,7 @@ export function AppNavigator() {
               <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
               <Stack.Screen name="RateRide" component={RateRideScreen} />
               <Stack.Screen name="ScheduledRides" component={ScheduledRidesScreen} />
+              <Stack.Screen name="TripDetails" getComponent={() => require('../screens/passenger/TripDetailsScreen').TripDetailsScreen} />
               <Stack.Screen name="Chat" getComponent={() => require('../screens/ChatScreen').ChatScreen} />
               <Stack.Screen name="EditProfile" getComponent={() => require('../screens/profile/EditProfileScreen').EditProfileScreen} />
               <Stack.Screen name="NotificationSettings" getComponent={() => require('../screens/profile/NotificationSettingsScreen').NotificationSettingsScreen} />
@@ -426,6 +465,7 @@ export function AppNavigator() {
               <Stack.Screen name="Support" getComponent={() => require('../screens/profile/SupportScreen').SupportScreen} />
               <Stack.Screen name="Terms" getComponent={() => require('../screens/profile/TermsScreen').TermsScreen} />
               <Stack.Screen name="Payment" getComponent={() => require('../screens/profile/PaymentScreen').PaymentScreen} />
+              <Stack.Screen name="TrackTrip" getComponent={() => require('../screens/TrackTripScreen').TrackTripScreen} />
             </>
           )}
         </Stack.Navigator>

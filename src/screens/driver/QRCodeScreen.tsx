@@ -9,6 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme } from '../../hooks/useTheme';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
+import { useTranslation } from '../../i18n';
 import type { RootStackParamList } from '../../types';
 
 type Props = {
@@ -34,6 +35,7 @@ function codeFromId(id: string): string {
 export function QRCodeScreen({ navigation }: Props) {
   const { profile, refreshProfile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [code, setCode] = useState<string | null>(profile?.driver_code ?? null);
   const [saving, setSaving] = useState(false);
 
@@ -75,11 +77,10 @@ export function QRCodeScreen({ navigation }: Props) {
     if (!deepLink || !code) return;
     try {
       await Share.share({
-        message:
-          `Solicite uma corrida Executive XL comigo!\n\n` +
-          `Abra o app Go XL e use o código: ${code}\n\n` +
-          `Ou acesse: ${deepLink}`,
-        title: 'Go XL — Meu QR Code',
+        message: t('qr.shareMessage')
+          .replace('{code}', code)
+          .replace('{deepLink}', deepLink),
+        title: t('qr.shareTitle'),
       });
     } catch {
       // usuário cancelou
@@ -92,7 +93,7 @@ export function QRCodeScreen({ navigation }: Props) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Meu QR Code</Text>
+        <Text style={styles.title}>{t('qr.title')}</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -119,7 +120,7 @@ export function QRCodeScreen({ navigation }: Props) {
           {/* Código legível */}
           {code && (
             <View style={styles.codeBox}>
-              <Text style={styles.codeLabel}>Código</Text>
+              <Text style={styles.codeLabel}>{t('qr.codeLabel')}</Text>
               <Text style={styles.codeValue}>{code}</Text>
             </View>
           )}
@@ -131,45 +132,44 @@ export function QRCodeScreen({ navigation }: Props) {
 
         {/* Instruções */}
         <View style={styles.instructions}>
-          <Text style={styles.instrTitle}>Como funciona</Text>
+          <Text style={styles.instrTitle}>{t('qr.howItWorks')}</Text>
 
           <View style={styles.instrItem}>
             <Text style={styles.instrIcon}>📱</Text>
             <Text style={styles.instrText}>
-              O passageiro escaneia o QR code na porta do seu carro com a câmera do celular.
+              {t('qr.step1')}
             </Text>
           </View>
 
           <View style={styles.instrItem}>
             <Text style={styles.instrIcon}>⬇️</Text>
             <Text style={styles.instrText}>
-              Se não tiver o app, ele é direcionado para baixar o Go XL. Após instalar, a
-              corrida é vinculada automaticamente ao seu veículo.
+              {t('qr.step2')}
             </Text>
           </View>
 
           <View style={styles.instrItem}>
             <Text style={styles.instrIcon}>🔒</Text>
             <Text style={styles.instrText}>
-              A corrida fica travada para você — nenhum outro motorista pode aceitá-la.
+              {t('qr.step3')}
             </Text>
           </View>
 
           <View style={styles.instrItem}>
             <Text style={styles.instrIcon}>✅</Text>
             <Text style={styles.instrText}>
-              Você recebe a notificação normalmente e aceita pela tela principal.
+              {t('qr.step4')}
             </Text>
           </View>
         </View>
 
         {/* Botão compartilhar */}
         <TouchableOpacity style={styles.shareBtn} onPress={handleShare} disabled={!code}>
-          <Text style={styles.shareBtnText}>📤  Compartilhar QR Code</Text>
+          <Text style={styles.shareBtnText}>📤  {t('qr.shareButton')}</Text>
         </TouchableOpacity>
 
         <Text style={styles.note}>
-          Cole adesivo com este QR na janela ou porta do veículo.
+          {t('qr.note')}
         </Text>
       </ScrollView>
     </SafeAreaView>

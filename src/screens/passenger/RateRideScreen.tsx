@@ -15,6 +15,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { tipRide } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
@@ -27,6 +28,7 @@ export function RateRideScreen({ navigation, route }: Props) {
   const { ride } = route.params;
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [rating, setRating]     = useState(5);
   const [comment, setComment]   = useState('');
@@ -83,12 +85,12 @@ export function RateRideScreen({ navigation, route }: Props) {
       if (!result.ok) {
         setLoading(false);
         Alert.alert(
-          'Erro na gorjeta',
-          result.error ?? 'Não foi possível processar a gorjeta. Deseja continuar sem ela?',
+          t('rate.tipErrorTitle'),
+          result.error ?? t('rate.tipErrorMessage'),
           [
-            { text: 'Tentar novamente', onPress: () => setLoading(false) },
+            { text: t('rate.tipErrorRetry'), onPress: () => setLoading(false) },
             {
-              text: 'Continuar sem gorjeta',
+              text: t('rate.tipErrorContinueWithout'),
               onPress: async () => {
                 setLoading(true);
                 await submitRating();
@@ -136,8 +138,8 @@ export function RateRideScreen({ navigation, route }: Props) {
           <Text style={styles.successEmoji}>✓</Text>
         </View>
 
-        <Text style={styles.title}>Chegou!{'\n'}Boa viagem?</Text>
-        <Text style={styles.subtitle}>Avalie sua experiência Executive XL</Text>
+        <Text style={styles.title}>{t('rate.title')}</Text>
+        <Text style={styles.subtitle}>{t('rate.subtitle')}</Text>
 
         {/* ── Stars ── */}
         <View style={styles.stars}>
@@ -149,15 +151,15 @@ export function RateRideScreen({ navigation, route }: Props) {
         </View>
         <View style={styles.ratingLabel}>
           <Text style={styles.ratingLabelText}>
-            {rating === 5 ? 'Excelente!' : rating === 4 ? 'Muito bom' : rating === 3 ? 'Regular' : rating === 2 ? 'Ruim' : 'Péssimo'}
+            {rating === 5 ? t('rate.ratingExcellent') : rating === 4 ? t('rate.ratingVeryGood') : rating === 3 ? t('rate.ratingRegular') : rating === 2 ? t('rate.ratingBad') : t('rate.ratingTerrible')}
           </Text>
         </View>
 
         {/* ── Gorjeta ── */}
         <View style={styles.tipCard}>
           <View style={styles.tipHeader}>
-            <Text style={styles.tipTitle}>💰 Gorjeta para o motorista</Text>
-            <Text style={styles.tipSub}>Opcional · debitado automaticamente do cartão</Text>
+            <Text style={styles.tipTitle}>💰 {t('rate.tipTitle')}</Text>
+            <Text style={styles.tipSub}>{t('rate.tipSub')}</Text>
           </View>
 
           {/* Botão "Sem gorjeta" */}
@@ -167,7 +169,7 @@ export function RateRideScreen({ navigation, route }: Props) {
               onPress={selectNoTip}
             >
               <Text style={[styles.tipBtnText, isPresetActive(0) && styles.tipBtnTextActive]}>
-                Sem gorjeta
+                {t('rate.noTip')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -190,7 +192,7 @@ export function RateRideScreen({ navigation, route }: Props) {
               onPress={selectCustom}
             >
               <Text style={[styles.tipBtnText, isCustom && styles.tipBtnTextActive]}>
-                Outro valor
+                {t('rate.customTip')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -215,7 +217,7 @@ export function RateRideScreen({ navigation, route }: Props) {
           {finalTip >= 0.5 && (
             <View style={styles.tipPreview}>
               <Text style={styles.tipPreviewText}>
-                ✓ Gorjeta de {formatCurrency(finalTip)} será cobrada no seu cartão
+                ✓ {t('rate.tipPreview').replace('{amount}', formatCurrency(finalTip))}
               </Text>
             </View>
           )}
@@ -226,7 +228,7 @@ export function RateRideScreen({ navigation, route }: Props) {
           style={styles.commentInput}
           value={comment}
           onChangeText={setComment}
-          placeholder="Deixe um comentário (opcional)..."
+          placeholder={t('rate.commentPlaceholder')}
           placeholderTextColor={colors.gray[400]}
           multiline
           numberOfLines={3}
@@ -236,28 +238,28 @@ export function RateRideScreen({ navigation, route }: Props) {
         {/* ── Resumo da corrida ── */}
         <View style={styles.tripSummary}>
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Distância</Text>
+            <Text style={styles.summaryLabel}>{t('rate.summaryDistance')}</Text>
             <Text style={styles.summaryValue}>{formatDistance(ride.distance_km)}</Text>
           </View>
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Total da corrida</Text>
+            <Text style={styles.summaryLabel}>{t('rate.summaryTotal')}</Text>
             <Text style={styles.summaryValue}>{formatCurrency(farePrice)}</Text>
           </View>
           {finalTip >= 0.5 && (
             <>
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Gorjeta</Text>
+                <Text style={styles.summaryLabel}>{t('rate.summaryTip')}</Text>
                 <Text style={styles.splitDriver}>{formatCurrency(finalTip)}</Text>
               </View>
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Total com gorjeta</Text>
+                <Text style={styles.summaryLabel}>{t('rate.summaryTotalWithTip')}</Text>
                 <Text style={styles.summaryValue}>{formatCurrency(farePrice + finalTip)}</Text>
               </View>
             </>
           )}
           <View style={[styles.summaryRow, styles.payRow]}>
-            <Text style={styles.summaryLabel}>Pagamento</Text>
-            <Text style={styles.paidText}>✓ Cobrado ao aceitar</Text>
+            <Text style={styles.summaryLabel}>{t('rate.summaryPayment')}</Text>
+            <Text style={styles.paidText}>✓ {t('rate.summaryPaid')}</Text>
           </View>
         </View>
 
@@ -266,16 +268,16 @@ export function RateRideScreen({ navigation, route }: Props) {
           {tipLoading ? (
             <View style={styles.tipLoadingBox}>
               <ActivityIndicator color={colors.accent} />
-              <Text style={styles.tipLoadingText}>Processando gorjeta...</Text>
+              <Text style={styles.tipLoadingText}>{t('rate.processingTip')}</Text>
             </View>
           ) : (
             <Button
-              title="Enviar avaliação"
+              title={t('rate.submit')}
               onPress={handleSubmit}
               loading={loading}
             />
           )}
-          <Button title="Pular" onPress={handleSkip} variant="ghost" />
+          <Button title={t('rate.skip')} onPress={handleSkip} variant="ghost" />
         </View>
       </KeyboardAwareScrollView>
     </SafeAreaView>

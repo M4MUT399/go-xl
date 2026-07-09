@@ -24,6 +24,7 @@ import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
 import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
 import { hasPaymentCard, isProfileComplete } from '../../lib/onboarding';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RequestRide'>;
@@ -31,6 +32,7 @@ type Props = {
 };
 
 export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
+  const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -50,7 +52,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [searching, setSearching] = useState(false);
   // Endereço da localização GPS atual (reverse geocode). É o embarque padrão,
   // mas o passageiro pode sobrepor escolhendo outro ponto (selectedOrigin).
-  const [originAddress, setOriginAddress] = useState('Sua localização atual');
+  const [originAddress, setOriginAddress] = useState(t('requestRide.currentLocation'));
   const [originText, setOriginText] = useState('');
   const [selectedOrigin, setSelectedOrigin] = useState<Location | null>(null);
   const [originResults, setOriginResults] = useState<GeocodeResult[]>([]);
@@ -178,13 +180,13 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
   async function handleRequest() {
     if (!selectedDest) {
-      Alert.alert('Atenção', 'Selecione o destino.');
+      Alert.alert(t('requestRide.attentionTitle'), t('requestRide.selectDestination'));
       return;
     }
     if (!effectiveOrigin) {
       Alert.alert(
-        'Localização não disponível',
-        'Aguardando seu GPS. Tente novamente em alguns segundos, verifique a permissão de localização, ou digite manualmente o local de embarque.',
+        t('requestRide.locationUnavailableTitle'),
+        t('requestRide.locationUnavailableMessage'),
       );
       return;
     }
@@ -213,7 +215,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       navigation.replace('FindingDriver', { ride });
     } else {
       // Pega o erro do log para debug — remove em produção
-      Alert.alert('Erro ao solicitar', 'Verifique o terminal (Metro) para ver o erro detalhado.\n\npassengerId: ' + (profile?.id ?? 'NULL'));
+      Alert.alert(t('requestRide.requestErrorTitle'), t('requestRide.requestErrorMessage').replace('{passengerId}', profile?.id ?? 'NULL'));
     }
   }
 
@@ -244,8 +246,8 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
   async function confirmSchedule() {
     if (!selectedDest || !effectiveOrigin) return;
-    if (scheduledDate.getTime() < Date.now() + 5 * 60 * 1000) {
-      Alert.alert('Atenção', 'Escolha um horário pelo menos 5 minutos no futuro.');
+    if (scheduledDate.getTime() < Date.now() + 30 * 60 * 1000) {
+      Alert.alert(t('requestRide.attentionTitle'), t('requestRide.scheduleMinAdvance'));
       return;
     }
     // Agendar exige cartão E cadastro completo — inclusive em conta expressa
@@ -273,12 +275,12 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     setShowPicker(false);
     if (ride) {
       Alert.alert(
-        'Pedido enviado!',
-        `Seu agendamento para ${scheduledDate.toLocaleString('en-US', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} foi registrado.\n\nVocê receberá uma notificação assim que um motorista confirmar.`,
-        [{ text: 'Ver agendamentos', onPress: () => navigation.replace('ScheduledRides') }]
+        t('requestRide.scheduleSuccessTitle'),
+        t('requestRide.scheduleSuccessMessage').replace('{datetime}', scheduledDate.toLocaleString('en-US', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })),
+        [{ text: t('requestRide.viewScheduled'), onPress: () => navigation.replace('ScheduledRides') }]
       );
     } else {
-      Alert.alert('Erro', 'Não foi possível agendar. Tente novamente.');
+      Alert.alert(t('requestRide.errorTitle'), t('requestRide.scheduleErrorMessage'));
     }
   }
 
@@ -292,7 +294,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
             <Text style={styles.backText}>←</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Para onde?</Text>
+          <Text style={styles.title}>{t('requestRide.title')}</Text>
         </View>
 
         {/* Banner: motorista pré-selecionado via QR code */}
@@ -300,11 +302,11 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
           <View style={styles.lockedBanner}>
             <Text style={styles.lockedIcon}>🔒</Text>
             <View style={styles.lockedInfo}>
-              <Text style={styles.lockedLabel}>Motorista via QR Code</Text>
+              <Text style={styles.lockedLabel}>{t('requestRide.driverViaQr')}</Text>
               <Text style={styles.lockedName}>{lockedDriverName ?? 'Executive XL'}</Text>
             </View>
             <View style={styles.lockedBadge}>
-              <Text style={styles.lockedBadgeText}>Reservado</Text>
+              <Text style={styles.lockedBadgeText}>{t('requestRide.reserved')}</Text>
             </View>
           </View>
         )}
@@ -360,7 +362,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   value={originText}
                   onChangeText={(t) => { setOriginText(t); setSelectedOrigin(null); }}
                   onFocus={() => setActiveField('origin')}
-                  placeholder={originAddress || 'Sua localização atual'}
+                  placeholder={originAddress || t('requestRide.currentLocation')}
                   placeholderTextColor={colors.gray[400]}
                   numberOfLines={1}
                 />
@@ -378,7 +380,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 value={destinationText}
                 onChangeText={(t) => { setDestinationText(t); setSelectedDest(null); }}
                 onFocus={() => setActiveField('destination')}
-                placeholder="Digite o destino..."
+                placeholder={t('requestRide.destinationPlaceholder')}
                 placeholderTextColor={colors.gray[400]}
                 autoFocus
               />
@@ -396,7 +398,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   <Text style={styles.categoryName}>Executive XL</Text>
                   {distanceKm ? (
                     <Text style={styles.categoryDesc}>
-                      {formatDistance(distanceKm)}{estimatedMin ? ` • ${estimatedMin} min` : ''}
+                      {formatDistance(distanceKm)}{estimatedMin ? ` • ${estimatedMin} ${t('requestRide.minutesUnit')}` : ''}
                     </Text>
                   ) : (
                     <ActivityIndicator size="small" color={colors.accent} style={{ alignSelf: 'flex-start', marginTop: 2 }} />
@@ -405,7 +407,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 {displayTotal ? (
                   <Text style={styles.price}>
                     {formatCurrency(displayTotal)}
-                    {!estimatedPrice && <Text style={styles.priceMin}> mín.</Text>}
+                    {!estimatedPrice && <Text style={styles.priceMin}> {t('requestRide.priceMin')}</Text>}
                   </Text>
                 ) : (
                   <ActivityIndicator size="small" color={colors.accent} />
@@ -414,14 +416,14 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
               {tollAmount > 0 && displayPrice != null && (
                 <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownLabel}>Pedágio incluído</Text>
+                  <Text style={styles.breakdownLabel}>{t('requestRide.tollIncluded')}</Text>
                   <Text style={styles.breakdownValue}>{formatCurrency(tollAmount)}</Text>
                 </View>
               )}
 
               {venueFee > 0 && displayPrice != null && (
                 <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownLabel}>Taxa de aeroporto/porto</Text>
+                  <Text style={styles.breakdownLabel}>{t('requestRide.airportPortFee')}</Text>
                   <Text style={styles.breakdownValue}>{formatCurrency(venueFee)}</Text>
                 </View>
               )}
@@ -436,7 +438,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
               <View style={styles.actionRow}>
                 <TouchableOpacity style={styles.scheduleBtnInline} onPress={openScheduler}>
                   <Text style={styles.scheduleBtnInlineText}>🗓️</Text>
-                  <Text style={styles.scheduleBtnInlineLabel}>Agendar</Text>
+                  <Text style={styles.scheduleBtnInlineLabel}>{t('requestRide.schedule')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.requestBtnInline, (loading || !displayPrice) && { opacity: 0.6 }]}
@@ -445,7 +447,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 >
                   {loading
                     ? <ActivityIndicator color={colors.primary} size="small" />
-                    : <Text style={styles.requestBtnText}>Solicitar agora</Text>
+                    : <Text style={styles.requestBtnText}>{t('requestRide.requestNow')}</Text>
                   }
                 </TouchableOpacity>
               </View>
@@ -462,7 +464,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   >
                     <Text style={styles.suggestionIcon}>📍</Text>
                     <View style={styles.suggestionTextWrap}>
-                      <Text style={styles.suggestionText}>Usar minha localização atual</Text>
+                      <Text style={styles.suggestionText}>{t('requestRide.useMyLocation')}</Text>
                       {originAddress ? (
                         <Text style={styles.suggestionSub} numberOfLines={1}>{originAddress}</Text>
                       ) : null}
@@ -472,7 +474,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 {originSearching && (
                   <View style={styles.searchingRow}>
                     <ActivityIndicator color={colors.accent} size="small" />
-                    <Text style={styles.searchingText}>Buscando endereços...</Text>
+                    <Text style={styles.searchingText}>{t('requestRide.searchingAddresses')}</Text>
                   </View>
                 )}
                 {!selectedOrigin && !originSearching && originResults.map((d, i) => (
@@ -492,7 +494,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   </TouchableOpacity>
                 ))}
                 {!selectedOrigin && !originSearching && debouncedOriginQuery.trim().length >= 3 && originResults.length === 0 && (
-                  <Text style={styles.noResults}>Nenhum endereço encontrado</Text>
+                  <Text style={styles.noResults}>{t('requestRide.noAddressFound')}</Text>
                 )}
               </>
             ) : (
@@ -500,7 +502,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 {searching && (
                   <View style={styles.searchingRow}>
                     <ActivityIndicator color={colors.accent} size="small" />
-                    <Text style={styles.searchingText}>Buscando endereços...</Text>
+                    <Text style={styles.searchingText}>{t('requestRide.searchingAddresses')}</Text>
                   </View>
                 )}
                 {!selectedDest && !searching && results.map((d, i) => (
@@ -520,10 +522,10 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                   </TouchableOpacity>
                 ))}
                 {!selectedDest && !searching && debouncedQuery.trim().length >= 3 && results.length === 0 && (
-                  <Text style={styles.noResults}>Nenhum endereço encontrado</Text>
+                  <Text style={styles.noResults}>{t('requestRide.noAddressFound')}</Text>
                 )}
                 {!selectedDest && !searching && destinationText.trim().length < 3 && (
-                  <Text style={styles.hint}>Digite ao menos 3 letras para buscar o destino</Text>
+                  <Text style={styles.hint}>{t('requestRide.typeAtLeast3')}</Text>
                 )}
               </>
             )}
@@ -533,8 +535,8 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
         <Modal visible={showPicker} transparent animationType="slide" onRequestClose={() => setShowPicker(false)}>
           <View style={styles.modalOverlay}>
             <View style={[styles.modalSheet, Platform.OS === 'android' && { paddingBottom: 36 + insets.bottom }]}>
-              <Text style={styles.modalTitle}>Agendar corrida</Text>
-              <Text style={styles.modalSub}>Escolha data e hora</Text>
+              <Text style={styles.modalTitle}>{t('requestRide.scheduleModalTitle')}</Text>
+              <Text style={styles.modalSub}>{t('requestRide.scheduleModalSub')}</Text>
 
               {Platform.OS === 'ios' ? (
                 <View style={styles.pickerWrap}>
@@ -560,7 +562,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                         hour: '2-digit', minute: '2-digit',
                       })}
                     </Text>
-                    <Text style={styles.androidDateHint}>Toque para alterar data e hora</Text>
+                    <Text style={styles.androidDateHint}>{t('requestRide.tapToChangeDateTime')}</Text>
                   </TouchableOpacity>
                   {androidPickerMode && (
                     <DateTimePicker
@@ -576,9 +578,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 </>
               )}
 
-              <Button title="Confirmar agendamento" onPress={confirmSchedule} loading={loading} />
+              <Button title={t('requestRide.confirmSchedule')} onPress={confirmSchedule} loading={loading} />
               <TouchableOpacity style={styles.modalCancel} onPress={() => setShowPicker(false)}>
-                <Text style={styles.modalCancelText}>Cancelar</Text>
+                <Text style={styles.modalCancelText}>{t('requestRide.cancel')}</Text>
               </TouchableOpacity>
             </View>
           </View>

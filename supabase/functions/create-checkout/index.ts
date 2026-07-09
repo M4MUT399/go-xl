@@ -2,10 +2,14 @@
 // Deploy:  npx supabase functions deploy create-checkout
 // Segredo: npx supabase secrets set STRIPE_SECRET_KEY=sk_test_...
 import Stripe from 'npm:stripe@17';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
 });
+
+const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
+const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -48,7 +52,33 @@ Deno.serve(async (req) => {
 
   try {
     const { amount, description, rideId } = await req.json();
-    const cents = Math.round(Number(amount) * 100);
+
+    // ── Valor AUTORITATIVO vem do servidor, nunca do cliente ──────────────────
+    // Se a cobrança está vinculada a uma corrida (rideId), o valor é lido de
+    // `rides.price` com a service-role — assim o passageiro não consegue
+    // subfaturar a própria corrida mandando um `amount` menor no body. O `amount`
+    // do cliente só é aceito no caminho genérico (sem rideId), que não liquida
+    // corrida real.
+    let cents: number;
+    if (rideId) {
+      const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: ride } = await admin
+        .from('rides')
+        .select('price')
+        .eq('id', rideId)
+        .single();
+      const price = (ride as { price?: number } | null)?.price;
+      if (price == null) {
+        return new Response(JSON.stringify({ error: 'Corrida não encontrada' }), {
+          status: 404,
+          headers: { ...CORS, 'Content-Type': 'application/json' },
+        });
+      }
+      cents = Math.round(Number(price) * 100);
+    } else {
+      cents = Math.round(Number(amount) * 100);
+    }
+
     if (!cents || cents < 50) {
       return new Response(JSON.stringify({ error: 'Valor inválido' }), {
         status: 400,

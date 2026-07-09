@@ -15,6 +15,7 @@ import { usePassengerRide } from '../../hooks/useRide';
 import { formatCurrency } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { supabase } from '../../lib/supabase';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'FindingDriver'>;
@@ -27,6 +28,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
   const { colors } = useTheme();
   const { cancelRide } = usePassengerRide(profile?.id);
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
 
   const styles = makeStyles(colors);
@@ -71,13 +73,13 @@ export function FindingDriverScreen({ navigation, route }: Props) {
       // tempo estimado até o embarque (calculado pelo motorista no momento do aceite).
       const price = ride.price ? formatCurrency(ride.price) : '';
       const etaPhrase = ride.driver_eta_min
-        ? ` Chegando em ${ride.driver_eta_min} min.`
-        : ' Seu motorista está a caminho!';
+        ? ' ' + t('finding.etaArriving').replace('{min}', String(ride.driver_eta_min))
+        : ' ' + t('finding.etaOnTheWay');
       Alert.alert(
-        '💳 Cobrança realizada!',
+        t('finding.chargeTitle'),
         price
-          ? `${price} debitado do seu cartão.${etaPhrase}`
-          : `Pagamento processado.${etaPhrase}`,
+          ? `${t('finding.chargeDebited').replace('{price}', price)}${etaPhrase}`
+          : `${t('finding.chargeProcessed')}${etaPhrase}`,
         [{
           text: 'OK',
           onPress: () => {
@@ -100,7 +102,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
             goActive(updated);
           } else if (updated.status === 'cancelled') {
             allowLeaveRef.current = true;
-            Alert.alert('Corrida cancelada', 'Nenhum motorista disponível no momento.');
+            Alert.alert(t('finding.rideCancelledTitle'), t('finding.noDriverAvailable'));
             navigation.goBack();
           }
         }
@@ -132,7 +134,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
       } else if (updated.status === 'cancelled') {
         allowLeaveRef.current = true;
         clearInterval(interval);
-        Alert.alert('Corrida cancelada', 'Nenhum motorista disponível no momento.');
+        Alert.alert(t('finding.rideCancelledTitle'), t('finding.noDriverAvailable'));
         navigation.goBack();
       }
     }, 4000);
@@ -156,12 +158,12 @@ export function FindingDriverScreen({ navigation, route }: Props) {
 
       e.preventDefault();
       Alert.alert(
-        'Cancelar corrida',
-        'Se você sair agora, sua busca por motorista será cancelada. Tem certeza?',
+        t('finding.cancelRideTitle'),
+        t('finding.cancelRideMessage'),
         [
-          { text: 'Continuar buscando', style: 'cancel' },
+          { text: t('finding.keepSearching'), style: 'cancel' },
           {
-            text: 'Sim, cancelar',
+            text: t('finding.yesCancel'),
             style: 'destructive',
             onPress: async () => {
               await cancelRide(initialRide.id);
@@ -200,14 +202,14 @@ export function FindingDriverScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        <Text style={styles.title}>Procurando{'\n'}seu motorista</Text>
-        <Text style={styles.subtitle}>Aguarde, estamos encontrando{'\n'}o Executive XL mais próximo</Text>
+        <Text style={styles.title}>{t('finding.title')}</Text>
+        <Text style={styles.subtitle}>{t('finding.subtitle')}</Text>
 
         <View style={styles.timer}>
           <Text style={styles.timerText}>
             {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
           </Text>
-          <Text style={styles.timerLabel}>em busca</Text>
+          <Text style={styles.timerLabel}>{t('finding.searching')}</Text>
         </View>
 
         <View style={styles.tripInfo}>
@@ -221,14 +223,14 @@ export function FindingDriverScreen({ navigation, route }: Props) {
             <Text style={styles.infoText} numberOfLines={1}>{rideDestination(initialRide).address}</Text>
           </View>
           <View style={styles.priceRow}>
-            <Text style={styles.priceLabel}>Valor estimado</Text>
+            <Text style={styles.priceLabel}>{t('finding.estimatedPrice')}</Text>
             <Text style={styles.price}>{formatCurrency(initialRide.price)}</Text>
           </View>
         </View>
       </View>
 
       <View style={[styles.footer, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
-        <Button title="Cancelar corrida" onPress={handleCancel} variant="outline" />
+        <Button title={t('finding.cancelRideTitle')} onPress={handleCancel} variant="outline" />
       </View>
     </SafeAreaView>
   );

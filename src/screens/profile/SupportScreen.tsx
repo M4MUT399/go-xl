@@ -3,64 +3,45 @@ import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Lin
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Support'> };
 
 const SUPPORT_EMAIL = 'support@goxl.app';
-const SUPPORT_PHONE = '+1 (407) 000-0000';
 
-const FAQ = [
-  {
-    q: 'Como solicito uma corrida?',
-    a: 'Na tela inicial, toque em "Para onde você vai?", digite o destino, confirme o preço estimado e toque em solicitar.',
-  },
-  {
-    q: 'Como funciona o pagamento?',
-    a: 'Os valores são exibidos em dólar (US$). O pagamento em cartão estará disponível em breve.',
-  },
-  {
-    q: 'Sou motorista. Como recebo corridas?',
-    a: 'Cadastre seu veículo no Perfil, ative o modo Online na tela inicial e aguarde as solicitações.',
-  },
-];
+// Chaves de tradução das 3 perguntas frequentes (pergunta + resposta).
+const FAQ_KEYS = ['1', '2', '3'];
 
 export function SupportScreen({ navigation }: Props) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = makeStyles(colors);
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Voltar</Text>
+          <Text style={styles.backText}>← {t('common.back')}</Text>
         </TouchableOpacity>
 
-        <Text style={styles.title}>Ajuda e suporte</Text>
-        <Text style={styles.subtitle}>Estamos aqui para ajudar</Text>
+        <Text style={styles.title}>{t('support.title')}</Text>
+        <Text style={styles.subtitle}>{t('support.subtitle')}</Text>
 
         <View style={styles.card}>
           <TouchableOpacity style={styles.contactRow} onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}`)}>
             <Text style={styles.contactIcon}>📧</Text>
             <View style={styles.contactText}>
-              <Text style={styles.contactLabel}>E-mail</Text>
+              <Text style={styles.contactLabel}>{t('support.emailLabel')}</Text>
               <Text style={styles.contactValue}>{SUPPORT_EMAIL}</Text>
-            </View>
-          </TouchableOpacity>
-          <View style={styles.divider} />
-          <TouchableOpacity style={styles.contactRow} onPress={() => Linking.openURL(`tel:${SUPPORT_PHONE.replace(/[^+\d]/g, '')}`)}>
-            <Text style={styles.contactIcon}>📞</Text>
-            <View style={styles.contactText}>
-              <Text style={styles.contactLabel}>Telefone</Text>
-              <Text style={styles.contactValue}>{SUPPORT_PHONE}</Text>
             </View>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionTitle}>Perguntas frequentes</Text>
+        <Text style={styles.sectionTitle}>{t('support.faqTitle')}</Text>
         <View style={styles.card}>
-          {FAQ.map((item, i) => (
-            <View key={i} style={[styles.faqItem, i < FAQ.length - 1 && styles.faqBorder]}>
-              <Text style={styles.faqQ}>{item.q}</Text>
-              <Text style={styles.faqA}>{item.a}</Text>
+          {FAQ_KEYS.map((k, i) => (
+            <View key={k} style={[styles.faqItem, i < FAQ_KEYS.length - 1 && styles.faqBorder]}>
+              <Text style={styles.faqQ}>{t(`support.q${k}`)}</Text>
+              <Text style={styles.faqA}>{t(`support.a${k}`)}</Text>
             </View>
           ))}
         </View>

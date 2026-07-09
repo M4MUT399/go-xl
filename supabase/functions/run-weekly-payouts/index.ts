@@ -68,7 +68,23 @@ function isServiceRole(token: string): boolean {
   }
 }
 
-interface EligibleRide { id: string; driver_id: string; driver_amount: number }
+interface EligibleRide { id: string; driver_id: string; driver_amount: number; stripe_payment_intent_id?: string | null }
+
+/**
+ * PaymentIntent → id da COBRANÇA (charge) que a lastreia. Necessário para
+ * `source_transaction`: o transfer é sacado DAQUELA cobrança (mesmo que ainda
+ * "pending") em vez de exigir saldo disponível na plataforma.
+ */
+async function resolveChargeId(pi?: string | null): Promise<string | null> {
+  if (!pi) return null;
+  try {
+    const intent = await stripe.paymentIntents.retrieve(pi);
+    const lc = intent.latest_charge as string | { id?: string } | null | undefined;
+    return typeof lc === 'string' ? lc : (lc?.id ?? null);
+  } catch {
+    return null;
+  }
+}
 interface DriverResult {
   driver_id: string;
   status: 'paid' | 'skipped' | 'failed';
@@ -116,40 +132,66 @@ async function payoutDriver(
 
   await admin.from('rides').update({ payout_id: payoutId }).in('id', rides.map((r) => r.id));
 
-  // 2) Transfer real para a conta conectada do motorista.
-  try {
-    const transfer = await stripe.transfers.create({
-      amount: amountCents,
-      currency: 'usd',
-      destination: accountId,
-      metadata: {
-        payout_id: payoutId,
-        driver_id: driverId,
-        rides_count: String(rides.length),
-        source: 'weekly_cron',
-      },
-    }, { idempotencyKey: `payout_${payoutId}` });
+  // 2) Transfer real: UM por corrida, amarrado à cobrança de origem via
+  //    `source_transaction` quando disponível — remove a exigência de saldo
+  //    disponível na plataforma (causa do "Insufficient funds" em modo teste).
+  //    Corridas cujo transfer falha voltam a payout_id = null para nova tentativa.
+  let transferred = 0;
+  let paidTotal = 0;
+  let firstTransferId: string | undefined;
+  let lastReason: string | undefined;
+  const failedIds: string[] = [];
 
-    await admin.from('payouts').update({
-      status: 'completed',
-      processed_at: new Date().toISOString(),
-      stripe_transfer_id: transfer.id,
-    }).eq('id', payoutId);
-
-    return {
-      driver_id: driverId,
-      status: 'paid',
-      amount: total,
-      rides_count: rides.length,
-      transfer_id: transfer.id,
-    };
-  } catch (transferErr) {
-    // Falha ao mover dinheiro — desfaz a reserva para nova tentativa futura.
-    const reason = String(transferErr);
-    await admin.from('payouts').update({ status: 'failed', failure_reason: reason }).eq('id', payoutId);
-    await admin.from('rides').update({ payout_id: null }).eq('payout_id', payoutId);
-    return { driver_id: driverId, status: 'failed', reason };
+  for (const ride of rides) {
+    const cents = Math.round(Number(ride.driver_amount) * 100);
+    if (cents <= 0) { failedIds.push(ride.id); continue; }
+    const chargeId = await resolveChargeId(ride.stripe_payment_intent_id);
+    try {
+      const params: Stripe.TransferCreateParams = {
+        amount: cents,
+        currency: 'usd',
+        destination: accountId,
+        metadata: { payout_id: payoutId, driver_id: driverId, ride_id: ride.id, source: 'weekly_cron' },
+      };
+      if (chargeId) params.source_transaction = chargeId;
+      const transfer = await stripe.transfers.create(params, {
+        idempotencyKey: `payout_${payoutId}_${ride.id}`,
+      });
+      transferred += 1;
+      paidTotal = Math.round((paidTotal + Number(ride.driver_amount)) * 100) / 100;
+      if (!firstTransferId) firstTransferId = transfer.id;
+    } catch (e) {
+      lastReason = String(e);
+      failedIds.push(ride.id);
+    }
   }
+
+  if (failedIds.length) {
+    await admin.from('rides').update({ payout_id: null }).in('id', failedIds);
+  }
+
+  if (transferred === 0) {
+    await admin.from('payouts')
+      .update({ status: 'failed', failure_reason: lastReason ?? 'transfer_failed' })
+      .eq('id', payoutId);
+    return { driver_id: driverId, status: 'failed', reason: lastReason ?? 'transfer_failed' };
+  }
+
+  await admin.from('payouts').update({
+    status: 'completed',
+    processed_at: new Date().toISOString(),
+    stripe_transfer_id: firstTransferId,
+    amount: paidTotal,
+    rides_count: transferred,
+  }).eq('id', payoutId);
+
+  return {
+    driver_id: driverId,
+    status: 'paid',
+    amount: paidTotal,
+    rides_count: transferred,
+    transfer_id: firstTransferId,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -176,7 +218,7 @@ Deno.serve(async (req) => {
     // ── Corridas elegíveis de TODOS os motoristas ──────────────────────────────
     const { data: eligible } = await admin
       .from('rides')
-      .select('id, driver_id, driver_amount')
+      .select('id, driver_id, driver_amount, stripe_payment_intent_id')
       .eq('paid', true)
       .is('payout_id', null)
       .not('driver_amount', 'is', null)

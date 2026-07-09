@@ -5,6 +5,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 import { useAuth } from '../../hooks/useAuth';
 import { useTrustedContacts } from '../../hooks/useTrustedContacts';
 import { supabase } from '../../lib/supabase';
@@ -24,6 +25,7 @@ type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Truste
  */
 export function TrustedContactsScreen({ navigation }: Props) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { profile, patchProfile } = useAuth();
   const { contacts, loading, addContact, removeContact } = useTrustedContacts(profile?.id);
 
@@ -38,7 +40,7 @@ export function TrustedContactsScreen({ navigation }: Props) {
 
   async function handleAdd() {
     if (!name.trim()) {
-      Alert.alert('Contato de confiança', 'Informe ao menos o nome do contato.');
+      Alert.alert(t('trustedContacts.alertTitle'), t('trustedContacts.needName'));
       return;
     }
     setSaving(true);
@@ -48,15 +50,18 @@ export function TrustedContactsScreen({ navigation }: Props) {
       setName('');
       setLabel('');
     } else {
-      Alert.alert('Contato de confiança', 'Não foi possível salvar o contato. Tente novamente.');
+      Alert.alert(t('trustedContacts.alertTitle'), t('trustedContacts.saveError'));
     }
   }
 
   function handleRemove(id: string, contactName: string) {
-    Alert.alert('Remover contato', `Remover "${contactName}" da lista?`, [
-      { text: 'Cancelar', style: 'cancel' },
+    Alert.alert(
+      t('trustedContacts.removeTitle'),
+      t('trustedContacts.removeConfirm').replace('{name}', contactName),
+      [
+      { text: t('common.cancel'), style: 'cancel' },
       {
-        text: 'Remover',
+        text: t('trustedContacts.remove'),
         style: 'destructive',
         onPress: async () => {
           const ok = await removeContact(id);
@@ -75,7 +80,7 @@ export function TrustedContactsScreen({ navigation }: Props) {
     if (!profile?.id) return;
     // Ligar sem nenhum contato cadastrado não faz sentido — orienta a cadastrar.
     if (on && contacts.length === 0) {
-      Alert.alert('Compartilhamento automático', 'Cadastre um contato de confiança antes de ativar.');
+      Alert.alert(t('trustedContacts.autoTitle'), t('trustedContacts.autoNeedContact'));
       return;
     }
     // Ao ligar sem contato escolhido, assume o primeiro da lista por conveniência.
@@ -97,23 +102,18 @@ export function TrustedContactsScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Voltar</Text>
+          <Text style={styles.backText}>← {t('common.back')}</Text>
         </TouchableOpacity>
 
-        <Text style={styles.title}>Contatos de confiança</Text>
-        <Text style={styles.subtitle}>
-          Pessoas para quem você costuma enviar o link de acompanhamento da viagem ao vivo.
-        </Text>
+        <Text style={styles.title}>{t('trustedContacts.title')}</Text>
+        <Text style={styles.subtitle}>{t('trustedContacts.subtitle')}</Text>
 
         {/* ── Auto-compartilhar ─────────────────────────────────── */}
         <View style={styles.card}>
           <View style={styles.row}>
             <View style={styles.rowText}>
-              <Text style={styles.rowTitle}>Compartilhamento automático</Text>
-              <Text style={styles.rowDesc}>
-                Ao iniciar a corrida, oferecemos abrir o envio para o contato escolhido.
-                O link só é enviado quando você confirma.
-              </Text>
+              <Text style={styles.rowTitle}>{t('trustedContacts.autoTitle')}</Text>
+              <Text style={styles.rowDesc}>{t('trustedContacts.autoDesc')}</Text>
             </View>
             <Switch
               value={autoshare}
@@ -125,7 +125,7 @@ export function TrustedContactsScreen({ navigation }: Props) {
 
           {autoshare && contacts.length > 0 && (
             <View style={styles.chooseBlock}>
-              <Text style={styles.chooseLabel}>Enviar para</Text>
+              <Text style={styles.chooseLabel}>{t('trustedContacts.sendTo')}</Text>
               {contacts.map((c) => {
                 const selected = autoContactId === c.id;
                 return (
@@ -146,12 +146,12 @@ export function TrustedContactsScreen({ navigation }: Props) {
         </View>
 
         {/* ── Lista de contatos ─────────────────────────────────── */}
-        <Text style={styles.sectionLabel}>Seus contatos</Text>
+        <Text style={styles.sectionLabel}>{t('trustedContacts.yourContacts')}</Text>
         <View style={styles.card}>
           {loading ? (
-            <Text style={styles.empty}>Carregando…</Text>
+            <Text style={styles.empty}>{t('trustedContacts.loading')}</Text>
           ) : contacts.length === 0 ? (
-            <Text style={styles.empty}>Nenhum contato cadastrado ainda.</Text>
+            <Text style={styles.empty}>{t('trustedContacts.empty')}</Text>
           ) : (
             contacts.map((c, i) => (
               <View key={c.id} style={[styles.row, i < contacts.length - 1 && styles.rowBorder]}>
@@ -160,7 +160,7 @@ export function TrustedContactsScreen({ navigation }: Props) {
                   {!!c.contact && <Text style={styles.rowDesc}>{c.contact}</Text>}
                 </View>
                 <TouchableOpacity onPress={() => handleRemove(c.id, c.name)}>
-                  <Text style={styles.removeText}>Remover</Text>
+                  <Text style={styles.removeText}>{t('trustedContacts.remove')}</Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -168,31 +168,28 @@ export function TrustedContactsScreen({ navigation }: Props) {
         </View>
 
         {/* ── Adicionar ─────────────────────────────────────────── */}
-        <Text style={styles.sectionLabel}>Adicionar contato</Text>
+        <Text style={styles.sectionLabel}>{t('trustedContacts.addSection')}</Text>
         <View style={styles.card}>
           <View style={styles.formPad}>
             <Input
-              label="Nome"
-              placeholder="Ex.: Maria (esposa)"
+              label={t('trustedContacts.nameLabel')}
+              placeholder={t('trustedContacts.namePh')}
               value={name}
               onChangeText={setName}
               autoCapitalize="words"
             />
             <Input
-              label="Telefone ou e-mail (opcional)"
-              placeholder="Só para você reconhecer na lista"
+              label={t('trustedContacts.labelLabel')}
+              placeholder={t('trustedContacts.labelPh')}
               value={label}
               onChangeText={setLabel}
               autoCapitalize="none"
             />
-            <Button title="Adicionar contato" onPress={handleAdd} loading={saving} />
+            <Button title={t('trustedContacts.addBtn')} onPress={handleAdd} loading={saving} />
           </View>
         </View>
 
-        <Text style={styles.note}>
-          O rótulo de telefone/e-mail serve apenas para você reconhecer o contato. O envio do
-          link é sempre feito por você, pelo compartilhamento nativo do celular.
-        </Text>
+        <Text style={styles.note}>{t('trustedContacts.note')}</Text>
       </ScrollView>
     </SafeAreaView>
   );

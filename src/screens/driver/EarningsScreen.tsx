@@ -11,14 +11,15 @@ import { useWaybillConfig } from '../../hooks/useWaybillConfig';
 import { generateAndShareWaybill } from '../../lib/waybillExport';
 import { formatCurrency, formatDistance, kmToMiles } from '../../lib/format';
 import { DRIVER_SHARE } from '../../lib/split';
+import { useTranslation } from '../../i18n';
 
 type Period = 'today' | 'week' | 'month' | 'all';
 
-const PERIODS: { key: Period; label: string }[] = [
-  { key: 'today', label: 'Hoje' },
-  { key: 'week', label: '7 dias' },
-  { key: 'month', label: '30 dias' },
-  { key: 'all', label: 'Tudo' },
+const PERIODS: { key: Period; labelKey: string }[] = [
+  { key: 'today', labelKey: 'earnings.periodToday' },
+  { key: 'week', labelKey: 'earnings.periodWeek' },
+  { key: 'month', labelKey: 'earnings.periodMonth' },
+  { key: 'all', labelKey: 'earnings.periodAll' },
 ];
 
 function startOf(period: Period): number {
@@ -37,6 +38,7 @@ function startOf(period: Period): number {
 }
 
 export function EarningsScreen() {
+  const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -56,7 +58,7 @@ export function EarningsScreen() {
   async function handleOnboard() {
     const result = await startOnboarding();
     if (!result.ok) {
-      Alert.alert('Erro', result.error ?? 'Não foi possível abrir o cadastro de recebimento.');
+      Alert.alert(t('earnings.errorTitle'), result.error ?? t('earnings.onboardError'));
     }
   }
 
@@ -87,20 +89,22 @@ export function EarningsScreen() {
 
   async function handleRequestPayout() {
     Alert.alert(
-      'Solicitar repasse',
-      `Solicitar repasse de ${formatCurrency(pendingBalance)} referente a ${pendingRidesCount} corrida(s)?`,
+      t('earnings.requestPayoutTitle'),
+      t('earnings.requestPayoutMessage')
+        .replace('{amount}', formatCurrency(pendingBalance))
+        .replace('{count}', String(pendingRidesCount)),
       [
-        { text: 'Cancelar', style: 'cancel' },
+        { text: t('earnings.cancel'), style: 'cancel' },
         {
-          text: 'Solicitar',
+          text: t('earnings.request'),
           onPress: async () => {
             setRequestingPayout(true);
             const result = await requestPayout();
             setRequestingPayout(false);
             if (result.ok) {
-              Alert.alert('Repasse enviado!', 'O valor foi transferido para sua conta e cairá no seu banco conforme o cronograma do Stripe.');
+              Alert.alert(t('earnings.payoutSentTitle'), t('earnings.payoutSentMessage'));
             } else {
-              Alert.alert('Erro', result.error ?? 'Tente novamente.');
+              Alert.alert(t('earnings.errorTitle'), result.error ?? t('earnings.tryAgain'));
             }
           },
         },
@@ -138,7 +142,7 @@ export function EarningsScreen() {
         contentContainerStyle={[styles.scroll, Platform.OS === 'android' && { paddingBottom: 24 + insets.bottom }]}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} tintColor={colors.accent} />}
       >
-        <Text style={styles.title}>Seus ganhos</Text>
+        <Text style={styles.title}>{t('earnings.title')}</Text>
 
         <View style={styles.tabs}>
           {PERIODS.map((p) => (
@@ -147,26 +151,26 @@ export function EarningsScreen() {
               style={[styles.tab, period === p.key && styles.tabActive]}
               onPress={() => setPeriod(p.key)}
             >
-              <Text style={[styles.tabText, period === p.key && styles.tabTextActive]}>{p.label}</Text>
+              <Text style={[styles.tabText, period === p.key && styles.tabTextActive]}>{t(p.labelKey)}</Text>
             </TouchableOpacity>
           ))}
         </View>
 
         <View style={styles.heroCard}>
-          <Text style={styles.heroLabel}>{PERIODS.find((p) => p.key === period)?.label.toUpperCase()} — SEU GANHO LÍQUIDO</Text>
+          <Text style={styles.heroLabel}>{t('earnings.heroLabel').replace('{period}', t(PERIODS.find((p) => p.key === period)?.labelKey ?? '').toUpperCase())}</Text>
           <Text style={styles.heroValue}>{formatCurrency(stats.net)}</Text>
           <Text style={styles.heroSub}>
-            {stats.rides} {stats.rides === 1 ? 'corrida' : 'corridas'} • {stats.miles.toFixed(1)} mi
+            {stats.rides} {stats.rides === 1 ? t('earnings.ride') : t('earnings.rides')} • {stats.miles.toFixed(1)} mi
           </Text>
           <View style={styles.heroDivider} />
           <View style={styles.heroBreakdown}>
             <View style={styles.heroBreakdownItem}>
-              <Text style={styles.heroBreakdownLabel}>Bruto</Text>
+              <Text style={styles.heroBreakdownLabel}>{t('earnings.gross')}</Text>
               <Text style={styles.heroBreakdownValue}>{formatCurrency(stats.gross)}</Text>
             </View>
             <View style={styles.heroBreakdownSep} />
             <View style={styles.heroBreakdownItem}>
-              <Text style={styles.heroBreakdownLabel}>Taxa Go XL (20%)</Text>
+              <Text style={styles.heroBreakdownLabel}>{t('earnings.platformFee')}</Text>
               <Text style={styles.heroBreakdownValue}>- {formatCurrency(stats.platformFee)}</Text>
             </View>
           </View>
@@ -178,12 +182,12 @@ export function EarningsScreen() {
           <View style={styles.connectBanner}>
             <View style={styles.connectInfo}>
               <Text style={styles.connectTitle}>
-                {connect.needsAttention ? 'Cadastro em análise' : 'Configure seu recebimento'}
+                {connect.needsAttention ? t('earnings.connectReviewTitle') : t('earnings.connectSetupTitle')}
               </Text>
               <Text style={styles.connectSub}>
                 {connect.needsAttention
-                  ? 'Faltam informações para liberar seus repasses. Toque para concluir.'
-                  : 'Cadastre sua conta bancária para receber os repasses das suas corridas.'}
+                  ? t('earnings.connectReviewSub')
+                  : t('earnings.connectSetupSub')}
               </Text>
             </View>
             <TouchableOpacity
@@ -193,7 +197,7 @@ export function EarningsScreen() {
             >
               {onboarding
                 ? <ActivityIndicator size="small" color={colors.primary} />
-                : <Text style={styles.connectBtnText}>{connect.hasAccount ? 'Continuar' : 'Configurar'}</Text>
+                : <Text style={styles.connectBtnText}>{connect.hasAccount ? t('earnings.continue') : t('earnings.configure')}</Text>
               }
             </TouchableOpacity>
           </View>
@@ -202,13 +206,13 @@ export function EarningsScreen() {
         {/* Card de saldo disponível para repasse */}
         <View style={styles.balanceCard}>
           <View style={styles.balanceInfo}>
-            <Text style={styles.balanceLabel}>Saldo a receber</Text>
+            <Text style={styles.balanceLabel}>{t('earnings.balanceLabel')}</Text>
             <Text style={styles.balanceValue}>{formatCurrency(pendingBalance)}</Text>
             {pendingRidesCount > 0 && (
-              <Text style={styles.balanceSub}>{pendingRidesCount} corrida(s) pagas aguardando repasse</Text>
+              <Text style={styles.balanceSub}>{t('earnings.balanceSub').replace('{count}', String(pendingRidesCount))}</Text>
             )}
             {connect.payoutsEnabled && (
-              <Text style={styles.balanceOk}>✓ Recebimento configurado</Text>
+              <Text style={styles.balanceOk}>{t('earnings.balanceOk')}</Text>
             )}
           </View>
           <TouchableOpacity
@@ -218,31 +222,30 @@ export function EarningsScreen() {
           >
             {requestingPayout
               ? <ActivityIndicator size="small" color={colors.white} />
-              : <Text style={styles.payoutBtnText}>Solicitar{'\n'}repasse</Text>
+              : <Text style={styles.payoutBtnText}>{t('earnings.payoutBtn')}</Text>
             }
           </TouchableOpacity>
         </View>
 
         {connect.payoutsEnabled && (
           <Text style={styles.autoPayoutNote}>
-            O repasse também é feito automaticamente toda segunda-feira. Você pode
-            adiantar quando quiser pelo botão acima.
+            {t('earnings.autoPayoutNote')}
           </Text>
         )}
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{formatCurrency(stats.avg)}</Text>
-            <Text style={styles.statLabel}>Média líquida/corrida</Text>
+            <Text style={styles.statLabel}>{t('earnings.avgNetPerRide')}</Text>
           </View>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{rides.length}</Text>
-            <Text style={styles.statLabel}>Corridas totais</Text>
+            <Text style={styles.statLabel}>{t('earnings.totalRides')}</Text>
           </View>
         </View>
 
         <View style={styles.chartCard}>
-          <Text style={styles.chartTitle}>Últimos 7 dias</Text>
+          <Text style={styles.chartTitle}>{t('earnings.last7Days')}</Text>
           <View style={styles.chart}>
             {chart.map((d, i) => (
               <View key={i} style={styles.chartCol}>
@@ -257,7 +260,7 @@ export function EarningsScreen() {
 
         {payouts.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>Histórico de repasses</Text>
+            <Text style={styles.sectionTitle}>{t('earnings.payoutHistory')}</Text>
             <View style={[styles.historyList, { marginBottom: 24 }]}>
               {payouts.slice(0, 5).map((p) => (
                 <View key={p.id} style={styles.row}>
@@ -265,7 +268,7 @@ export function EarningsScreen() {
                     <Text style={{ fontSize: 16 }}>💸</Text>
                   </View>
                   <View style={styles.rowInfo}>
-                    <Text style={styles.rowAddr}>{p.rides_count} corrida(s)</Text>
+                    <Text style={styles.rowAddr}>{t('earnings.ridesCount').replace('{count}', String(p.rides_count))}</Text>
                     <Text style={styles.rowDate}>
                       {new Date(p.requested_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}
                     </Text>
@@ -273,7 +276,7 @@ export function EarningsScreen() {
                   <View style={styles.payoutStatusWrap}>
                     <Text style={styles.rowPrice}>{formatCurrency(p.amount)}</Text>
                     <Text style={[styles.payoutStatus, p.status === 'completed' && styles.payoutDone]}>
-                      {p.status === 'pending' ? 'Pendente' : p.status === 'processing' ? 'Processando' : p.status === 'completed' ? '✓ Pago' : 'Falhou'}
+                      {p.status === 'pending' ? t('earnings.statusPending') : p.status === 'processing' ? t('earnings.statusProcessing') : p.status === 'completed' ? t('earnings.statusCompleted') : t('earnings.statusFailed')}
                     </Text>
                   </View>
                 </View>
@@ -282,11 +285,11 @@ export function EarningsScreen() {
           </>
         )}
 
-        <Text style={styles.sectionTitle}>Corridas no período</Text>
+        <Text style={styles.sectionTitle}>{t('earnings.ridesInPeriod')}</Text>
         {filtered.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyEmoji}>💰</Text>
-            <Text style={styles.emptyText}>Nenhuma corrida concluída neste período.</Text>
+            <Text style={styles.emptyText}>{t('earnings.noRidesInPeriod')}</Text>
           </View>
         ) : (
           <View style={styles.historyList}>
@@ -320,6 +323,7 @@ function EarningRow({
   driverName: string | null;
   accent: string;
 }) {
+  const { t } = useTranslation();
   const date = new Date(ride.completed_at);
   const [generating, setGenerating] = useState(false);
 
@@ -329,7 +333,7 @@ function EarningRow({
     const result = await generateAndShareWaybill(ride.id, { driverName });
     setGenerating(false);
     if (!result.ok && result.error !== 'disabled') {
-      Alert.alert('Recibo indisponível', 'Não foi possível gerar o recibo desta corrida. Tente novamente.');
+      Alert.alert(t('earnings.receiptUnavailableTitle'), t('earnings.receiptUnavailableMessage'));
     }
   }
 
@@ -352,11 +356,11 @@ function EarningRow({
             onPress={handleWaybill}
             disabled={generating}
             accessibilityRole="button"
-            accessibilityLabel="Gerar recibo da corrida"
+            accessibilityLabel={t('earnings.generateReceiptA11y')}
           >
             {generating
               ? <ActivityIndicator size="small" color={accent} />
-              : <Text style={styles.waybillBtnText}>Recibo</Text>
+              : <Text style={styles.waybillBtnText}>{t('earnings.receipt')}</Text>
             }
           </TouchableOpacity>
         )}

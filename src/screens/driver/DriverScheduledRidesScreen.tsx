@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, FlatList, Image,
+  View, Text, StyleSheet, SafeAreaView, ScrollView, Image,
   TouchableOpacity, ActivityIndicator, RefreshControl, Alert, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,6 +13,9 @@ import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
 import { useDriverScheduledRides } from '../../hooks/useDriverScheduledRides';
 import { useScheduledRides } from '../../hooks/useRide';
+import { bucketScheduledRides, type ScheduleBucketKey } from '../../lib/scheduleBuckets';
+import { checkScheduleConflict } from '../../lib/scheduleConflict';
+import { useTranslation } from '../../i18n';
 
 function isCancellationFree(scheduledFor?: string): boolean {
   if (!scheduledFor) return true;
@@ -24,19 +27,27 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 
 type Urgency = 'normal' | 'soon' | 'imminent' | 'now';
 
-function computeTimeLeft(iso?: string, now = Date.now()): { label: string; urgency: Urgency } {
-  if (!iso) return { label: 'Sem horário', urgency: 'normal' };
+// Descreve quanto falta sem montar a string traduzida — o componente resolve o
+// texto com t(), pois hooks não podem ser chamados fora de componentes.
+type TimeLeft =
+  | { kind: 'none'; urgency: Urgency }
+  | { kind: 'now'; urgency: Urgency }
+  | { kind: 'min'; min: number; urgency: Urgency }
+  | { kind: 'hm'; h: number; m: number; urgency: Urgency };
+
+function computeTimeLeft(iso?: string, now = Date.now()): TimeLeft {
+  if (!iso) return { kind: 'none', urgency: 'normal' };
   const diff = new Date(iso).getTime() - now;
   const totalMin = Math.floor(diff / 60_000);
 
-  if (diff <= 0) return { label: 'Agora!', urgency: 'now' };
-  if (totalMin < 5) return { label: `${totalMin} min`, urgency: 'now' };
-  if (totalMin < 15) return { label: `${totalMin} min`, urgency: 'imminent' };
-  if (totalMin < 60) return { label: `${totalMin} min`, urgency: 'soon' };
+  if (diff <= 0) return { kind: 'now', urgency: 'now' };
+  if (totalMin < 5) return { kind: 'min', min: totalMin, urgency: 'now' };
+  if (totalMin < 15) return { kind: 'min', min: totalMin, urgency: 'imminent' };
+  if (totalMin < 60) return { kind: 'min', min: totalMin, urgency: 'soon' };
 
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
-  return { label: m > 0 ? `${h}h ${m}min` : `${h}h`, urgency: 'normal' };
+  return { kind: 'hm', h, m, urgency: 'normal' };
 }
 
 function urgencyColor(urgency: Urgency, colors: AppTheme): string {
@@ -54,9 +65,22 @@ function formatDate(iso?: string): string {
   return `${d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short' })} • ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+// Horário compacto para os cards menores (pedidos por data). O rótulo do card já
+// diz o período, então mostramos só o que falta para situar o pedido:
+//   • hoje/amanhã     → só a hora (09:30)
+//   • esta semana     → dia da semana + hora (Wed • 09:30)
+//   • próximas semanas→ dia/mês + hora (Jul 14 • 09:30)
+function compactWhen(iso: string | undefined, key: ScheduleBucketKey): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  if (key === 'today' || key === 'tomorrow') return time;
+  if (key === 'thisWeek') return `${d.toLocaleDateString('en-US', { weekday: 'short' })} • ${time}`;
+  return `${d.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })} • ${time}`;
+}
+
 // ─── Identificação do passageiro (nome + foto + avaliação) ─────────────────────
-// Componente único usado por TODOS os cards do motorista (Tarefa 5): quem
-// solicitou a corrida aparece com foto (quando houver), nome e avaliação média.
 
 function PassengerRow({
   ride,
@@ -65,6 +89,7 @@ function PassengerRow({
   ride: RideRecord;
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const { t } = useTranslation();
   const rating = ride.passenger_rating;
   const hasRating = typeof rating === 'number' && rating > 0;
   return (
@@ -77,7 +102,7 @@ function PassengerRow({
         </View>
       )}
       <View style={styles.passengerInfo}>
-        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? 'Passageiro'}</Text>
+        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? t('driverScheduled.passengerFallback')}</Text>
         {hasRating && (
           <Text style={styles.passengerRating}>⭐ {rating!.toFixed(1)}</Text>
         )}
@@ -86,7 +111,7 @@ function PassengerRow({
   );
 }
 
-// ─── Card de corrida confirmada ───────────────────────────────────────────────
+// ─── Card de corrida confirmada (usado dentro de "Meus agendamentos") ──────────
 
 function ClaimedCard({
   ride,
@@ -105,7 +130,21 @@ function ClaimedCard({
   onChat: (r: RideRecord) => void;
   onRelease: (r: RideRecord) => void;
 }) {
-  const { label, urgency } = computeTimeLeft(ride.scheduled_for, now);
+  const { t } = useTranslation();
+  const timeLeft = computeTimeLeft(ride.scheduled_for, now);
+  const { urgency } = timeLeft;
+  const label =
+    timeLeft.kind === 'none'
+      ? t('driverScheduled.noTime')
+      : timeLeft.kind === 'now'
+      ? t('driverScheduled.now')
+      : timeLeft.kind === 'min'
+      ? t('driverScheduled.minutesLeft').replace('{min}', String(timeLeft.min))
+      : timeLeft.m > 0
+      ? t('driverScheduled.hoursMinutesLeft')
+          .replace('{h}', String(timeLeft.h))
+          .replace('{m}', String(timeLeft.m))
+      : t('driverScheduled.hoursLeft').replace('{h}', String(timeLeft.h));
   const isDue = ride.scheduled_for ? new Date(ride.scheduled_for).getTime() <= now : false;
   const uColor = urgencyColor(urgency, colors);
   const canRelease = isCancellationFree(ride.scheduled_for);
@@ -147,91 +186,118 @@ function ClaimedCard({
 
       {/* Chat com passageiro */}
       <TouchableOpacity style={styles.chatBtn} onPress={() => onChat(ride)}>
-        <Text style={styles.chatBtnText}>💬  Falar com o passageiro</Text>
+        <Text style={styles.chatBtnText}>💬  {t('driverScheduled.chatWithPassenger')}</Text>
       </TouchableOpacity>
 
       {/* Botão iniciar */}
       {isDue && (
         <TouchableOpacity style={styles.startBtn} onPress={() => onStart(ride)}>
-          <Text style={styles.startBtnText}>🚀  Iniciar corrida agora</Text>
+          <Text style={styles.startBtnText}>🚀  {t('driverScheduled.startRideNow')}</Text>
         </TouchableOpacity>
       )}
 
       {/* Liberar agendamento */}
       {canRelease ? (
         <TouchableOpacity style={styles.releaseBtn} onPress={() => onRelease(ride)}>
-          <Text style={styles.releaseBtnText}>Liberar agendamento</Text>
+          <Text style={styles.releaseBtnText}>{t('driverScheduled.releaseSchedule')}</Text>
         </TouchableOpacity>
       ) : (
         <View style={styles.noReleaseRow}>
-          <Text style={styles.noReleaseText}>⚠️ Menos de 1h — corrida será cobrada</Text>
+          <Text style={styles.noReleaseText}>⚠️ {t('driverScheduled.lessThanHourWarning')}</Text>
         </View>
       )}
     </View>
   );
 }
 
-// ─── Card de corrida disponível ───────────────────────────────────────────────
+// ─── Linha compacta de pedido (dentro de um card de data) ──────────────────────
 
-function AvailableCard({
+function RequestRow({
   ride,
-  now,
+  bucketKey,
   claiming,
   colors,
   styles,
   onClaim,
 }: {
   ride: RideRecord;
-  now: number;
+  bucketKey: ScheduleBucketKey;
   claiming: boolean;
   colors: AppTheme;
   styles: ReturnType<typeof makeStyles>;
   onClaim: (r: RideRecord) => void;
 }) {
-  const { label } = computeTimeLeft(ride.scheduled_for, now);
-
+  const { t } = useTranslation();
   return (
-    <View style={styles.card}>
-      <View style={styles.cardTop}>
-        <Text style={styles.cardDate}>{formatDate(ride.scheduled_for)}</Text>
-        <View style={styles.availBadge}>
-          <Text style={styles.availText}>em {label}</Text>
-        </View>
+    <TouchableOpacity
+      style={[styles.reqRow, claiming && { opacity: 0.5 }]}
+      onPress={() => onClaim(ride)}
+      disabled={claiming}
+      activeOpacity={0.7}
+    >
+      <View style={styles.reqInfo}>
+        <Text style={styles.reqTime}>{compactWhen(ride.scheduled_for, bucketKey)}</Text>
+        <Text style={styles.reqName} numberOfLines={1}>{ride.passenger_name ?? t('driverScheduled.passengerFallback')}</Text>
+        <Text style={styles.reqAddr} numberOfLines={1}>{ride.origin_address}</Text>
       </View>
-
-      {/* Passageiro */}
-      <View style={styles.passengerRow}>
-        <Text style={styles.passengerIcon}>👤</Text>
-        <Text style={styles.passengerName} numberOfLines={1}>{ride.passenger_name ?? 'Passageiro'}</Text>
-      </View>
-
-      <View style={styles.route}>
-        <View style={styles.routeIcons}>
-          <View style={styles.dotOrigin} />
-          <View style={styles.routeLine} />
-          <View style={styles.dotDest} />
-        </View>
-        <View style={styles.routeAddrs}>
-          <Text style={styles.addr} numberOfLines={1}>{ride.origin_address}</Text>
-          <Text style={[styles.addr, styles.addrDest]} numberOfLines={1}>{ride.destination_address}</Text>
-        </View>
-      </View>
-
-      <View style={styles.meta}>
-        <Text style={styles.metaText}>{formatDistance(ride.distance_km)} • {ride.duration_min} min</Text>
-        <Text style={styles.metaPrice}>{formatCurrency(ride.price)}</Text>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.claimBtn, claiming && { opacity: 0.6 }]}
-        onPress={() => onClaim(ride)}
-        disabled={claiming}
-      >
+      <View style={styles.reqRight}>
         {claiming
-          ? <ActivityIndicator size="small" color={colors.primary} />
-          : <Text style={styles.claimBtnText}>Confirmar esta corrida</Text>
-        }
-      </TouchableOpacity>
+          ? <ActivityIndicator size="small" color={colors.accent} />
+          : <Text style={styles.reqPrice}>{formatCurrency(ride.price)}</Text>}
+        <Text style={styles.reqCta}>{t('driverScheduled.confirmCta')} ›</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Card de um período (hoje / amanhã / esta semana / próximas semanas) ───────
+
+function BucketCard({
+  title,
+  emoji,
+  rides,
+  bucketKey,
+  claiming,
+  colors,
+  styles,
+  onClaim,
+}: {
+  title: string;
+  emoji: string;
+  rides: RideRecord[];
+  bucketKey: ScheduleBucketKey;
+  claiming: string | null;
+  colors: AppTheme;
+  styles: ReturnType<typeof makeStyles>;
+  onClaim: (r: RideRecord) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.bucket}>
+      <View style={styles.bucketHead}>
+        <Text style={styles.bucketTitle} numberOfLines={1}>{emoji} {title}</Text>
+        <View style={[styles.bucketCount, rides.length > 0 && styles.bucketCountActive]}>
+          <Text style={[styles.bucketCountText, rides.length > 0 && styles.bucketCountTextActive]}>
+            {rides.length}
+          </Text>
+        </View>
+      </View>
+
+      {rides.length === 0 ? (
+        <Text style={styles.bucketEmpty}>{t('driverScheduled.noRequests')}</Text>
+      ) : (
+        rides.map((r) => (
+          <RequestRow
+            key={r.id}
+            ride={r}
+            bucketKey={bucketKey}
+            claiming={claiming === r.id}
+            colors={colors}
+            styles={styles}
+            onClaim={onClaim}
+          />
+        ))
+      )}
     </View>
   );
 }
@@ -239,6 +305,7 @@ function AvailableCard({
 // ─── Tela principal ───────────────────────────────────────────────────────────
 
 export function DriverScheduledRidesScreen() {
+  const { t } = useTranslation();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -260,22 +327,41 @@ export function DriverScheduledRidesScreen() {
 
   async function handleClaim(ride: RideRecord) {
     Alert.alert(
-      'Confirmar corrida agendada',
-      `Confirmar que você buscará o passageiro em:\n${ride.origin_address}\n\nData: ${formatDate(ride.scheduled_for)}`,
+      t('driverScheduled.claimTitle'),
+      t('driverScheduled.claimMessage')
+        .replace('{origin}', ride.origin_address)
+        .replace('{date}', formatDate(ride.scheduled_for)),
       [
-        { text: 'Cancelar', style: 'cancel' },
+        { text: t('driverScheduled.cancel'), style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: t('driverScheduled.confirm'),
           onPress: async () => {
             if (!profile?.id) return;
             setClaiming(ride.id);
+
+            // Bloqueia o aceite se este agendamento não deixa tempo hábil em
+            // relação a outro já confirmado por este motorista: fim da rota da
+            // corrida existente + deslocamento (OSRM) até o próximo embarque +
+            // 20 min de folga. Evita atraso ao segundo agendamento.
+            const conflict = await checkScheduleConflict(ride, claimed);
+            if (conflict.conflict) {
+              setClaiming(null);
+              const whenStr = conflict.withScheduledFor ? formatDate(conflict.withScheduledFor) : '';
+              Alert.alert(
+                t('driverScheduled.conflictTitle'),
+                t('driverScheduled.conflictMessage') +
+                  (whenStr ? t('driverScheduled.conflictWith').replace('{date}', whenStr) : ''),
+              );
+              return;
+            }
+
             const ok = await claimScheduledRide(ride.id, profile.id);
             setClaiming(null);
             if (ok) {
-              Alert.alert('✅ Confirmado!', 'O passageiro foi notificado que você irá buscá-lo.');
+              Alert.alert('✅ ' + t('driverScheduled.confirmedTitle'), t('driverScheduled.confirmedMessage'));
               refresh();
             } else {
-              Alert.alert('Ops', 'Essa corrida já foi confirmada por outro motorista.');
+              Alert.alert(t('driverScheduled.oops'), t('driverScheduled.alreadyClaimedMessage'));
             }
           },
         },
@@ -291,21 +377,21 @@ export function DriverScheduledRidesScreen() {
   }
 
   function handleChat(ride: RideRecord) {
-    navigation.navigate('Chat', { rideId: ride.id, title: ride.passenger_name ?? 'Passageiro' });
+    navigation.navigate('Chat', { rideId: ride.id, title: ride.passenger_name ?? t('driverScheduled.passengerFallback') });
   }
 
   function handleRelease(ride: RideRecord) {
     Alert.alert(
-      'Liberar agendamento',
-      'Deseja liberar esta corrida? Outro motorista poderá confirmá-la.',
+      t('driverScheduled.releaseTitle'),
+      t('driverScheduled.releaseMessage'),
       [
-        { text: 'Não', style: 'cancel' },
+        { text: t('driverScheduled.no'), style: 'cancel' },
         {
-          text: 'Sim, liberar',
+          text: t('driverScheduled.yesRelease'),
           style: 'destructive',
           onPress: async () => {
             const ok = await release(ride.id);
-            if (!ok) Alert.alert('Ops', 'Não foi possível liberar a corrida.');
+            if (!ok) Alert.alert(t('driverScheduled.oops'), t('driverScheduled.releaseFailedMessage'));
           },
         },
       ]
@@ -316,78 +402,99 @@ export function DriverScheduledRidesScreen() {
   const hasAvailable = available.length > 0;
   const isEmpty = !hasClaimed && !hasAvailable;
 
+  // Pedidos de passageiros agrupados por proximidade de data (item 5).
+  const buckets = bucketScheduledRides(available, new Date(now));
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Cabeçalho */}
       <View style={styles.header}>
-        <Text style={styles.title}>Corridas Agendadas</Text>
-        {hasClaimed && (
-          <View style={styles.claimedBadge}>
-            <Text style={styles.claimedBadgeText}>{claimed.length} confirmada{claimed.length > 1 ? 's' : ''}</Text>
-          </View>
-        )}
+        <Text style={styles.title}>{t('driverScheduled.headerTitle')}</Text>
       </View>
 
       {loading && isEmpty ? (
         <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
-      ) : isEmpty ? (
-        <View style={styles.empty}>
-          <Text style={styles.emptyEmoji}>🗓️</Text>
-          <Text style={styles.emptyTitle}>Nenhuma corrida agendada</Text>
-          <Text style={styles.emptyText}>
-            Passageiros que agendarem corridas aparecerão aqui.{'\n'}Fique online para receber novos pedidos.
-          </Text>
-        </View>
       ) : (
-        <FlatList
-          data={[]}
-          renderItem={null}
-          keyExtractor={() => ''}
+        <ScrollView
           refreshControl={
             <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />
           }
-          ListHeaderComponent={
-            <>
-              {/* ── Minhas corridas confirmadas ── */}
+          contentContainerStyle={[
+            styles.scroll,
+            Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom },
+          ]}
+        >
+          {/* ── Meus agendamentos — card maior no topo ── */}
+          <View style={styles.myPanel}>
+            <View style={styles.myPanelHead}>
+              <Text style={styles.myPanelTitle}>📌 {t('driverScheduled.mySchedules')}</Text>
               {hasClaimed && (
-                <>
-                  <Text style={styles.sectionHeader}>Minhas corridas</Text>
-                  {claimed.map((ride) => (
-                    <ClaimedCard
-                      key={ride.id}
-                      ride={ride}
-                      now={now}
-                      colors={colors}
-                      styles={styles}
-                      onStart={handleStart}
-                      onChat={handleChat}
-                      onRelease={handleRelease}
-                    />
-                  ))}
-                </>
+                <View style={styles.claimedBadge}>
+                  <Text style={styles.claimedBadgeText}>
+                    {(claimed.length > 1
+                      ? t('driverScheduled.confirmedCountPlural')
+                      : t('driverScheduled.confirmedCount')
+                    ).replace('{count}', String(claimed.length))}
+                  </Text>
+                </View>
               )}
+            </View>
 
-              {/* ── Disponíveis para confirmar ── */}
-              {hasAvailable && (
-                <>
-                  <Text style={styles.sectionHeader}>Disponíveis</Text>
-                  {available.map((ride) => (
-                    <AvailableCard
-                      key={ride.id}
-                      ride={ride}
-                      now={now}
-                      claiming={claiming === ride.id}
-                      colors={colors}
-                      styles={styles}
-                      onClaim={handleClaim}
-                    />
-                  ))}
-                </>
-              )}
-            </>
-          }
-          contentContainerStyle={[styles.list, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}
-        />
+            {hasClaimed ? (
+              claimed.map((ride) => (
+                <ClaimedCard
+                  key={ride.id}
+                  ride={ride}
+                  now={now}
+                  colors={colors}
+                  styles={styles}
+                  onStart={handleStart}
+                  onChat={handleChat}
+                  onRelease={handleRelease}
+                />
+              ))
+            ) : (
+              <Text style={styles.myPanelEmpty}>
+                {t('driverScheduled.myPanelEmpty')}
+              </Text>
+            )}
+          </View>
+
+          {/* ── Pedidos de passageiros por data — cards menores (2 por linha) ── */}
+          <Text style={styles.sectionHeader}>{t('driverScheduled.passengerRequests')}</Text>
+
+          <View style={styles.grid}>
+            <View style={styles.gridRow}>
+              <BucketCard
+                title={t('driverScheduled.bucketToday')} emoji="🕐" rides={buckets.today} bucketKey="today"
+                claiming={claiming} colors={colors} styles={styles} onClaim={handleClaim}
+              />
+              <BucketCard
+                title={t('driverScheduled.bucketTomorrow')} emoji="🌅" rides={buckets.tomorrow} bucketKey="tomorrow"
+                claiming={claiming} colors={colors} styles={styles} onClaim={handleClaim}
+              />
+            </View>
+            <View style={styles.gridRow}>
+              <BucketCard
+                title={t('driverScheduled.bucketThisWeek')} emoji="🗓️" rides={buckets.thisWeek} bucketKey="thisWeek"
+                claiming={claiming} colors={colors} styles={styles} onClaim={handleClaim}
+              />
+              <BucketCard
+                title={t('driverScheduled.bucketNextWeeks')} emoji="📆" rides={buckets.nextWeeks} bucketKey="nextWeeks"
+                claiming={claiming} colors={colors} styles={styles} onClaim={handleClaim}
+              />
+            </View>
+          </View>
+
+          {isEmpty && (
+            <View style={styles.empty}>
+              <Text style={styles.emptyEmoji}>🗓️</Text>
+              <Text style={styles.emptyText}>
+                {t('driverScheduled.emptyLine1')}{'\n'}{t('driverScheduled.emptyLine2')}
+              </Text>
+            </View>
+          )}
+        </ScrollView>
       )}
     </SafeAreaView>
   );
@@ -416,7 +523,33 @@ function makeStyles(colors: AppTheme) {
     },
     claimedBadgeText: { color: colors.success, fontSize: 12, fontWeight: '700' },
 
-    list: { paddingHorizontal: 16, paddingBottom: 32 },
+    scroll: { paddingHorizontal: 16, paddingBottom: 32 },
+
+    // ── "Meus agendamentos": painel maior no topo ──────────────────────────────
+    myPanel: {
+      backgroundColor: 'rgba(201,168,76,0.08)',
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: 'rgba(201,168,76,0.25)',
+      padding: 12,
+      marginTop: 8,
+      marginBottom: 8,
+    },
+    myPanelHead: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 4,
+      marginBottom: 10,
+    },
+    myPanelTitle: { fontSize: 17, fontWeight: '800', color: colors.text },
+    myPanelEmpty: {
+      fontSize: 13,
+      color: colors.gray[500],
+      lineHeight: 19,
+      paddingHorizontal: 6,
+      paddingVertical: 10,
+    },
 
     sectionHeader: {
       fontSize: 12,
@@ -426,9 +559,63 @@ function makeStyles(colors: AppTheme) {
       letterSpacing: 0.8,
       marginTop: 16,
       marginBottom: 10,
+      marginLeft: 4,
     },
 
-    // ── Cards ─────────────────────────────────────────────────────────────────
+    // ── Grade 2×2 de cards de data ─────────────────────────────────────────────
+    grid: { gap: 10 },
+    gridRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+    bucket: {
+      flex: 1,
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 12,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.06,
+      shadowRadius: 4,
+      elevation: 2,
+    },
+    bucketHead: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    bucketTitle: { flex: 1, fontSize: 13, fontWeight: '800', color: colors.text },
+    bucketCount: {
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      paddingHorizontal: 6,
+      backgroundColor: colors.gray[100],
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    bucketCountActive: { backgroundColor: colors.accent },
+    bucketCountText: { fontSize: 12, fontWeight: '800', color: colors.gray[500] },
+    bucketCountTextActive: { color: colors.primary },
+    bucketEmpty: { fontSize: 12, color: colors.gray[400], paddingVertical: 6 },
+
+    // ── Linha de pedido dentro do card de data ─────────────────────────────────
+    reqRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 8,
+      borderTopWidth: 1,
+      borderTopColor: colors.gray[100],
+      gap: 6,
+    },
+    reqInfo: { flex: 1 },
+    reqTime: { fontSize: 13, fontWeight: '800', color: colors.text },
+    reqName: { fontSize: 12, color: colors.gray[600], fontWeight: '600', marginTop: 1 },
+    reqAddr: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+    reqRight: { alignItems: 'flex-end' },
+    reqPrice: { fontSize: 13, fontWeight: '800', color: colors.text },
+    reqCta: { fontSize: 11, fontWeight: '700', color: colors.accent, marginTop: 2 },
+
+    // ── Cards (confirmadas) ────────────────────────────────────────────────────
     card: {
       backgroundColor: colors.card,
       borderRadius: 16,
@@ -474,14 +661,6 @@ function makeStyles(colors: AppTheme) {
     countdownIcon: { fontSize: 12 },
     countdownText: { fontSize: 13, fontWeight: '800' },
 
-    availBadge: {
-      backgroundColor: colors.gray[100],
-      borderRadius: 10,
-      paddingHorizontal: 9,
-      paddingVertical: 4,
-    },
-    availText: { color: colors.gray[600], fontSize: 12, fontWeight: '600' },
-
     // ── Rota ─────────────────────────────────────────────────────────────────
     route: { flexDirection: 'row', marginBottom: 12 },
     routeIcons: { width: 16, alignItems: 'center', paddingTop: 4 },
@@ -505,15 +684,6 @@ function makeStyles(colors: AppTheme) {
     metaPrice: { fontSize: 16, fontWeight: '800', color: colors.text },
 
     // ── Botões ────────────────────────────────────────────────────────────────
-    claimBtn: {
-      backgroundColor: colors.accent,
-      borderRadius: 12,
-      height: 46,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    claimBtnText: { color: colors.primary, fontSize: 15, fontWeight: '800' },
-
     chatBtn: {
       backgroundColor: 'rgba(201,168,76,0.12)',
       borderRadius: 12,
@@ -556,9 +726,8 @@ function makeStyles(colors: AppTheme) {
     noReleaseText: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
 
     // ── Empty ─────────────────────────────────────────────────────────────────
-    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 100 },
-    emptyEmoji: { fontSize: 52, marginBottom: 16 },
-    emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 8 },
+    empty: { alignItems: 'center', justifyContent: 'center', paddingTop: 24, paddingBottom: 16 },
+    emptyEmoji: { fontSize: 44, marginBottom: 12 },
     emptyText: { fontSize: 14, color: colors.gray[500], textAlign: 'center', paddingHorizontal: 36, lineHeight: 20 },
   });
 }

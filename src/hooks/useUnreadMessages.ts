@@ -36,12 +36,16 @@ export function useUnreadMessages(passengerId: string | undefined) {
   const refresh = useCallback(async () => {
     if (!passengerId) { setChatRides([]); return; }
 
-    // 1. All rides with a confirmed driver (scheduled or active)
+    // 1. All rides the driver has ACCEPTED (scheduled or active).
+    //    `accepted_at IS NOT NULL` é a marca de que o motorista de fato ACEITOU
+    //    a corrida — uma oferta ainda pendente (driver_id preenchido, mas sem
+    //    accepted_at) ou uma corrida recusada NÃO deve gerar o balão de chat.
     const { data: rides } = await supabase
       .from('rides')
       .select('id, driver_id, status')
       .eq('passenger_id', passengerId)
       .not('driver_id', 'is', null)
+      .not('accepted_at', 'is', null)
       .in('status', ['scheduled', 'accepted', 'driver_en_route', 'in_progress']);
 
     if (!rides?.length) { setChatRides([]); return; }
@@ -96,12 +100,20 @@ export function useUnreadMessages(passengerId: string | undefined) {
     if (!passengerId) return;
     let active = true;
 
-    // Subscribe to new messages in passenger's ride chats
+    // Subscribe to new messages in passenger's ride chats, AND to updates on the
+    // passenger's own rides. O UPDATE em `rides` é o que faz o balão SUMIR na
+    // hora quando o motorista recusa (driver_id → null / accepted_at → null),
+    // cancela ou conclui a corrida — sem depender do polling de 30 s.
     const channel = supabase
       .channel(`unread-msgs-${passengerId}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
+        () => { if (active) refresh(); }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'rides', filter: `passenger_id=eq.${passengerId}` },
         () => { if (active) refresh(); }
       )
       .subscribe();

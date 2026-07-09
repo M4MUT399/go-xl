@@ -36,7 +36,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   // navegação entre telas e é a mesma instância usada por GlobalDriverRideOverlay.
   const {
     isOnline, setIsOnline, location, pendingRide, pendingScheduledRide, setPendingScheduledRide,
-    confirmScheduledRide, confirmQrScheduledRide, rejectScheduledRide,
+    confirmScheduledRide, confirmQrScheduledRide, rejectScheduledRide, dutyIdleSegments,
   } = useDriverRideContext();
   // Agendamento travado por QR (o passageiro escolheu este motorista pelo
   // código dele): diferente do pool aberto, aqui `driver_id` já vem preenchido
@@ -58,7 +58,9 @@ export function DriverHomeScreen({ navigation }: Props) {
   // precisa insistir, não apenas tocar uma vez.
   useRideCallAlert(isQrLockedSchedule);
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
-  const duty = useDrivingLimit(profile?.id);
+  // Item 1: passa os segmentos ociosos do turno (veículo parado) para que a
+  // contagem só corra com o veículo em movimento.
+  const duty = useDrivingLimit(profile?.id, dutyIdleSegments);
   const bgCheck = useBackgroundCheck(profile?.id);
   const [confirming, setConfirming] = useState(false);
   const mapRef = useRef<MapView>(null);
@@ -199,9 +201,9 @@ export function DriverHomeScreen({ navigation }: Props) {
       // deixando o motorista livre para aguardar novas corridas. A agendada
       // confirmada reaparece no banner fixo (useUpcomingScheduledRide).
       setPendingScheduledRide(null);
-      Alert.alert('✅ Corrida confirmada!', 'O passageiro foi notificado que você irá buscá-lo.');
+      Alert.alert(t('driverHome.rideConfirmedTitle'), t('driverScheduled.confirmedMessage'));
     } else {
-      Alert.alert('Ops', isQrLockedSchedule ? 'Não foi possível confirmar este agendamento.' : 'Essa corrida já foi confirmada por outro motorista.');
+      Alert.alert(t('driverScheduled.oops'), isQrLockedSchedule ? t('driverHome.qrConfirmFailed') : t('driverScheduled.alreadyClaimedMessage'));
       setPendingScheduledRide(null);
     }
   }
@@ -233,11 +235,11 @@ export function DriverHomeScreen({ navigation }: Props) {
         initialDriverLocation: location ? { lat: location.lat, lng: location.lng } : undefined,
       });
     } else {
-      Alert.alert('Ops', 'Não foi possível iniciar a rota agora. Tente novamente.');
+      Alert.alert(t('driverScheduled.oops'), t('driverHome.startRouteFailed'));
     }
   }
 
-  const firstName = profile?.full_name?.split(' ')[0] ?? 'Motorista';
+  const firstName = profile?.full_name?.split(' ')[0] ?? t('driverHome.driverFallback');
 
   return (
     <View style={styles.container}>
@@ -321,12 +323,12 @@ export function DriverHomeScreen({ navigation }: Props) {
             <Text style={styles.scheduledIcon}>{isQrLockedSchedule ? '📲' : '🗓️'}</Text>
             <View>
               <Text style={styles.requestTitle}>
-                {isQrLockedSchedule ? 'Agendamento via QR Code!' : 'Corrida agendada!'}
+                {isQrLockedSchedule ? t('driverHome.qrScheduleTitle') : t('driverHome.scheduledRideTitle')}
               </Text>
               {pendingScheduledRide.scheduled_for && (
                 <Text style={styles.scheduledWhen}>
                   {new Date(pendingScheduledRide.scheduled_for).toLocaleDateString('en-US', { day: '2-digit', month: 'short' })}
-                  {' às '}
+                  {` ${t('driverHome.dateTimeSeparator')} `}
                   {new Date(pendingScheduledRide.scheduled_for).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                 </Text>
               )}
@@ -337,15 +339,15 @@ export function DriverHomeScreen({ navigation }: Props) {
             <View style={styles.requestRow}>
               <Text style={styles.requestIcon}>👤</Text>
               <View>
-                <Text style={styles.requestLabel}>Passageiro</Text>
-                <Text style={styles.requestAddr} numberOfLines={1}>{pendingScheduledPassengerName ?? 'Passageiro'}</Text>
+                <Text style={styles.requestLabel}>{t('driverCall.passenger')}</Text>
+                <Text style={styles.requestAddr} numberOfLines={1}>{pendingScheduledPassengerName ?? t('driverScheduled.passengerFallback')}</Text>
               </View>
             </View>
             <View style={styles.requestDivider} />
             <View style={styles.requestRow}>
               <Text style={styles.requestIcon}>📍</Text>
               <View>
-                <Text style={styles.requestLabel}>Origem</Text>
+                <Text style={styles.requestLabel}>{t('driverHome.originLabel')}</Text>
                 <Text style={styles.requestAddr} numberOfLines={1}>{rideOrigin(pendingScheduledRide).address}</Text>
               </View>
             </View>
@@ -353,7 +355,7 @@ export function DriverHomeScreen({ navigation }: Props) {
             <View style={styles.requestRow}>
               <Text style={styles.requestIcon}>🏁</Text>
               <View>
-                <Text style={styles.requestLabel}>Destino</Text>
+                <Text style={styles.requestLabel}>{t('driverHome.destinationLabel')}</Text>
                 <Text style={styles.requestAddr} numberOfLines={1}>{rideDestination(pendingScheduledRide).address}</Text>
               </View>
             </View>
@@ -362,17 +364,17 @@ export function DriverHomeScreen({ navigation }: Props) {
           <View style={styles.requestMeta}>
             <View style={styles.metaItem}>
               <Text style={styles.metaValue}>{formatDistance(pendingScheduledRide.distance_km)}</Text>
-              <Text style={styles.metaLabel}>Distância</Text>
+              <Text style={styles.metaLabel}>{t('driverHome.distanceLabel')}</Text>
             </View>
             <View style={styles.metaDivider} />
             <View style={styles.metaItem}>
-              <Text style={styles.metaValue}>{pendingScheduledRide.duration_min} min</Text>
-              <Text style={styles.metaLabel}>Duração est.</Text>
+              <Text style={styles.metaValue}>{pendingScheduledRide.duration_min} {t('driverNav.minUnit')}</Text>
+              <Text style={styles.metaLabel}>{t('driverHome.durationLabel')}</Text>
             </View>
             <View style={styles.metaDivider} />
             <View style={styles.metaItem}>
               <Text style={[styles.metaValue, styles.priceValue]}>{formatCurrency(pendingScheduledRide.price)}</Text>
-              <Text style={styles.metaLabel}>Valor</Text>
+              <Text style={styles.metaLabel}>{t('driverHome.valueLabel')}</Text>
             </View>
           </View>
 
@@ -381,14 +383,14 @@ export function DriverHomeScreen({ navigation }: Props) {
               style={styles.declineBtn}
               onPress={handleRejectScheduled}
             >
-              <Text style={styles.declineText}>Recusar</Text>
+              <Text style={styles.declineText}>{t('driverHome.declineBtn')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.acceptBtn, confirming && { opacity: 0.7 }]}
               onPress={handleConfirmScheduled}
               disabled={confirming}
             >
-              <Text style={styles.acceptText}>{confirming ? 'Confirmando...' : 'Confirmar'}</Text>
+              <Text style={styles.acceptText}>{confirming ? t('driverHome.confirming') : t('driverScheduled.confirm')}</Text>
             </TouchableOpacity>
           </View>
         </View>

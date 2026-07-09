@@ -15,6 +15,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { Button } from '../../components/common/Button';
 import { hasPaymentCard } from '../../lib/onboarding';
+import { useTranslation } from '../../i18n';
 
 const SUPABASE_URL   = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SETUP_CARD_URL = `${SUPABASE_URL}/functions/v1/setup-card`;
@@ -51,8 +52,9 @@ interface CardInfo {
 // ─── GoXL Credit Card ─────────────────────────────────────────────────────────
 
 function GoXLCard({ info, W }: { info: CardInfo; W: number }) {
+  const { t } = useTranslation();
   const H = Math.round(W / 1.45);
-  const name = (info.holderName || 'PASSENGER').toUpperCase();
+  const name = (info.holderName || t('addCard.cardDefaultHolder')).toUpperCase();
 
   return (
     <View style={[card.wrap, { width: W, height: H }]}>
@@ -105,11 +107,11 @@ function GoXLCard({ info, W }: { info: CardInfo; W: number }) {
       {/* ── Rodapé — posição absoluta no fundo ────── */}
       <View style={[card.bottomRow, { bottom: 10 }]}>
         <View style={{ flex: 1 }}>
-          <Text style={card.holderLabel}>TITULAR</Text>
+          <Text style={card.holderLabel}>{t('addCard.cardHolderLabel')}</Text>
           <Text style={card.holderValue} numberOfLines={1}>{name}</Text>
         </View>
         <View style={{ alignItems: 'flex-end', marginRight: 70 }}>
-          <Text style={card.holderLabel}>MEMBRO DESDE</Text>
+          <Text style={card.holderLabel}>{t('addCard.cardMemberSince')}</Text>
           <Text style={card.holderValue}>{info.memberYear}</Text>
         </View>
       </View>
@@ -120,6 +122,7 @@ function GoXLCard({ info, W }: { info: CardInfo; W: number }) {
 // ─── Tela de sucesso ──────────────────────────────────────────────────────────
 
 function ConfirmedScreen({ info }: { info: CardInfo }) {
+  const { t } = useTranslation();
   const { width: sw } = useWindowDimensions();
   const CARD_W = sw - 48;
 
@@ -160,15 +163,15 @@ function ConfirmedScreen({ info }: { info: CardInfo }) {
           <View style={suc.badge}>
             <Text style={suc.badgeTick}>✓</Text>
           </View>
-          <Text style={suc.title}>Cartão aprovado!</Text>
+          <Text style={suc.title}>{t('addCard.confirmedTitle')}</Text>
           <Text style={suc.subtitle}>
-            Seu cartão GoXL está pronto.{'\n'}Agora você pode solicitar viagens.
+            {t('addCard.confirmedSubtitle')}
           </Text>
 
           {/* Divisor dourado */}
           <View style={suc.divider} />
 
-          <Text style={suc.hint}>Redirecionando para o app…</Text>
+          <Text style={suc.hint}>{t('addCard.confirmedRedirecting')}</Text>
         </View>
 
       </Animated.View>
@@ -179,6 +182,7 @@ function ConfirmedScreen({ info }: { info: CardInfo }) {
 // ─── Tela de processamento ────────────────────────────────────────────────────
 
 function ProcessingScreen({ onEscape }: { onEscape?: () => void }) {
+  const { t } = useTranslation();
   const { colors } = useTheme();
   const [showEscape, setShowEscape] = useState(false);
 
@@ -193,11 +197,11 @@ function ProcessingScreen({ onEscape }: { onEscape?: () => void }) {
     <SafeAreaView style={[suc.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
       <Image source={require('../../../assets/icon.png')} style={suc.procLogo} />
       <ActivityIndicator size="large" color={colors.accent} style={{ marginTop: 28 }} />
-      <Text style={suc.procText}>Confirmando seu cartão…</Text>
-      <Text style={suc.procHint}>Isso pode levar alguns segundos.</Text>
+      <Text style={suc.procText}>{t('addCard.processingText')}</Text>
+      <Text style={suc.procHint}>{t('addCard.processingHint')}</Text>
       {showEscape && onEscape && (
         <Text style={suc.procEscape} onPress={onEscape}>
-          Está demorando? Toque para voltar
+          {t('addCard.processingEscape')}
         </Text>
       )}
     </SafeAreaView>
@@ -207,6 +211,7 @@ function ProcessingScreen({ onEscape }: { onEscape?: () => void }) {
 // ─── Tela principal de onboarding ─────────────────────────────────────────────
 
 export function AddCardOnboardingScreen() {
+  const { t } = useTranslation();
   const { profile, session, refreshProfile, patchProfile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -375,7 +380,7 @@ export function AddCardOnboardingScreen() {
     try {
       const token = await getAccessToken();
       if (!token) {
-        Alert.alert('Erro', 'Sessão expirada. Faça login novamente.');
+        Alert.alert(t('addCard.errorTitle'), t('addCard.errorSessionExpired'));
         setLoading(false);
         return;
       }
@@ -391,7 +396,7 @@ export function AddCardOnboardingScreen() {
 
       const json = await res.json() as { url?: string; error?: string };
       if (!json.url) {
-        Alert.alert('Erro', json.error ?? 'Não foi possível abrir o formulário de pagamento.');
+        Alert.alert(t('addCard.errorTitle'), json.error ?? t('addCard.errorOpenPaymentForm'));
         setLoading(false);
         return;
       }
@@ -416,20 +421,20 @@ export function AddCardOnboardingScreen() {
       } else {
         setPhase('idle');
         Alert.alert(
-          'Quase lá',
-          'Ainda não recebemos confirmação do seu cartão. Se você concluiu o cadastro no navegador, toque em "Já adicionei meu cartão".'
+          t('addCard.almostThereTitle'),
+          t('addCard.almostThereMessage').replace('{recheck}', t('addCard.recheckCta'))
         );
       }
     } catch {
       setPhase('idle');
       setLoading(false);
-      Alert.alert('Erro', 'Não foi possível configurar o pagamento. Tente novamente.');
+      Alert.alert(t('addCard.errorTitle'), t('addCard.errorSetupPayment'));
     }
   }
 
   /** DEV ONLY — escreve cartão fictício no perfil para pular o Stripe. */
   async function handleDevBypass() {
-    if (!userId) { Alert.alert('Erro', 'Sessão não encontrada.'); return; }
+    if (!userId) { Alert.alert(t('addCard.errorTitle'), t('addCard.errorSessionNotFound')); return; }
     setPhase('processing');
 
     const cardUpdates = {
@@ -445,7 +450,7 @@ export function AddCardOnboardingScreen() {
     const sessionEmail = session?.user?.email ?? '';
     const fallbackName = profile?.full_name
       || (sessionEmail ? sessionEmail.split('@')[0] : '')
-      || 'Passageiro';
+      || t('addCard.defaultPassengerName');
 
     const { error } = await supabase.from('profiles').upsert({
       id:         userId,
@@ -461,7 +466,7 @@ export function AddCardOnboardingScreen() {
 
     if (error) {
       setPhase('idle');
-      Alert.alert('Erro', error.message);
+      Alert.alert(t('addCard.errorTitle'), error.message);
       return;
     }
 
@@ -484,7 +489,7 @@ export function AddCardOnboardingScreen() {
       await celebrateAndEnter(updates);
     } else {
       setPhase('idle');
-      Alert.alert('Atenção', 'Ainda não encontramos um cartão cadastrado. Tente adicionar novamente.');
+      Alert.alert(t('addCard.recheckFailTitle'), t('addCard.recheckFailMessage'));
     }
   }
 
@@ -497,30 +502,29 @@ export function AddCardOnboardingScreen() {
         <View style={styles.iconWrap}>
           <Text style={styles.icon}>💳</Text>
         </View>
-        <Text style={styles.title}>Adicione um cartão{'\n'}para continuar</Text>
+        <Text style={styles.title}>{t('addCard.title')}</Text>
         <Text style={styles.subtitle}>
-          O Go XL cobra as viagens automaticamente ao final de cada corrida.
-          Seu cartão é necessário antes de solicitar o primeiro transporte.
+          {t('addCard.subtitle')}
         </Text>
         <View style={styles.benefits}>
-          <BenefitRow icon="🔒" text="Pagamento seguro via Stripe — seus dados ficam protegidos" />
-          <BenefitRow icon="⚡" text="Cobrança automática — sem precisar pagar na hora" />
-          <BenefitRow icon="🧾" text="Recibo enviado por e-mail após cada viagem" />
-          <BenefitRow icon="❌" text="Você pode remover o cartão a qualquer momento no perfil" />
+          <BenefitRow icon="🔒" text={t('addCard.benefitSecure')} />
+          <BenefitRow icon="⚡" text={t('addCard.benefitAuto')} />
+          <BenefitRow icon="🧾" text={t('addCard.benefitReceipt')} />
+          <BenefitRow icon="❌" text={t('addCard.benefitRemove')} />
         </View>
         <Button
-          title={loading ? 'Aguarde...' : 'Adicionar cartão agora'}
+          title={loading ? t('addCard.ctaWaiting') : t('addCard.ctaAddNow')}
           onPress={handleAddCard}
           loading={loading}
         />
         <Text style={styles.recheck} onPress={handleRecheck}>
-          Já adicionei meu cartão
+          {t('addCard.recheckCta')}
         </Text>
 
         {/* ── Bypass de desenvolvimento (remover antes do lançamento) ── */}
         {__DEV__ && (
           <Text style={styles.devBypass} onPress={handleDevBypass}>
-            [DEV] Entrar sem cartão (modo teste)
+            {t('addCard.devBypass')}
           </Text>
         )}
       </View>

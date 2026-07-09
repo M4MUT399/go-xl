@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { getConfig, getConfigDefault } from '../lib/systemConfig';
-import { computeDutyStatus, type DutySession, type DutyStatus } from '../lib/drivingLimits';
+import { computeDutyStatus, type DutySession, type DutyStatus, type IdleSegment } from '../lib/drivingLimits';
 
 // Carrega sessões das últimas 48h — suficiente para cobrir 12h de direção +
 // 6h de descanso e o cálculo de reset de turno com folga.
@@ -26,11 +26,15 @@ export type DrivingLimit = {
  * abrir/fechar sessão. Recalcula a cada 60s (contagem regressiva viva) e a cada
  * mudança realtime nas sessões.
  */
-export function useDrivingLimit(driverId: string | undefined): DrivingLimit {
+export function useDrivingLimit(
+  driverId: string | undefined,
+  idleSegments: IdleSegment[] = []
+): DrivingLimit {
   const [sessions, setSessions] = useState<DutySession[]>([]);
   const [cfg, setCfg] = useState({
     limitHours: getConfigDefault('driving_limit_hours'),
     restHours: getConfigDefault('rest_required_hours'),
+    idlePauseMinutes: getConfigDefault('duty_idle_pause_minutes'),
   });
   const [warnMinutes, setWarnMinutes] = useState<number>(getConfigDefault('driving_warn_minutes'));
   const [, tick] = useState(0);
@@ -58,9 +62,10 @@ export function useDrivingLimit(driverId: string | undefined): DrivingLimit {
       getConfig('driving_limit_hours'),
       getConfig('rest_required_hours'),
       getConfig('driving_warn_minutes'),
-    ]).then(([limitHours, restHours, warn]) => {
+      getConfig('duty_idle_pause_minutes'),
+    ]).then(([limitHours, restHours, warn, idlePauseMinutes]) => {
       if (!alive) return;
-      setCfg({ limitHours, restHours });
+      setCfg({ limitHours, restHours, idlePauseMinutes });
       setWarnMinutes(warn);
     }).catch(() => {});
     return () => { alive = false; };
@@ -111,7 +116,7 @@ export function useDrivingLimit(driverId: string | undefined): DrivingLimit {
     await refresh();
   }, [driverId, refresh]);
 
-  const status = computeDutyStatus(sessions, cfg);
+  const status = computeDutyStatus(sessions, cfg, new Date(), idleSegments);
   const warn = status.online && !status.mustRest && status.remainingMinutes <= warnMinutes;
 
   return { status, warnMinutes, warn, startSession, endSession, refresh };

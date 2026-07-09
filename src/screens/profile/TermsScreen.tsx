@@ -3,53 +3,31 @@ import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView } fr
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Terms'> };
 
-const SECTIONS = [
-  {
-    title: '1. Aceitação dos termos',
-    body: 'Ao usar o Go XL, você concorda com estes Termos de Uso. O Go XL é um aplicativo de transporte na categoria Executive XL que conecta passageiros e motoristas.',
-  },
-  {
-    title: '2. Uso do serviço',
-    body: 'Você deve fornecer informações verdadeiras no cadastro e usar o aplicativo de acordo com as leis locais. Motoristas devem manter documentos e veículo em conformidade.',
-  },
-  {
-    title: '3. Pagamentos',
-    body: 'Os valores das corridas são exibidos em dólares (US$) antes da confirmação. Tarifas podem variar conforme distância e tempo estimados.',
-  },
-  {
-    title: '4. Cancelamentos',
-    body: 'Corridas podem ser canceladas antes do início. Políticas de cancelamento e eventuais taxas serão exibidas no momento da solicitação.',
-  },
-  {
-    title: '5. Privacidade',
-    body: 'Coletamos apenas os dados necessários para operar o serviço (perfil, localização durante a corrida e histórico). Não vendemos seus dados a terceiros. A localização é usada somente enquanto o app está em uso para conectar você ao motorista/passageiro.',
-  },
-  {
-    title: '6. Contato',
-    body: 'Dúvidas sobre estes termos podem ser enviadas para suporte@goxl.app.',
-  },
-];
+// Chaves de tradução das 6 seções (título + corpo). O texto real vive em i18n.
+const SECTION_KEYS = ['s1', 's2', 's3', 's4', 's5', 's6'];
 
 export function TermsScreen({ navigation }: Props) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = makeStyles(colors);
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Voltar</Text>
+          <Text style={styles.backText}>← {t('common.back')}</Text>
         </TouchableOpacity>
 
-        <Text style={styles.title}>Termos e privacidade</Text>
-        <Text style={styles.updated}>Última atualização: maio de 2026</Text>
+        <Text style={styles.title}>{t('terms.title')}</Text>
+        <Text style={styles.updated}>{t('terms.updated')}</Text>
 
-        {SECTIONS.map((s, i) => (
-          <View key={i} style={styles.section}>
-            <Text style={styles.sectionTitle}>{s.title}</Text>
-            <Text style={styles.sectionBody}>{s.body}</Text>
+        {SECTION_KEYS.map((k) => (
+          <View key={k} style={styles.section}>
+            <Text style={styles.sectionTitle}>{t(`terms.${k}.title`)}</Text>
+            <Text style={styles.sectionBody}>{t(`terms.${k}.body`)}</Text>
           </View>
         ))}
       </ScrollView>

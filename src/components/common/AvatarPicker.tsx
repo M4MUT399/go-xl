@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { useTheme } from '../../hooks/useTheme';
 import { pickImage, uploadImage } from '../../lib/storage';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   /** URL atual da foto (se já existir). */
@@ -32,6 +33,7 @@ export function AvatarPicker({
   local = false,
 }: Props) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [uploading, setUploading] = useState(false);
   const styles = makeStyles(colors, size);
 
@@ -47,7 +49,7 @@ export function AvatarPicker({
       const url = await uploadImage('avatars', uri, pathPrefix);
       onChange(url);
     } catch (e: any) {
-      Alert.alert('Erro ao enviar foto', e?.message ?? 'Tente novamente.');
+      Alert.alert(t('avatar.uploadErrorTitle'), e?.message ?? t('avatar.tryAgain'));
     } finally {
       setUploading(false);
     }
@@ -55,12 +57,12 @@ export function AvatarPicker({
 
   function handlePick() {
     Alert.alert(
-      'Foto de rosto',
-      'Como você quer adicionar a foto?',
+      t('avatar.sheetTitle'),
+      t('avatar.sheetMessage'),
       [
-        { text: 'Tirar foto', onPress: () => pickAndApply(true) },
-        { text: 'Escolher da galeria', onPress: () => pickAndApply(false) },
-        { text: 'Cancelar', style: 'cancel' },
+        { text: t('avatar.takePhoto'), onPress: () => pickAndApply(true) },
+        { text: t('avatar.chooseFromLibrary'), onPress: () => pickAndApply(false) },
+        { text: t('avatar.cancel'), style: 'cancel' },
       ],
       { cancelable: true }
     );
@@ -81,7 +83,7 @@ export function AvatarPicker({
         </View>
       </TouchableOpacity>
       <Text style={styles.label}>
-        {label ?? 'Foto de rosto'}
+        {label ?? t('avatar.label')}
         {required ? <Text style={styles.req}> *</Text> : null}
       </Text>
     </View>

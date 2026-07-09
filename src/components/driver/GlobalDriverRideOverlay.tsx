@@ -7,6 +7,7 @@ import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { navigationRef } from '../../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { IncomingRideCall } from './IncomingRideCall';
+import { useTranslation } from '../../i18n';
 
 /**
  * Overlay global da chamada de corrida do motorista.
@@ -25,6 +26,7 @@ import { IncomingRideCall } from './IncomingRideCall';
  */
 export function GlobalDriverRideOverlay() {
   const { profile } = useAuth();
+  const { t } = useTranslation();
   const { pendingRide, setPendingRide, acceptRide, isOnline, location } = useDriverRideContext();
   const [accepting, setAccepting] = useState(false);
   const [callTimeout, setCallTimeout] = useState<number>(getConfigDefault('ride_offer_timeout_seconds'));
@@ -53,7 +55,7 @@ export function GlobalDriverRideOverlay() {
     const ride = await acceptRide(pendingRide.id, location ? { lat: location.lat, lng: location.lng } : null);
     setAccepting(false);
     if (ride === 'payment_error') {
-      Alert.alert('Pagamento recusado', 'O cartão do passageiro foi recusado. A corrida não pôde ser aceita.');
+      Alert.alert(t('rideOverlay.paymentDeclinedTitle'), t('rideOverlay.paymentDeclinedMessage'));
       setPendingRide(null);
     } else if (ride) {
       // Passa a localização atual do motorista como origem inicial da rota —
@@ -66,7 +68,7 @@ export function GlobalDriverRideOverlay() {
         });
       }
     } else {
-      Alert.alert('Ops', 'Corrida já foi aceita por outro motorista.');
+      Alert.alert(t('rideOverlay.alreadyTakenTitle'), t('rideOverlay.alreadyTakenMessage'));
       setPendingRide(null);
     }
   }

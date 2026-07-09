@@ -8,6 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { withTimeout } from '../../lib/withTimeout';
@@ -40,6 +41,7 @@ interface SavedCard {
 export function PaymentScreen({ navigation }: Props) {
   const { refreshProfile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [cards, setCards] = useState<SavedCard[]>([]);
   const [loadingCards, setLoadingCards] = useState(true);
   const [cardsError, setCardsError] = useState<string | null>(null);
@@ -56,9 +58,9 @@ export function PaymentScreen({ navigation }: Props) {
     const { data: { session } } = await withTimeout(
       supabase.auth.getSession(),
       10000,
-      'Não foi possível confirmar sua sessão. Tente novamente.'
+      t('payment.sessionConfirmError')
     );
-    if (!session) throw new Error('Sessão expirada. Faça login novamente.');
+    if (!session) throw new Error(t('payment.sessionExpired'));
 
     const res = await withTimeout(
       fetch(url, {
@@ -70,11 +72,11 @@ export function PaymentScreen({ navigation }: Props) {
         body: JSON.stringify(body),
       }),
       REQUEST_TIMEOUT_MS,
-      'Não foi possível conectar. Verifique sua conexão e tente novamente.'
+      t('payment.connectError')
     );
     const json = await res.json() as T & { error?: string };
     if (!res.ok || (json as { error?: string }).error) {
-      throw new Error((json as { error?: string }).error ?? 'Algo deu errado. Tente novamente.');
+      throw new Error((json as { error?: string }).error ?? t('payment.genericError'));
     }
     return json;
   }
@@ -87,7 +89,7 @@ export function PaymentScreen({ navigation }: Props) {
       setCards(json.cards ?? []);
     } catch (e: any) {
       console.error('[PaymentScreen] falha ao listar cartões:', e);
-      setCardsError(e?.message ?? 'Não foi possível carregar seus cartões.');
+      setCardsError(e?.message ?? t('payment.listError'));
       setCards([]);
     } finally {
       setLoadingCards(false);
@@ -104,7 +106,7 @@ export function PaymentScreen({ navigation }: Props) {
     setAddingCard(true);
     try {
       const json = await callCardFunction<{ url?: string }>(SETUP_CARD_URL);
-      if (!json.url) throw new Error('Não foi possível abrir o formulário de pagamento.');
+      if (!json.url) throw new Error(t('payment.setupOpenError'));
 
       // Abre o Stripe Checkout (modo setup) no navegador do aparelho
       await WebBrowser.openBrowserAsync(json.url);
@@ -116,7 +118,7 @@ export function PaymentScreen({ navigation }: Props) {
       await refreshProfile();
       await fetchCards();
     } catch (e: any) {
-      Alert.alert('Erro', e?.message ?? 'Não foi possível configurar o pagamento. Tente novamente.');
+      Alert.alert(t('common.error'), e?.message ?? t('payment.setupError'));
     } finally {
       setAddingCard(false);
     }
@@ -130,19 +132,20 @@ export function PaymentScreen({ navigation }: Props) {
       await refreshProfile();
       await fetchCards();
     } catch (e: any) {
-      Alert.alert('Erro', e?.message ?? 'Não foi possível trocar o cartão padrão.');
+      Alert.alert(t('common.error'), e?.message ?? t('payment.setDefaultError'));
     } finally {
       setBusyCardId(null);
     }
   }
 
   function confirmRemoveCard(card: SavedCard) {
+    const cardLabel = `${BRAND_LABEL[card.brand] ?? card.brand} •••• ${card.last4}`;
     Alert.alert(
-      'Remover cartão',
-      `Remover o cartão ${BRAND_LABEL[card.brand] ?? card.brand} •••• ${card.last4}?`,
+      t('payment.removeTitle'),
+      t('payment.removeConfirm').replace('{card}', cardLabel),
       [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Remover', style: 'destructive', onPress: () => handleRemoveCard(card) },
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('payment.remove'), style: 'destructive', onPress: () => handleRemoveCard(card) },
       ]
     );
   }
@@ -155,7 +158,7 @@ export function PaymentScreen({ navigation }: Props) {
       await refreshProfile();
       await fetchCards();
     } catch (e: any) {
-      Alert.alert('Erro', e?.message ?? 'Não foi possível remover o cartão.');
+      Alert.alert(t('common.error'), e?.message ?? t('payment.removeError'));
     } finally {
       setBusyCardId(null);
     }
@@ -168,7 +171,7 @@ export function PaymentScreen({ navigation }: Props) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Pagamento</Text>
+        <Text style={styles.title}>{t('payment.title')}</Text>
       </View>
 
       {loadingCards ? (
@@ -181,7 +184,7 @@ export function PaymentScreen({ navigation }: Props) {
           keyExtractor={(c) => c.id}
           contentContainerStyle={styles.content}
           ListHeaderComponent={
-            cards.length > 0 ? <Text style={styles.sectionLabel}>Seus cartões</Text> : null
+            cards.length > 0 ? <Text style={styles.sectionLabel}>{t('payment.yourCards')}</Text> : null
           }
           renderItem={({ item }) => (
             <CardRow
@@ -197,20 +200,17 @@ export function PaymentScreen({ navigation }: Props) {
             cardsError ? (
               <View style={styles.emptyCard}>
                 <Text style={[styles.cardEmoji, styles.cardEmojiMuted]}>⚠️</Text>
-                <Text style={styles.noCardTitle}>Não foi possível carregar</Text>
+                <Text style={styles.noCardTitle}>{t('payment.loadErrorTitle')}</Text>
                 <Text style={styles.noCardSub}>{cardsError}</Text>
                 <TouchableOpacity style={styles.changeBtn} onPress={fetchCards}>
-                  <Text style={styles.changeBtnText}>Tentar novamente</Text>
+                  <Text style={styles.changeBtnText}>{t('payment.retry')}</Text>
                 </TouchableOpacity>
               </View>
             ) : (
               <View style={styles.emptyCard}>
                 <Text style={[styles.cardEmoji, styles.cardEmojiMuted]}>💳</Text>
-                <Text style={styles.noCardTitle}>Nenhum cartão salvo</Text>
-                <Text style={styles.noCardSub}>
-                  Adicione um cartão para pedir corridas. O pagamento é feito automaticamente
-                  no momento em que o motorista aceita.
-                </Text>
+                <Text style={styles.noCardTitle}>{t('payment.noCardsTitle')}</Text>
+                <Text style={styles.noCardSub}>{t('payment.noCardsSub')}</Text>
               </View>
             )
           }
@@ -220,10 +220,10 @@ export function PaymentScreen({ navigation }: Props) {
                 {addingCard
                   ? <ActivityIndicator color={colors.white} />
                   : <Text style={styles.addBtnText}>
-                      {cards.length > 0 ? '+ Adicionar novo cartão' : 'Adicionar cartão'}
+                      {cards.length > 0 ? t('payment.addNew') : t('payment.addFirst')}
                     </Text>}
               </TouchableOpacity>
-              <Text style={styles.secureNote}>🔒 Dados processados com segurança pelo Stripe</Text>
+              <Text style={styles.secureNote}>{t('payment.secureNote')}</Text>
             </>
           }
         />
@@ -242,6 +242,7 @@ function CardRow({
   styles: ReturnType<typeof makeStyles>;
   colors: ReturnType<typeof useTheme>['colors'];
 }) {
+  const { t } = useTranslation();
   const brandLabel = BRAND_LABEL[card.brand] ?? card.brand.toUpperCase();
   const expiry = card.expMonth && card.expYear
     ? `${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}`
@@ -259,8 +260,8 @@ function CardRow({
         <View>
           <Text style={styles.cardRowBrand}>{brandLabel} •••• {card.last4}</Text>
           <Text style={styles.cardRowMeta}>
-            {expiry ? `Expira ${expiry}` : ''}
-            {card.isDefault ? (expiry ? '  •  Padrão' : 'Padrão') : ''}
+            {expiry ? `${t('payment.expires')} ${expiry}` : ''}
+            {card.isDefault ? (expiry ? `  •  ${t('payment.default')}` : t('payment.default')) : ''}
           </Text>
         </View>
       </View>
@@ -269,7 +270,7 @@ function CardRow({
         <ActivityIndicator color={colors.primary} />
       ) : (
         <TouchableOpacity onPress={onRemove} style={styles.cardRowRemove} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Text style={styles.cardRowRemoveText}>Remover</Text>
+          <Text style={styles.cardRowRemoveText}>{t('payment.remove')}</Text>
         </TouchableOpacity>
       )}
     </TouchableOpacity>

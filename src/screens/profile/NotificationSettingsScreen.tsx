@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'NotificationSettings'> };
 
@@ -17,14 +18,15 @@ interface Prefs {
 
 const DEFAULTS: Prefs = { rides: true, promotions: false, sound: true };
 
-const ITEMS: { key: keyof Prefs; title: string; desc: string }[] = [
-  { key: 'rides', title: 'Corridas', desc: 'Avisos de novas corridas e atualizações de status' },
-  { key: 'promotions', title: 'Promoções', desc: 'Ofertas, descontos e novidades do Go XL' },
-  { key: 'sound', title: 'Som', desc: 'Tocar som ao receber notificações' },
+const ITEMS: { key: keyof Prefs; titleKey: string; descKey: string }[] = [
+  { key: 'rides', titleKey: 'notifications.rides.title', descKey: 'notifications.rides.desc' },
+  { key: 'promotions', titleKey: 'notifications.promotions.title', descKey: 'notifications.promotions.desc' },
+  { key: 'sound', titleKey: 'notifications.sound.title', descKey: 'notifications.sound.desc' },
 ];
 
 export function NotificationSettingsScreen({ navigation }: Props) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [prefs, setPrefs] = useState<Prefs>(DEFAULTS);
 
   const styles = makeStyles(colors);
@@ -45,18 +47,18 @@ export function NotificationSettingsScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Voltar</Text>
+          <Text style={styles.backText}>← {t('common.back')}</Text>
         </TouchableOpacity>
 
-        <Text style={styles.title}>Notificações</Text>
-        <Text style={styles.subtitle}>Escolha o que deseja receber</Text>
+        <Text style={styles.title}>{t('notifications.title')}</Text>
+        <Text style={styles.subtitle}>{t('notifications.subtitle')}</Text>
 
         <View style={styles.card}>
           {ITEMS.map((item, i) => (
             <View key={item.key} style={[styles.row, i < ITEMS.length - 1 && styles.rowBorder]}>
               <View style={styles.rowText}>
-                <Text style={styles.rowTitle}>{item.title}</Text>
-                <Text style={styles.rowDesc}>{item.desc}</Text>
+                <Text style={styles.rowTitle}>{t(item.titleKey)}</Text>
+                <Text style={styles.rowDesc}>{t(item.descKey)}</Text>
               </View>
               <Switch
                 value={prefs[item.key]}
@@ -68,10 +70,7 @@ export function NotificationSettingsScreen({ navigation }: Props) {
           ))}
         </View>
 
-        <Text style={styles.note}>
-          As preferências são salvas neste dispositivo. O envio real de push depende da
-          permissão do sistema.
-        </Text>
+        <Text style={styles.note}>{t('notifications.note')}</Text>
       </ScrollView>
     </SafeAreaView>
   );

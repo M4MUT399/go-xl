@@ -23,11 +23,81 @@
 // Segredos: STRIPE_SECRET_KEY + (SUPABASE_URL / SERVICE_ROLE_KEY / ANON_KEY automáticos)
 
 import Stripe from 'npm:stripe@17';
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { createClient, SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
 });
+
+interface EligibleRide { id: string; driver_amount: number; stripe_payment_intent_id?: string | null }
+
+/**
+ * PaymentIntent → id da COBRANÇA (charge) que a lastreia. Necessário para
+ * `source_transaction`: o transfer é sacado DAQUELA cobrança (mesmo que ainda
+ * "pending") em vez de exigir saldo disponível na plataforma.
+ */
+async function resolveChargeId(pi?: string | null): Promise<string | null> {
+  if (!pi) return null;
+  try {
+    const intent = await stripe.paymentIntents.retrieve(pi);
+    const lc = intent.latest_charge as string | { id?: string } | null | undefined;
+    return typeof lc === 'string' ? lc : (lc?.id ?? null);
+  } catch {
+    return null;
+  }
+}
+
+interface SettleResult { transferred: number; amount: number; firstTransferId?: string; reason?: string }
+
+/**
+ * Cria UM transfer por corrida, amarrado à cobrança de origem via
+ * `source_transaction` quando disponível — o que remove a exigência de saldo
+ * disponível na plataforma (causa do "Insufficient funds" em modo teste).
+ * Corridas cujo transfer falha são DESVINCULADAS do payout (payout_id = null)
+ * para nova tentativa futura. Idempotência por corrida: `payout_<id>_<rideId>`.
+ */
+async function settleTransfers(
+  admin: SupabaseClient,
+  accountId: string,
+  payoutId: string,
+  rides: EligibleRide[],
+  meta: Record<string, string>,
+): Promise<SettleResult> {
+  let transferred = 0;
+  let amount = 0;
+  let firstTransferId: string | undefined;
+  let lastReason: string | undefined;
+  const failedIds: string[] = [];
+
+  for (const ride of rides) {
+    const cents = Math.round(Number(ride.driver_amount) * 100);
+    if (cents <= 0) { failedIds.push(ride.id); continue; }
+    const chargeId = await resolveChargeId(ride.stripe_payment_intent_id);
+    try {
+      const params: Stripe.TransferCreateParams = {
+        amount: cents,
+        currency: 'usd',
+        destination: accountId,
+        metadata: { ...meta, payout_id: payoutId, ride_id: ride.id },
+      };
+      if (chargeId) params.source_transaction = chargeId;
+      const transfer = await stripe.transfers.create(params, {
+        idempotencyKey: `payout_${payoutId}_${ride.id}`,
+      });
+      transferred += 1;
+      amount = Math.round((amount + Number(ride.driver_amount)) * 100) / 100;
+      if (!firstTransferId) firstTransferId = transfer.id;
+    } catch (e) {
+      lastReason = String(e);
+      failedIds.push(ride.id);
+    }
+  }
+
+  if (failedIds.length) {
+    await admin.from('rides').update({ payout_id: null }).in('id', failedIds);
+  }
+  return { transferred, amount, firstTransferId, reason: lastReason };
+}
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -86,18 +156,17 @@ Deno.serve(async (req) => {
     // ── Corridas elegíveis: pagas, com valor definido, ainda não repassadas ─────
     const { data: eligible } = await admin
       .from('rides')
-      .select('id, driver_amount')
+      .select('id, driver_amount, stripe_payment_intent_id')
       .eq('driver_id', user.id)
       .eq('paid', true)
       .is('payout_id', null)
       .not('driver_amount', 'is', null);
 
-    const rows = (eligible as { id: string; driver_amount: number }[]) ?? [];
+    const rows = (eligible as EligibleRide[]) ?? [];
     if (rows.length === 0) return json({ error: 'Sem corridas pagas para repassar', code: 'no_balance' }, 400);
 
     const total = Math.round(rows.reduce((s, r) => s + Number(r.driver_amount), 0) * 100) / 100;
-    const amountCents = Math.round(total * 100);
-    if (amountCents <= 0) return json({ error: 'Saldo indisponível', code: 'no_balance' }, 400);
+    if (Math.round(total * 100) <= 0) return json({ error: 'Saldo indisponível', code: 'no_balance' }, 400);
 
     // ── 1) Cria o payout 'processing' e reserva as corridas ────────────────────
     const { data: payoutRow, error: insErr } = await admin
@@ -112,34 +181,41 @@ Deno.serve(async (req) => {
     // Vincula as corridas ANTES de mover dinheiro (evita repasse duplo numa corrida).
     await admin.from('rides').update({ payout_id: payoutId }).in('id', rows.map((r) => r.id));
 
-    // ── 2) Transfer real para a conta conectada do motorista ───────────────────
-    try {
-      const transfer = await stripe.transfers.create({
-        amount: amountCents,
-        currency: 'usd',
-        destination: accountId,
-        metadata: { payout_id: payoutId, driver_id: user.id, rides_count: String(rows.length) },
-      }, { idempotencyKey: `payout_${payoutId}` });
+    // ── 2) Transfer real: UM por corrida, amarrado à cobrança de origem ─────────
+    const settled = await settleTransfers(admin, accountId, payoutId, rows, { driver_id: user.id });
 
-      await admin.from('payouts').update({
-        status: 'completed',
-        processed_at: new Date().toISOString(),
-        stripe_transfer_id: transfer.id,
-      }).eq('id', payoutId);
-
-      return json({ ok: true, payout_id: payoutId, transfer_id: transfer.id, amount: total, rides_count: rows.length });
-    } catch (transferErr) {
-      // Falha ao mover dinheiro — desfaz a reserva para nova tentativa futura.
-      const reason = String(transferErr);
-      await admin.from('payouts').update({ status: 'failed', failure_reason: reason }).eq('id', payoutId);
+    if (settled.transferred === 0) {
+      await admin.from('payouts')
+        .update({ status: 'failed', failure_reason: settled.reason ?? 'transfer_failed' })
+        .eq('id', payoutId);
       await admin.from('rides').update({ payout_id: null }).eq('payout_id', payoutId);
 
-      // Saldo insuficiente é o erro mais comum em modo teste (sem cargas reais).
+      const reason = settled.reason ?? '';
       const friendly = /[Ii]nsufficient/.test(reason)
         ? 'Saldo insuficiente na conta da plataforma para este repasse. Tente novamente após novas cobranças.'
-        : 'Não foi possível concluir o repasse agora. Tente novamente em instantes.';
+        : /No such|charge|source_transaction/i.test(reason)
+          ? 'Estas corridas não têm cobrança real no Stripe para repassar (dados de teste). Rode uma corrida cobrando um cartão de teste e tente de novo.'
+          : 'Não foi possível concluir o repasse agora. Tente novamente em instantes.';
       return json({ error: friendly, code: 'transfer_failed' }, 400);
     }
+
+    // Sucesso (total ou parcial): reflete o que realmente foi repassado.
+    await admin.from('payouts').update({
+      status: 'completed',
+      processed_at: new Date().toISOString(),
+      stripe_transfer_id: settled.firstTransferId,
+      amount: settled.amount,
+      rides_count: settled.transferred,
+    }).eq('id', payoutId);
+
+    return json({
+      ok: true,
+      payout_id: payoutId,
+      transfer_id: settled.firstTransferId,
+      amount: settled.amount,
+      rides_count: settled.transferred,
+      skipped: rows.length - settled.transferred,
+    });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }

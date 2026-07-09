@@ -13,6 +13,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useScheduledRides } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
+import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'ScheduledRides'> };
 
@@ -28,6 +29,7 @@ interface DriverInfo {
 }
 
 export function ScheduledRidesScreen({ navigation }: Props) {
+  const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -52,13 +54,13 @@ export function ScheduledRidesScreen({ navigation }: Props) {
         supabase.from('vehicles').select('model,plate,color').eq('driver_id', ride.driver_id).single(),
       ]);
       const info: DriverInfo = {
-        name: (p as { full_name: string } | null)?.full_name ?? 'Motorista',
+        name: (p as { full_name: string } | null)?.full_name ?? t('scheduled.driverFallback'),
         vehicle: v ? `${(v as { model: string; color: string }).model} · ${(v as { color: string }).color}` : undefined,
         plate: (v as { plate: string } | null)?.plate,
       };
       setDriverInfoMap((prev) => ({ ...prev, [ride.driver_id!]: info }));
     });
-  }, [rides]);
+  }, [rides, t]);
 
   // Realtime: detecta quando um motorista confirma uma corrida agendada.
   // Apenas atualiza a lista (para exibir o motorista confirmado) — o POPUP de
@@ -94,19 +96,19 @@ export function ScheduledRidesScreen({ navigation }: Props) {
       .on('broadcast', { event: 'schedule_expired' }, () => {
         refresh();
         Alert.alert(
-          '⏰ Agendamento não confirmado',
-          'Nenhum motorista aceitou seu agendamento a tempo.\n\nVocê pode solicitar uma nova corrida ou agendar novamente.',
-          [{ text: 'OK', style: 'default' }]
+          t('scheduled.expiredTitle'),
+          t('scheduled.expiredMessage'),
+          [{ text: t('scheduled.ok'), style: 'default' }]
         );
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile?.id, refresh]);
+  }, [profile?.id, refresh, t]);
 
   async function handleActivate(ride: RideRecord) {
     const activated = await activate(ride.id);
     if (!activated) {
-      Alert.alert('Ops', 'Não foi possível iniciar a corrida. Tente novamente.');
+      Alert.alert(t('scheduled.oops'), t('scheduled.activateError'));
       return;
     }
     if ((activated as Ride).driver_id) {
@@ -120,25 +122,25 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   function handleCancel(ride: RideRecord) {
     if (!isCancellationFree(ride.scheduled_for)) {
       Alert.alert(
-        '⚠️ Cancelamento com cobrança',
-        'Esta corrida começa em menos de 1 hora e não pode ser cancelada gratuitamente. Se confirmar, a corrida será cobrada.',
+        t('scheduled.cancelChargedTitle'),
+        t('scheduled.cancelChargedMessage'),
         [
-          { text: 'Não, manter', style: 'cancel' },
-          { text: 'Cancelar mesmo assim', style: 'destructive', onPress: () => cancel(ride.id) },
+          { text: t('scheduled.noKeep'), style: 'cancel' },
+          { text: t('scheduled.cancelAnyway'), style: 'destructive', onPress: () => cancel(ride.id) },
         ]
       );
       return;
     }
-    Alert.alert('Cancelar agendamento', 'Deseja remover esta corrida agendada?', [
-      { text: 'Não', style: 'cancel' },
-      { text: 'Sim, cancelar', style: 'destructive', onPress: () => cancel(ride.id) },
+    Alert.alert(t('scheduled.cancelScheduleTitle'), t('scheduled.cancelScheduleMessage'), [
+      { text: t('scheduled.no'), style: 'cancel' },
+      { text: t('scheduled.yesCancel'), style: 'destructive', onPress: () => cancel(ride.id) },
     ]);
   }
 
   function handleChat(ride: RideRecord, driverInfo?: DriverInfo) {
     navigation.navigate('Chat', {
       rideId: ride.id,
-      title: driverInfo?.name ?? 'Motorista',
+      title: driverInfo?.name ?? t('scheduled.driverFallback'),
     });
   }
 
@@ -148,7 +150,7 @@ export function ScheduledRidesScreen({ navigation }: Props) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Corridas agendadas</Text>
+        <Text style={styles.title}>{t('scheduled.headerTitle')}</Text>
       </View>
 
       {loading && rides.length === 0 ? (
@@ -162,8 +164,8 @@ export function ScheduledRidesScreen({ navigation }: Props) {
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🗓️</Text>
-              <Text style={styles.emptyTitle}>Nenhuma corrida agendada</Text>
-              <Text style={styles.emptyText}>Agende uma corrida ao escolher o destino na tela inicial.</Text>
+              <Text style={styles.emptyTitle}>{t('scheduled.emptyTitle')}</Text>
+              <Text style={styles.emptyText}>{t('scheduled.emptyText')}</Text>
             </View>
           }
           renderItem={({ item }) => {
@@ -197,12 +199,13 @@ function ScheduledCard({
   styles: ReturnType<typeof makeStyles>;
   colors: AppTheme;
 }) {
+  const { t } = useTranslation();
   // Clock interno — garante que o aviso de cobrança aparece sem precisar
   // sair e voltar à tela quando a janela de 60 min for cruzada.
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
   }, []);
 
   const when = ride.scheduled_for ? new Date(ride.scheduled_for) : null;
@@ -218,14 +221,14 @@ function ScheduledCard({
         <Text style={styles.cardDate}>
           {when
             ? `${when.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })} • ${when.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
-            : 'Sem horário'}
+            : t('scheduled.noTime')}
         </Text>
         {hasDriver ? (
-          <View style={styles.confirmedBadge}><Text style={styles.confirmedText}>✓ Confirmado</Text></View>
+          <View style={styles.confirmedBadge}><Text style={styles.confirmedText}>{t('scheduled.badgeConfirmed')}</Text></View>
         ) : minsLeft !== null && minsLeft <= 0 ? (
-          <View style={styles.dueBadge}><Text style={styles.dueText}>No horário</Text></View>
+          <View style={styles.dueBadge}><Text style={styles.dueText}>{t('scheduled.badgeDue')}</Text></View>
         ) : (
-          <View style={styles.schBadge}><Text style={styles.schText}>⏳ Aguardando</Text></View>
+          <View style={styles.schBadge}><Text style={styles.schText}>{t('scheduled.badgeWaiting')}</Text></View>
         )}
       </View>
 
@@ -233,17 +236,17 @@ function ScheduledCard({
       {canCancel ? (
         <View style={styles.policyFree}>
           <Text style={styles.policyFreeText}>
-            🕐  Cancelamento gratuito até 60 min antes da corrida
+            {t('scheduled.policyFree')}
           </Text>
         </View>
       ) : (
         <View style={styles.policyCharged}>
-          <Text style={styles.policyChargedTitle}>⚠️  Atenção: cancelamento cobrado</Text>
+          <Text style={styles.policyChargedTitle}>{t('scheduled.policyChargedTitle')}</Text>
           <Text style={styles.policyChargedBody}>
-            Faltam menos de 60 minutos para esta corrida.{'\n'}
-            Se cancelar agora, o valor integral de{' '}
+            {t('scheduled.policyChargedBody1')}{'\n'}
+            {t('scheduled.policyChargedBody2')}{' '}
             <Text style={styles.policyChargedValue}>{formatCurrency(ride.price)}</Text>
-            {' '}será cobrado.
+            {' '}{t('scheduled.policyChargedBody3')}
           </Text>
         </View>
       )}
@@ -268,7 +271,7 @@ function ScheduledCard({
             <Text style={styles.driverAvatarText}>{(driverInfo?.name ?? 'M')[0]}</Text>
           </View>
           <View style={styles.driverInfo}>
-            <Text style={styles.driverName}>{driverInfo?.name ?? 'Carregando...'}</Text>
+            <Text style={styles.driverName}>{driverInfo?.name ?? t('scheduled.loading')}</Text>
             {driverInfo?.vehicle && (
               <Text style={styles.driverVehicle}>{driverInfo.vehicle}</Text>
             )}
@@ -290,7 +293,7 @@ function ScheduledCard({
       {/* ── Chat ── */}
       {onChat && (
         <TouchableOpacity style={styles.chatBtn} onPress={onChat}>
-          <Text style={styles.chatBtnText}>💬  Falar com o motorista</Text>
+          <Text style={styles.chatBtnText}>{t('scheduled.chatDriver')}</Text>
         </TouchableOpacity>
       )}
 
@@ -301,12 +304,12 @@ function ScheduledCard({
           onPress={() => onCancel(ride)}
         >
           <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
-            {canCancel ? 'Cancelar' : 'Cancelar (cobrado)'}
+            {canCancel ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.activateBtn} onPress={() => onActivate(ride)}>
           <Text style={styles.activateBtnText}>
-            {hasDriver ? 'Iniciar corrida' : 'Solicitar agora'}
+            {hasDriver ? t('scheduled.startRide') : t('scheduled.requestNow')}
           </Text>
         </TouchableOpacity>
       </View>

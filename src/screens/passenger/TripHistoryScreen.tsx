@@ -1,27 +1,31 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, FlatList, RefreshControl, ActivityIndicator, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../../hooks/useAuth';
 import { useRideHistory } from '../../hooks/useRideHistory';
 import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
 import { AppTheme } from '../../constants/theme';
 import { formatCurrency, formatDistance } from '../../lib/format';
-import type { RideRecord } from '../../types';
+import type { RideRecord, RootStackParamList } from '../../types';
 
 type Filter = 'all' | 'completed' | 'scheduled' | 'cancelled';
 
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'Todas' },
-  { key: 'completed', label: 'Concluídas' },
-  { key: 'scheduled', label: 'Agendadas' },
-  { key: 'cancelled', label: 'Canceladas' },
+const FILTERS: { key: Filter; labelKey: string }[] = [
+  { key: 'all', labelKey: 'history.filterAll' },
+  { key: 'completed', labelKey: 'history.filterCompleted' },
+  { key: 'scheduled', labelKey: 'history.filterScheduled' },
+  { key: 'cancelled', labelKey: 'history.filterCancelled' },
 ];
 
 export function TripHistoryScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { rides, loading, error, refresh } = useRideHistory(profile?.id, 'passenger');
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -41,8 +45,8 @@ export function TripHistoryScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Suas viagens</Text>
-        <Text style={styles.subtitle}>{filtered.length} {filtered.length === 1 ? 'corrida' : 'corridas'}</Text>
+        <Text style={styles.title}>{t('history.title')}</Text>
+        <Text style={styles.subtitle}>{filtered.length} {filtered.length === 1 ? t('history.rideSingular') : t('history.ridePlural')}</Text>
       </View>
 
       <View style={styles.tabsWrap}>
@@ -52,7 +56,7 @@ export function TripHistoryScreen() {
             style={[styles.tab, filter === f.key && styles.tabActive]}
             onPress={() => setFilter(f.key)}
           >
-            <Text style={[styles.tabText, filter === f.key && styles.tabTextActive]}>{f.label}</Text>
+            <Text style={[styles.tabText, filter === f.key && styles.tabTextActive]}>{t(f.labelKey)}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -69,21 +73,28 @@ export function TripHistoryScreen() {
             error ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyEmoji}>⚠️</Text>
-                <Text style={styles.emptyTitle}>Não foi possível carregar</Text>
+                <Text style={styles.emptyTitle}>{t('history.loadError')}</Text>
                 <Text style={styles.emptyText}>{error}</Text>
                 <TouchableOpacity style={styles.retryButton} onPress={refresh}>
-                  <Text style={styles.retryButtonText}>Tentar novamente</Text>
+                  <Text style={styles.retryButtonText}>{t('history.retry')}</Text>
                 </TouchableOpacity>
               </View>
             ) : (
               <View style={styles.empty}>
                 <Text style={styles.emptyEmoji}>🚗</Text>
-                <Text style={styles.emptyTitle}>Nenhuma viagem</Text>
-                <Text style={styles.emptyText}>Suas corridas Executive XL aparecerão aqui</Text>
+                <Text style={styles.emptyTitle}>{t('history.emptyTitle')}</Text>
+                <Text style={styles.emptyText}>{t('history.emptyText')}</Text>
               </View>
             )
           }
-          renderItem={({ item }) => <TripCard ride={item} styles={styles} colors={colors} />}
+          renderItem={({ item }) => (
+            <TripCard
+              ride={item}
+              styles={styles}
+              colors={colors}
+              onPress={() => navigation.navigate('TripDetails', { ride: item })}
+            />
+          )}
         />
       )}
     </SafeAreaView>
@@ -93,23 +104,24 @@ export function TripHistoryScreen() {
 function statusInfo(ride: RideRecord) {
   switch (ride.status) {
     case 'completed':
-      return { label: 'Concluída', style: 'completed' as const };
+      return { labelKey: 'history.statusCompleted', style: 'completed' as const };
     case 'cancelled':
-      return { label: 'Cancelada', style: 'cancelled' as const };
+      return { labelKey: 'history.statusCancelled', style: 'cancelled' as const };
     case 'scheduled':
-      return { label: 'Agendada', style: 'scheduled' as const };
+      return { labelKey: 'history.statusScheduled', style: 'scheduled' as const };
     default:
-      return { label: 'Em andamento', style: 'scheduled' as const };
+      return { labelKey: 'history.statusInProgress', style: 'scheduled' as const };
   }
 }
 
-function TripCard({ ride, styles, colors }: { ride: RideRecord; styles: ReturnType<typeof makeStyles>; colors: AppTheme }) {
+function TripCard({ ride, styles, colors, onPress }: { ride: RideRecord; styles: ReturnType<typeof makeStyles>; colors: AppTheme; onPress: () => void }) {
+  const { t } = useTranslation();
   const info = statusInfo(ride);
   const isScheduled = ride.status === 'scheduled';
   const refDate = isScheduled && ride.scheduled_for ? new Date(ride.scheduled_for) : new Date(ride.created_at);
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.cardTop}>
         <Text style={styles.cardDate}>
           {isScheduled ? '🗓️ ' : ''}
@@ -118,7 +130,7 @@ function TripCard({ ride, styles, colors }: { ride: RideRecord; styles: ReturnTy
           {refDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
         </Text>
         <View style={[styles.badge, styles[`badge_${info.style}`]]}>
-          <Text style={[styles.badgeText, styles[`badgeText_${info.style}`]]}>{info.label}</Text>
+          <Text style={[styles.badgeText, styles[`badgeText_${info.style}`]]}>{t(info.labelKey)}</Text>
         </View>
       </View>
 
@@ -140,14 +152,14 @@ function TripCard({ ride, styles, colors }: { ride: RideRecord; styles: ReturnTy
           <View style={styles.footerRight}>
             {ride.status === 'completed' && (
               <Text style={[styles.payTag, ride.paid ? styles.payTagPaid : styles.payTagUnpaid]}>
-                {ride.paid ? '✓ Pago' : 'Não pago'}
+                {ride.paid ? t('history.paid') : t('history.unpaid')}
               </Text>
             )}
             <Text style={styles.price}>{formatCurrency(ride.price)}</Text>
           </View>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 

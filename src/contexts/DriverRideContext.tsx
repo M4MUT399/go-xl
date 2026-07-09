@@ -4,8 +4,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../hooks/useAuth';
 import { useLocation } from '../hooks/useLocation';
 import { useDriverRide } from '../hooks/useRide';
+import { useDutyIdleTracker } from '../hooks/useDutyIdleTracker';
 import { supabase } from '../lib/supabase';
 import type { Coordinates } from '../types';
+import type { IdleSegment } from '../lib/drivingLimits';
 
 type UseDriverRideReturn = ReturnType<typeof useDriverRide>;
 
@@ -15,6 +17,8 @@ interface DriverRideContextValue extends UseDriverRideReturn {
   onlineLoaded: boolean;
   setIsOnline: (value: boolean) => void;
   location: Coordinates | null;
+  /** Item 1: períodos parado do turno atual (alimenta o limite de direção). */
+  dutyIdleSegments: IdleSegment[];
 }
 
 const DriverRideContext = createContext<DriverRideContextValue | null>(null);
@@ -55,6 +59,11 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m).
   const { location } = useLocation({ watch: isOnline });
 
+  // Item 1: acompanha a ociosidade (veículo parado) do turno atual a partir da
+  // velocidade do GPS. Vive aqui — global — para captar também o movimento
+  // durante a corrida (tela de Navegação), não só o da Home.
+  const dutyIdleSegments = useDutyIdleTracker(isOnline, location?.speed);
+
   // Sincroniza localização + status online no banco (só após carregar o valor
   // persistido). Vive aqui — e não em DriverHomeScreen — para continuar
   // atualizando mesmo enquanto o motorista está em outra tela (Navegação,
@@ -79,6 +88,7 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     onlineLoaded,
     setIsOnline,
     location,
+    dutyIdleSegments,
   };
 
   return <DriverRideContext.Provider value={value}>{children}</DriverRideContext.Provider>;

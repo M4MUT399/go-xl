@@ -22,6 +22,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { isProfileComplete } from '../../lib/onboarding';
+import { useTranslation } from '../../i18n';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'CompleteRegistration'>;
@@ -30,6 +31,7 @@ type Props = {
 export function CompleteRegistrationScreen({ navigation }: Props) {
   const { profile, session, patchProfile, refreshProfile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = makeStyles(colors);
 
   const [fullName, setFullName] = useState('');
@@ -61,29 +63,29 @@ export function CompleteRegistrationScreen({ navigation }: Props) {
     const digits = phone.replace(/\D/g, '');
 
     if (!cleanName || !cleanEmail || !phone) {
-      Alert.alert('Atenção', 'Preencha nome, e-mail e telefone.');
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errRequiredFields'));
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      Alert.alert('Atenção', 'Informe um e-mail válido.');
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errInvalidEmail'));
       return;
     }
     if (digits.length < 10) {
-      Alert.alert('Atenção', 'Informe um telefone válido com DDD.');
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errInvalidPhone'));
       return;
     }
     if (password.length < 6) {
-      Alert.alert('Atenção', 'A senha precisa ter pelo menos 6 caracteres.');
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errPasswordLength'));
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Atenção', 'As senhas não coincidem.');
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errPasswordMismatch'));
       return;
     }
 
     const userId = profile?.id ?? session?.user?.id;
     if (!userId) {
-      Alert.alert('Erro', 'Sessão não encontrada. Entre novamente.');
+      Alert.alert(t('completeReg.alertErrorTitle'), t('completeReg.errNoSession'));
       return;
     }
 
@@ -113,13 +115,13 @@ export function CompleteRegistrationScreen({ navigation }: Props) {
       try { await refreshProfile(); } catch { /* ignora falha de rede */ }
 
       Alert.alert(
-        'Cadastro concluído!',
-        'Seus dados foram salvos. Agora é só continuar com sua viagem.',
-        [{ text: 'Continuar', onPress: () => { if (navigation.canGoBack()) navigation.goBack(); } }]
+        t('completeReg.successTitle'),
+        t('completeReg.successMessage'),
+        [{ text: t('completeReg.successContinue'), onPress: () => { if (navigation.canGoBack()) navigation.goBack(); } }]
       );
     } catch (e: unknown) {
       const err = e as { message?: string };
-      Alert.alert('Erro', err?.message ?? 'Não foi possível salvar. Tente novamente.');
+      Alert.alert(t('completeReg.alertErrorTitle'), err?.message ?? t('completeReg.errSaveFailed'));
     } finally {
       setLoading(false);
     }
@@ -134,60 +136,59 @@ export function CompleteRegistrationScreen({ navigation }: Props) {
         extraScrollHeight={20}
       >
         <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Voltar</Text>
+          <Text style={styles.backText}>{t('completeReg.back')}</Text>
         </TouchableOpacity>
 
         <View style={styles.header}>
           <View style={styles.badge}>
-            <Text style={styles.badgeText}>Falta pouco</Text>
+            <Text style={styles.badgeText}>{t('completeReg.badge')}</Text>
           </View>
-          <Text style={styles.title}>Complete seu cadastro</Text>
+          <Text style={styles.title}>{t('completeReg.title')}</Text>
           <Text style={styles.subtitle}>
-            Para agendar ou pedir novas viagens, precisamos dos seus dados.
-            Leva menos de 1 minuto.
+            {t('completeReg.subtitle')}
           </Text>
         </View>
 
         <View style={styles.form}>
           <Input
-            label="Nome completo"
+            label={t('completeReg.fullNameLabel')}
             value={fullName}
             onChangeText={setFullName}
-            placeholder="Ex: João Silva"
+            placeholder={t('completeReg.fullNamePlaceholder')}
             autoCapitalize="words"
           />
           <Input
-            label="Telefone (com DDD)"
+            label={t('completeReg.phoneLabel')}
             value={phone}
             onChangeText={setPhone}
-            placeholder="(11) 99999-9999"
+            placeholder={t('completeReg.phonePlaceholder')}
             keyboardType="phone-pad"
           />
           <Input
-            label="E-mail"
+            label={t('completeReg.emailLabel')}
             value={email}
             onChangeText={setEmail}
-            placeholder="seu@email.com"
+            placeholder={t('completeReg.emailPlaceholder')}
             keyboardType="email-address"
             autoCapitalize="none"
           />
           <Input
-            label="Senha"
+            label={t('completeReg.passwordLabel')}
             value={password}
             onChangeText={setPassword}
-            placeholder="Mínimo 6 caracteres"
+            placeholder={t('completeReg.passwordPlaceholder')}
             secureTextEntry
           />
           <Input
-            label="Confirmar senha"
+            label={t('completeReg.confirmPasswordLabel')}
             value={confirmPassword}
             onChangeText={setConfirmPassword}
-            placeholder="Repita a senha"
+            placeholder={t('completeReg.confirmPasswordPlaceholder')}
             secureTextEntry
           />
         </View>
 
-        <Button title="Salvar e continuar" onPress={handleSave} loading={loading} />
+        <Button title={t('completeReg.saveButton')} onPress={handleSave} loading={loading} />
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );

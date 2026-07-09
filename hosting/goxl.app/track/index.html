@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Go XL — Viagem ao vivo</title>
+  <!-- Smart App Banner (iOS): oferece abrir/baixar o app na App Store.
+       Troque 0000000000 pelo Apple ID numérico do app quando estiver publicado. -->
+  <meta name="apple-itunes-app" content="app-id=0000000000, app-argument=https://goxl.app/track" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    :root { --accent: #C9A84C; --navy: #0A0D1C; }
+    #map { position: absolute; inset: 56px 0 132px 0; background: #e5e7eb; }
+
+    /* Barra superior: abrir no app / baixar */
+    .topbar { position: absolute; top: 0; left: 0; right: 0; height: 56px; z-index: 1100;
+      background: var(--navy); display: flex; align-items: center; gap: 10px; padding: 0 12px; }
+    .topbar .logo { color: var(--accent); font-weight: 800; letter-spacing: 3px; font-size: 15px; }
+    .topbar .spacer { flex: 1; }
+    .btn { text-decoration: none; font-weight: 700; font-size: 13px; padding: 8px 12px; border-radius: 10px; white-space: nowrap; }
+    .btn-open { background: var(--accent); color: var(--navy); }
+    .btn-store { background: rgba(255,255,255,0.12); color: #fff; }
+
+    .card { position: absolute; left: 0; right: 0; bottom: 0; height: 132px;
+      background: #fff; border-top-left-radius: 18px; border-top-right-radius: 18px;
+      box-shadow: 0 -4px 16px rgba(0,0,0,0.12); padding: 14px 18px; z-index: 1050; }
+    .row { display: flex; align-items: center; gap: 12px; }
+    .avatar { width: 46px; height: 46px; border-radius: 23px; background: #E5E7EB; object-fit: cover; }
+    .name { font-size: 17px; font-weight: 700; color: var(--navy); }
+    .veh { font-size: 13px; color: #6B7280; margin-top: 2px; }
+    .status { margin-top: 12px; font-size: 14px; color: var(--navy); font-weight: 600; }
+    .eta { color: var(--accent); }
+    .muted { color: #6B7280; font-weight: 500; }
+    .ended { position: absolute; inset: 56px 0 0 0; z-index: 1200; background: rgba(255,255,255,0.97);
+      display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; flex-direction: column; }
+    .ended h1 { color: var(--navy); font-size: 22px; margin: 0 0 8px; }
+    .ended p { color: #6B7280; font-size: 15px; margin: 0 0 20px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="logo">GO XL</span>
+    <span class="spacer"></span>
+    <a id="openApp" class="btn btn-open" href="#">Abrir no app</a>
+    <a id="storeBtn" class="btn btn-store" href="#" target="_blank" rel="noopener">Baixar</a>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="card">
+    <div class="row">
+      <img id="avatar" class="avatar" alt="" />
+      <div>
+        <div id="name" class="name muted">Carregando…</div>
+        <div id="veh" class="veh"></div>
+      </div>
+    </div>
+    <div id="status" class="status muted">Localizando a viagem…</div>
+  </div>
+
+  <div id="ended" class="ended">
+    <div>
+      <h1 id="endedTitle">Viagem encerrada</h1>
+      <p id="endedMsg">Este link de acompanhamento não está mais ativo.</p>
+      <a id="endedStore" class="btn btn-open" href="#" target="_blank" rel="noopener" style="display:inline-block">Baixar o app Go XL</a>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Origem dos dados: endpoint JSON da Edge Function do Supabase (funciona sem
+    // login, verify_jwt=false). A página HTML é servida por goxl.app (hosting
+    // próprio), então renderiza normalmente — ao contrário do endpoint bruto do
+    // Supabase, que força content-type text/plain.
+    var SUPABASE_URL = 'https://zukydkodafdmhaulhxeh.supabase.co';
+    var PLAY_URL = 'https://play.google.com/store/apps/details?id=com.goxl.app';
+    // Troque pelo link real da App Store quando o app estiver publicado.
+    var APPSTORE_URL = 'https://apps.apple.com/app/go-xl/id0000000000';
+
+    var params = new URLSearchParams(window.location.search);
+    var TOKEN = params.get('token') || '';
+
+    // Botões de loja conforme a plataforma.
+    var ua = navigator.userAgent || '';
+    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+    var storeUrl = isIOS ? APPSTORE_URL : PLAY_URL;
+    document.getElementById('storeBtn').href = storeUrl;
+    document.getElementById('endedStore').href = storeUrl;
+    // "Abrir no app": tenta o custom scheme; se o app não abrir, cai na loja.
+    var openBtn = document.getElementById('openApp');
+    openBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var deep = 'goxl://track?token=' + encodeURIComponent(TOKEN);
+      var t = Date.now();
+      window.location.href = deep;
+      setTimeout(function () {
+        if (Date.now() - t < 1600) window.location.href = storeUrl;
+      }, 1200);
+    });
+
+    var map = L.map('map', { zoomControl: true }).setView([28.5383, -81.3792], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    var originMk = null, destMk = null, driverMk = null, routeLn = null, firstFit = true;
+
+    function statusLabel(s) {
+      switch (s) {
+        case 'accepted': return 'Motorista confirmado, a caminho do embarque';
+        case 'driver_en_route': return 'Motorista a caminho do embarque';
+        case 'in_progress': return 'Em viagem para o destino';
+        default: return 'Acompanhando a viagem';
+      }
+    }
+
+    function showEnded(reason) {
+      var t = document.getElementById('endedTitle');
+      var m = document.getElementById('endedMsg');
+      if (reason === 'expired') { t.textContent = 'Link expirado'; m.textContent = 'O acompanhamento foi encerrado ou o link expirou.'; }
+      else if (reason === 'not_found') { t.textContent = 'Link inválido'; m.textContent = 'Não encontramos esta viagem.'; }
+      else { t.textContent = 'Viagem encerrada'; m.textContent = 'A viagem foi concluída ou cancelada.'; }
+      document.getElementById('ended').style.display = 'flex';
+    }
+
+    function render(d) {
+      if (!d.active) { showEnded(d.reason); return; }
+
+      var name = document.getElementById('name');
+      var veh = document.getElementById('veh');
+      var av = document.getElementById('avatar');
+      if (d.driver) {
+        name.textContent = d.driver.first_name;
+        name.className = 'name';
+        if (d.driver.vehicle) veh.textContent = d.driver.vehicle.color + ' ' + d.driver.vehicle.model + ' · ' + d.driver.vehicle.plate;
+        if (d.driver.avatar_url) av.src = d.driver.avatar_url; else av.style.visibility = 'hidden';
+      }
+      var st = document.getElementById('status');
+      var eta = (d.eta_min != null) ? ' · <span class="eta">' + d.eta_min + ' min</span>' : '';
+      st.innerHTML = statusLabel(d.status) + eta;
+      st.className = 'status';
+
+      if (!originMk) originMk = L.marker([d.origin.lat, d.origin.lng]).addTo(map).bindPopup('Embarque');
+      if (!destMk) destMk = L.marker([d.destination.lat, d.destination.lng]).addTo(map).bindPopup('Destino');
+
+      if (d.position) {
+        var carIcon = L.divIcon({ className: '', html: '<div style="font-size:26px;line-height:26px">🚗</div>', iconSize: [26,26], iconAnchor: [13,13] });
+        if (!driverMk) driverMk = L.marker([d.position.lat, d.position.lng], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
+        else driverMk.setLatLng([d.position.lat, d.position.lng]);
+      }
+
+      var pts = [[d.origin.lat, d.origin.lng]];
+      if (d.position) pts.push([d.position.lat, d.position.lng]);
+      pts.push([d.destination.lat, d.destination.lng]);
+      if (routeLn) map.removeLayer(routeLn);
+      routeLn = L.polyline(pts, { color: '#C9A84C', weight: 4, opacity: 0.85 }).addTo(map);
+
+      if (firstFit) { map.fitBounds(routeLn.getBounds().pad(0.25)); firstFit = false; }
+    }
+
+    function poll() {
+      if (!TOKEN) { showEnded('not_found'); return; }
+      fetch(SUPABASE_URL + '/functions/v1/track-trip?token=' + encodeURIComponent(TOKEN) + '&format=json', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(render)
+        .catch(function () { /* mantém o último estado em falha de rede */ });
+    }
+    poll();
+    setInterval(poll, 6000);
+  </script>
+</body>
+</html>

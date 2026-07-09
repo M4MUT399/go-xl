@@ -29,6 +29,10 @@ export const CONFIG_DEFAULTS = {
   rest_required_hours: 6,
   // P3: antecedência (min) do limite em que o motorista começa a ser avisado.
   driving_warn_minutes: 30,
+  // Item 1: tolerância (min) de veículo PARADO antes de a contagem de direção
+  // pausar. Paradas até este limite contam normalmente; o excedente de cada
+  // parada longa não conta e volta a contar assim que o veículo se move.
+  duty_idle_pause_minutes: 10,
   // P5: liga/desliga a cobrança de pedágio no preço. Desligado por padrão →
   // preserva o comportamento atual (pedágio = 0) até o admin habilitar.
   tolls_enabled: false,

@@ -29,11 +29,32 @@ export function useVehicle(driverId: string | undefined) {
       if (!driverId) return { error: 'Motorista não identificado' };
 
       const payload = { ...input, driver_id: driverId };
-      const { data, error } = vehicle
-        ? await supabase.from('vehicles').update(payload).eq('id', vehicle.id).select().single()
+
+      // Descobre se o motorista JÁ tem veículo — inclusive quando o estado local
+      // ainda não carregou. Sem isso, um save com `vehicle` nulo por corrida de
+      // carregamento criaria uma 2ª linha para o mesmo motorista (duplicidade).
+      let existingId = vehicle?.id;
+      if (!existingId) {
+        const { data: existing } = await supabase
+          .from('vehicles')
+          .select('id')
+          .eq('driver_id', driverId)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        existingId = (existing as { id: string } | null)?.id;
+      }
+
+      const { data, error } = existingId
+        ? await supabase.from('vehicles').update(payload).eq('id', existingId).select().single()
         : await supabase.from('vehicles').insert(payload).select().single();
 
-      if (error) return { error: error.message };
+      if (error) {
+        // 23505 = unique_violation (índice vehicles_driver_plate_unique): o mesmo
+        // motorista tentou cadastrar a MESMA placa de novo. Sinaliza p/ a tela.
+        const dup = error.code === '23505' || /duplicate|unique/i.test(error.message);
+        return { error: dup ? 'DUPLICATE' : error.message };
+      }
       setVehicle(data as Vehicle);
       return { error: null };
     },

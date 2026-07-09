@@ -13,6 +13,7 @@ import { RouteProp } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, Message } from '../types';
 import { useTheme } from '../hooks/useTheme';
+import { useTranslation } from '../i18n';
 import { useAuth } from '../hooks/useAuth';
 import { useMessages } from '../hooks/useMessages';
 import { markChatRead } from '../hooks/useUnreadMessages';
@@ -27,6 +28,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const { rideId, title } = route.params;
   const { profile } = useAuth();
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { messages, sendMessage } = useMessages(rideId, profile?.id);
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
@@ -70,7 +72,7 @@ export function ChatScreen({ navigation, route }: Props) {
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle}>{title}</Text>
-          <Text style={styles.headerSub}>Executive XL</Text>
+          <Text style={styles.headerSub}>{t('chat.subtitle')}</Text>
         </View>
       </View>
 
@@ -88,7 +90,7 @@ export function ChatScreen({ navigation, route }: Props) {
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>💬</Text>
-              <Text style={styles.emptyText}>Comece a conversa. Suas mensagens são privadas desta corrida.</Text>
+              <Text style={styles.emptyText}>{t('chat.empty')}</Text>
             </View>
           }
           renderItem={({ item }) => {
@@ -111,7 +113,7 @@ export function ChatScreen({ navigation, route }: Props) {
             style={styles.input}
             value={text}
             onChangeText={setText}
-            placeholder="Mensagem..."
+            placeholder={t('chat.placeholder')}
             placeholderTextColor={colors.gray[400]}
             multiline
             onSubmitEditing={handleSend}
