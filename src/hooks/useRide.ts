@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
-import { sendPushAsync } from '../lib/notifications';
+import { sendPushAsync, dismissRideNotifications } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
@@ -137,7 +137,8 @@ async function refundRide(rideId: string): Promise<{ ok: boolean; error?: string
 async function notifyOnlineDrivers(
   destination: string,
   price: number,
-  destinationCoords?: { lat: number; lng: number }
+  destinationCoords?: { lat: number; lng: number },
+  rideId?: string
 ) {
   const { data: online } = await supabase
     .from('driver_locations')
@@ -185,13 +186,15 @@ async function notifyOnlineDrivers(
       to,
       title: '🚗 Nova corrida Executive XL',
       body: `Destino: ${destination} • ${formatCurrency(price)}`,
-      data: { type: 'new_ride' },
+      // rideId permite dispensar esta notificação da bandeja dos demais
+      // motoristas assim que a corrida for aceita/cancelada/expirada.
+      data: { type: 'new_ride', ...(rideId ? { rideId } : {}) },
     }))
   );
 }
 
 /** Notifica apenas o motorista vinculado ao QR code (não transmite para todos). */
-async function notifySpecificDriver(driverId: string, destination: string, price: number) {
+async function notifySpecificDriver(driverId: string, destination: string, price: number, rideId?: string) {
   const { data } = await supabase
     .from('profiles')
     .select('push_token')
@@ -204,7 +207,7 @@ async function notifySpecificDriver(driverId: string, destination: string, price
       to: token,
       title: '📲 Corrida via QR Code — Executive XL',
       body: `Passageiro solicitou pelo seu QR. Destino: ${destination} • ${formatCurrency(price)}`,
-      data: { type: 'new_ride' },
+      data: { type: 'new_ride', ...(rideId ? { rideId } : {}) },
     }]);
   }
 }
@@ -649,9 +652,9 @@ export function usePassengerRide(passengerId: string | undefined) {
       // Broadcast in-app (confiável mesmo sem push token no Expo Go)
       broadcastToDriver(options.lockedDriverId, data);
       // Push remoto como reforço (funciona em produção)
-      notifySpecificDriver(options.lockedDriverId, destination.address, price);
+      notifySpecificDriver(options.lockedDriverId, destination.address, price, (data as Ride).id);
     } else {
-      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng });
+      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
     }
     return data as Ride;
   }, [passengerId]);
@@ -741,7 +744,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       notifySpecificDriverScheduled(options.lockedDriverId, destination.address, price, scheduledFor);
     } else {
       // Notifica motoristas online imediatamente — igual ao requestRide
-      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng });
+      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
     }
     return data as Ride;
   }, [passengerId]);
@@ -835,7 +838,7 @@ export function useScheduledRides(passengerId: string | undefined) {
         const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
         const destLat = ride.destination_lat ?? ride.destination?.lat;
         const destLng = ride.destination_lng ?? ride.destination?.lng;
-        notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined);
+        notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined, ride.id);
       }
     }
     return (data as Ride) ?? null;
@@ -921,6 +924,7 @@ export function useDriverRide(driverId: string | undefined) {
   // Mantém ref sincronizada para usar dentro de setInterval sem stale closure
   useEffect(() => {
     pendingRideIdRef.current = pendingRide?.id ?? null;
+    if (__DEV__) console.log(`[${Platform.OS}][dispatch] pendingRide agora =`, pendingRide?.id ?? 'null');
   }, [pendingRide?.id]);
 
   useEffect(() => {
@@ -1055,7 +1059,10 @@ export function useDriverRide(driverId: string | undefined) {
         .eq('id', pendingId)
         .maybeSingle();
       // Falha de rede: mantém o estado atual (não silencia por engano).
-      if (error) return;
+      if (error) {
+        if (__DEV__) console.log(`[${Platform.OS}][backstop] erro no poll, MANTÉM som:`, error.message);
+        return;
+      }
 
       // A oferta só continua válida se a corrida ainda está 'requesting' e não foi
       // travada para outro motorista. `data` null = corrida sumiu/ficou invisível
@@ -1065,10 +1072,21 @@ export function useDriverRide(driverId: string | undefined) {
         data.status === 'requesting' &&
         (!data.driver_id || data.driver_id === driverId);
 
+      if (__DEV__) {
+        console.log(
+          `[${Platform.OS}][backstop] poll ride=${pendingId} status=${data?.status ?? 'NULL(rls/sumiu)'} ` +
+          `driver=${data?.driver_id ?? 'null'} stillOffered=${stillOffered}`
+        );
+      }
+
       // Só limpa se AINDA é a mesma chamada (evita apagar uma nova que entrou
       // entre o disparo do fetch e a sua resposta).
       if (!stillOffered && pendingRideIdRef.current === pendingId) {
+        if (__DEV__) console.log(`[${Platform.OS}][backstop] LIMPANDO card/som — oferta não é mais válida`);
         setPendingRide(null);
+        // Backstop também para a notificação da bandeja, caso o broadcast tenha
+        // se perdido e ela ainda esteja lá.
+        dismissRideNotifications(pendingId);
       }
     };
 
@@ -1219,6 +1237,12 @@ export function useDriverRide(driverId: string | undefined) {
       by: string | undefined,
       reason: RideRevokeReason
     ) => {
+      if (__DEV__) {
+        console.log(
+          `[${Platform.OS}][revoke] broadcast recebido rideId=${rideId} reason=${reason} by=${by} ` +
+          `meuPending=${pendingRideIdRef.current} euSou=${driverId}`
+        );
+      }
       // Decisão determinística isolada (testada em lib/rideRevocation).
       const actions = resolveRevocation(
         { rideId, by, reason },
@@ -1239,6 +1263,8 @@ export function useDriverRide(driverId: string | undefined) {
       // Remove o card de chamada (para o som) desta corrida, se estiver pendente.
       if (actions.clearPendingRide) {
         setPendingRide(null);
+        // Dispensa também a notificação de oferta da bandeja/lockscreen (item 3).
+        dismissRideNotifications(rideId!);
         if (actions.logTakenByOther && firstTime) {
           logRideOfferEvent(rideId!, driverId, 'taken_by_other', { reason });
         }

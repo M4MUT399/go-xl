@@ -137,10 +137,43 @@ export async function sendPushAsync(messages: PushMessage[]): Promise<void> {
           title: m.title,
           body: m.body,
           data: m.data ?? {},
+          // Colapsa/substitui a oferta anterior da MESMA corrida na bandeja em
+          // vez de empilhar (Android collapse_key / iOS apns-collapse-id).
+          ...(typeof (m.data as { rideId?: string } | undefined)?.rideId === 'string'
+            ? { collapseId: (m.data as { rideId?: string }).rideId }
+            : {}),
         }))
       ),
     });
   } catch {
     // push é best-effort
+  }
+}
+
+/**
+ * Remove da bandeja/lockscreen QUALQUER notificação de oferta de corrida cujo
+ * `data.rideId` bata com o informado — usada quando a oferta deixa de valer
+ * (outro motorista aceitou, o passageiro cancelou, ou a oferta expirou), para
+ * não deixar um card órfão na central de notificações dos demais motoristas.
+ *
+ * Best-effort e idempotente: dispensar um id já removido é no-op; qualquer
+ * falha é engolida (nunca deve quebrar o fluxo de corrida).
+ */
+export async function dismissRideNotifications(rideId: string): Promise<void> {
+  if (!rideId) return;
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      presented
+        .filter((n) => {
+          const data = n.request.content.data as { rideId?: string } | undefined;
+          return data?.rideId === rideId;
+        })
+        .map((n) =>
+          Notifications.dismissNotificationAsync(n.request.identifier).catch(() => {})
+        )
+    );
+  } catch {
+    // best-effort — não há notificação apresentada ou a API falhou
   }
 }

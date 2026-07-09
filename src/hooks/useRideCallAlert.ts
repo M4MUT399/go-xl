@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { createAudioPlayer, AudioPlayer } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 
@@ -44,6 +45,12 @@ export function useRideCallAlert(active: boolean) {
 
   useEffect(() => {
     const stop = () => {
+      if (__DEV__) {
+        console.log(
+          `[${Platform.OS}][callAlert] stop() — player=${!!playerRef.current} ` +
+          `playing=${playerRef.current?.playing}`
+        );
+      }
       try {
         playerRef.current?.pause();
       } catch {
@@ -56,9 +63,11 @@ export function useRideCallAlert(active: boolean) {
     };
 
     if (!active) {
+      if (__DEV__) console.log(`[${Platform.OS}][callAlert] active=false → PARANDO som/vibração`);
       stop();
       return stop;
     }
+    if (__DEV__) console.log(`[${Platform.OS}][callAlert] active=true → tocando som em loop`);
 
     // Som em loop desde o início.
     const startPlayback = () => {

@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useDriverRideContext } from '../../contexts/DriverRideContext';
 import { getConfig, getConfigDefault } from '../../lib/systemConfig';
 import { logRideOfferEvent } from '../../lib/rideOfferEvents';
+import { dismissRideNotifications } from '../../lib/notifications';
 import { navigationRef } from '../../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { IncomingRideCall } from './IncomingRideCall';
@@ -51,9 +52,13 @@ export function GlobalDriverRideOverlay() {
 
   async function handleAccept() {
     if (!pendingRide) return;
+    const pendingId = pendingRide.id;
     setAccepting(true);
-    const ride = await acceptRide(pendingRide.id, location ? { lat: location.lat, lng: location.lng } : null);
+    const ride = await acceptRide(pendingId, location ? { lat: location.lat, lng: location.lng } : null);
     setAccepting(false);
+    // Independente do desfecho, a oferta deixou de estar pendente para ESTE
+    // motorista — tira a notificação da bandeja dele também.
+    dismissRideNotifications(pendingId);
     if (ride === 'payment_error') {
       Alert.alert(t('rideOverlay.paymentDeclinedTitle'), t('rideOverlay.paymentDeclinedMessage'));
       setPendingRide(null);
@@ -77,6 +82,7 @@ export function GlobalDriverRideOverlay() {
     if (pendingRide) {
       logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
       releaseQrLockedRide(pendingRide);
+      dismissRideNotifications(pendingRide.id);
     }
     setPendingRide(null);
   }
@@ -85,6 +91,7 @@ export function GlobalDriverRideOverlay() {
     if (pendingRide) {
       logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
       releaseQrLockedRide(pendingRide);
+      dismissRideNotifications(pendingRide.id);
     }
     setPendingRide(null);
   }
