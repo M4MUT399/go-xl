@@ -1029,6 +1029,49 @@ export function useDriverRide(driverId: string | undefined) {
     return () => clearInterval(interval);
   }, [driverId]);
 
+  // ─── Polling: PARA o som/card se a chamada pendente já não está disponível ───
+  // Backstop robusto para o dispatch em leque. Quando OUTRO motorista aceita uma
+  // corrida do pool aberto, os postgres_changes filtrados NÃO disparam para os
+  // demais (a corrida deixou de casar `status=requesting` e o `driver_id` agora é
+  // de outro), então parar o alarme depende só do broadcast `ride_offer_revoked`
+  // — que é efêmero e pode se perder (realtime instável). Este polling confere
+  // direto no banco: se a corrida pendente saiu de 'requesting' (foi aceita ou
+  // cancelada) ou foi travada para OUTRO motorista, limpa o card AQUI — parando o
+  // som — mesmo que o broadcast nunca chegue. É o par "de saída" do polling de
+  // entrada acima: um traz a chamada, este a retira quando deixa de ser válida.
+  useEffect(() => {
+    if (!driverId) return;
+
+    const interval = setInterval(async () => {
+      const pendingId = pendingRideIdRef.current;
+      if (!pendingId) return;
+
+      const { data, error } = await supabase
+        .from('rides')
+        .select('id,status,driver_id')
+        .eq('id', pendingId)
+        .maybeSingle();
+      // Falha de rede: mantém o estado atual (não silencia por engano).
+      if (error) return;
+
+      // A oferta só continua válida se a corrida ainda está 'requesting' e não foi
+      // travada para outro motorista. `data` null = corrida sumiu/ficou invisível
+      // (aceita por outro, cancelada) → também deixa de valer.
+      const stillOffered =
+        !!data &&
+        data.status === 'requesting' &&
+        (!data.driver_id || data.driver_id === driverId);
+
+      // Só limpa se AINDA é a mesma chamada (evita apagar uma nova que entrou
+      // entre o disparo do fetch e a sua resposta).
+      if (!stillOffered && pendingRideIdRef.current === pendingId) {
+        setPendingRide(null);
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [driverId]);
+
   // ─── Polling: verifica agendamento QR-travado aguardando decisão a cada 4s ──
   // Mesmo motivo do polling acima — garante entrega mesmo sem realtime, já que
   // este caso NÃO depende da janela de 1h (precisa aparecer assim que criado).
