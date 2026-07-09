@@ -4,9 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Go XL — Viagem ao vivo</title>
-  <!-- Smart App Banner (iOS): oferece abrir/baixar o app na App Store.
-       Troque 0000000000 pelo Apple ID numérico do app quando estiver publicado. -->
-  <meta name="apple-itunes-app" content="app-id=0000000000, app-argument=https://goxl.app/track" />
+  <!-- Smart App Banner (iOS): oferece abrir/baixar o app na App Store. -->
+  <meta name="apple-itunes-app" content="app-id=6781716394, app-argument=https://goxl.app/track" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { box-sizing: border-box; }
@@ -76,8 +75,7 @@
     // Supabase, que força content-type text/plain.
     var SUPABASE_URL = 'https://zukydkodafdmhaulhxeh.supabase.co';
     var PLAY_URL = 'https://play.google.com/store/apps/details?id=com.goxl.app';
-    // Troque pelo link real da App Store quando o app estiver publicado.
-    var APPSTORE_URL = 'https://apps.apple.com/app/go-xl/id0000000000';
+    var APPSTORE_URL = 'https://apps.apple.com/app/go-xl/id6781716394';
 
     var params = new URLSearchParams(window.location.search);
     var TOKEN = params.get('token') || '';
