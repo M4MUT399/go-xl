@@ -1042,7 +1042,10 @@ export function useDriverRide(driverId: string | undefined) {
   useEffect(() => {
     if (!driverId) return;
 
-    const interval = setInterval(async () => {
+    // Uma única verificação: a chamada pendente ainda é uma oferta válida? Se
+    // não, limpa o card (e para o som). Compartilhada pelo interval de 1,5s e
+    // pelo gatilho de retorno ao primeiro plano abaixo.
+    const checkPendingStillValid = async () => {
       const pendingId = pendingRideIdRef.current;
       if (!pendingId) return;
 
@@ -1067,9 +1070,24 @@ export function useDriverRide(driverId: string | undefined) {
       if (!stillOffered && pendingRideIdRef.current === pendingId) {
         setPendingRide(null);
       }
-    }, 3000);
+    };
 
-    return () => clearInterval(interval);
+    const interval = setInterval(checkPendingStillValid, 1500);
+
+    // Poll IMEDIATO ao voltar para o primeiro plano. Em background o SO congela
+    // o setInterval acima, então um motorista com o celular no bolso durante o
+    // dispatch reabre o app com o card/som ainda tocando por uma corrida que já
+    // foi de outro — e teria de esperar o próximo tick de 1,5s para calar. Aqui a
+    // checagem roda no exato instante do retorno, cortando o som fantasma na
+    // hora (mesmo mecanismo que refreshActiveRide usa no lado do passageiro).
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') checkPendingStillValid();
+    });
+
+    return () => {
+      clearInterval(interval);
+      appStateSub.remove();
+    };
   }, [driverId]);
 
   // ─── Polling: verifica agendamento QR-travado aguardando decisão a cada 4s ──
