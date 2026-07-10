@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppState, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
-import { sendPushAsync, dismissRideNotifications } from '../lib/notifications';
+import { sendPushAsync, sendSilentRevokePushAsync, dismissRideNotifications } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
@@ -355,6 +355,13 @@ async function broadcastRideAccepted(passengerId: string, ride: object) {
  * duplicar lógica: os dois eventos saem da MESMA função.
  */
 export async function broadcastRideRevoked(rideId: string, reason: RideRevokeReason, by?: string) {
+  // Camada 2 (background/lockscreen): além do broadcast Realtime — que só chega a
+  // quem tem o app EM FOREGROUND — dispara um push SILENCIOSO de revogação para
+  // os motoristas online, acordando (Android) a task de background que dispensa
+  // o card fantasma da bandeja. Fire-and-forget: não bloqueia o broadcast nem o
+  // fluxo de aceite, e falhas são engolidas dentro do helper.
+  void pushSilentRevokeToOnlineDrivers(rideId, reason === 'taken' ? by : undefined);
+
   const ch = supabase.channel('ride-offers');
   await new Promise<void>((resolve) => {
     ch.subscribe((status) => {
@@ -371,6 +378,44 @@ export async function broadcastRideRevoked(rideId: string, reason: RideRevokeRea
     });
     setTimeout(() => { supabase.removeChannel(ch); resolve(); }, 5000);
   });
+}
+
+/**
+ * Envia o push SILENCIOSO de revogação (Camada 2) aos motoristas online, exceto
+ * `exceptDriverId` (o vencedor, no caso 'taken' — ele não precisa dispensar nada
+ * e já está saindo do pool). Reaproveita o mesmo caminho de descoberta de tokens
+ * do `notifyOnlineDrivers`: driver_locations(is_online) → profiles.push_token.
+ *
+ * Best-effort e nunca lança: a revogação também trafega por Realtime (foreground)
+ * e pelo backstop de 1,5s (reabertura) — este push só cobre o buraco de
+ * background/lockscreen, onde o JS de foreground está suspenso.
+ */
+async function pushSilentRevokeToOnlineDrivers(rideId: string, exceptDriverId?: string) {
+  if (!rideId) return;
+  try {
+    const { data: online } = await supabase
+      .from('driver_locations')
+      .select('driver_id')
+      .eq('is_online', true);
+
+    const driverIds = ((online as { driver_id: string }[]) ?? [])
+      .map((d) => d.driver_id)
+      .filter((id) => id !== exceptDriverId);
+    if (driverIds.length === 0) return;
+
+    const { data: drivers } = await supabase
+      .from('profiles')
+      .select('push_token')
+      .in('id', driverIds);
+
+    const tokens = ((drivers as { push_token: string | null }[]) ?? [])
+      .map((d) => d.push_token)
+      .filter((t): t is string => !!t);
+
+    await sendSilentRevokePushAsync(tokens, rideId);
+  } catch (e) {
+    reportError(e, { op: 'pushSilentRevokeToOnlineDrivers' });
+  }
 }
 
 /**

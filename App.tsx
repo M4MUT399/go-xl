@@ -11,6 +11,7 @@ import { AuthProvider } from './src/contexts/AuthContext';
 import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
 import { installNetworkErrorGuard } from './src/lib/networkErrorGuard';
 import { preloadDriverMarkerAssets } from './src/lib/preloadAssets';
+import { registerBackgroundRevocationTask } from './src/lib/backgroundNotifications';
 
 // Mantém a splash nativa visível até o AuthContext terminar o check de sessão
 // (AppNavigator chama SplashScreen.hideAsync() quando `loading` vira false).
@@ -26,6 +27,11 @@ installNetworkErrorGuard();
 // preloadAssets.ts) — evita o marcador "congelar" no ícone padrão do mapa
 // antes da imagem customizada estar pronta.
 preloadDriverMarkerAssets();
+
+// Registra a task de notificação em background (Camada 2 — revogação em
+// background/lockscreen). Idempotente e best-effort: no-op no Expo Go/web,
+// só ativa em build nativo. A task em si foi definida no import de index.ts.
+registerBackgroundRevocationTask();
 
 // Reforço em dev: oculta o overlay de log para essas mensagens benignas.
 // Nunca aparece em build de produção.

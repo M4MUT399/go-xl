@@ -21,6 +21,18 @@ const FOREGROUND_SILENT_TYPES = new Set([
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
     const type = (notification.request.content.data as { type?: string } | undefined)?.type;
+    // Revogação de oferta é mensagem de CONTROLE (data-only) — nunca deve
+    // aparecer/soar nem ficar na lista. Se chegar em foreground, os mecanismos
+    // de foreground (broadcast + backstop) já limpam o card; aqui só garantimos
+    // silêncio total para o próprio push de revogação.
+    if (type === 'offer_revoked') {
+      return {
+        shouldShowBanner: false,
+        shouldShowList: false,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    }
     if (type && FOREGROUND_SILENT_TYPES.has(type)) {
       return {
         shouldShowBanner: false,
@@ -142,11 +154,65 @@ export async function sendPushAsync(messages: PushMessage[]): Promise<void> {
           ...(typeof (m.data as { rideId?: string } | undefined)?.rideId === 'string'
             ? { collapseId: (m.data as { rideId?: string }).rideId }
             : {}),
+          // Oferta de corrida é perecível: uma oferta velha NÃO deve tocar num
+          // celular que estava offline e só reconectou (o dispatch já seguiu sem
+          // ele). `ttl:30` descarta o push após 30s na entrega (Android FCM
+          // time_to_live / iOS apns-expiration) e `priority:'high'` acorda o
+          // aparelho na hora. Aplicado só à oferta (type 'new_ride'); os demais
+          // avisos seguem o padrão do Expo.
+          ...((m.data as { type?: string } | undefined)?.type === 'new_ride'
+            ? { ttl: 30, priority: 'high' as const }
+            : {}),
         }))
       ),
     });
   } catch {
     // push é best-effort
+  }
+}
+
+/**
+ * Envia um push SILENCIOSO (data-only) de REVOGAÇÃO aos demais motoristas: sem
+ * título/corpo/som, apenas o payload `{ type:'offer_revoked', rideId }`. No
+ * Android (`_contentAvailable` + `priority:'high'`) acorda a task de background
+ * de forma confiável para DISPENSAR o card da oferta que já não vale. No iOS é
+ * best-effort declarado — a Apple estrangula silent push (content-available),
+ * então quando o SO não acorda a task, o backstop de 1,5s + collapseId limpam
+ * ao reabrir. NÃO substitui o push de oferta (que segue normal com som), só
+ * complementa a limpeza fantasma.
+ *
+ * `ttl:30` descarta a revogação se não entregar em 30s (a essa altura a oferta
+ * já expirou por conta própria) e `collapseId=rideId` casa o mesmo slot da
+ * bandeja da oferta original. Best-effort: falhas são engolidas.
+ */
+export async function sendSilentRevokePushAsync(
+  tokens: string[],
+  rideId: string
+): Promise<void> {
+  if (!rideId) return;
+  const valid = tokens.filter((t) => t?.startsWith('ExponentPushToken'));
+  if (valid.length === 0) return;
+
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(
+        valid.map((to) => ({
+          to,
+          // SEM sound/title/body — mensagem de controle, não deve notificar.
+          data: { type: 'offer_revoked', rideId },
+          channelId: 'rides',
+          priority: 'high' as const,
+          ttl: 30,
+          collapseId: rideId,
+          // iOS: entrega em background sem alerta visível (silent push).
+          _contentAvailable: true,
+        }))
+      ),
+    });
+  } catch {
+    // best-effort — a revogação também chega via Realtime em foreground
   }
 }
 
