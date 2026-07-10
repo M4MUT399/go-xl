@@ -531,22 +531,35 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const distLabelRaw = currentStep ? formatStepDist(currentStep.distance) : '';
   const distLabel   = typeof distLabelRaw === 'string' ? distLabelRaw : t(distLabelRaw.nowKey);
 
-  // Visão geral ao trocar de fase (embarque → destino); depois a câmera drone
-  // retoma o controle no próximo fix (re-engaja o follow).
+  // Câmera "drone" engajada IMEDIATAMENTE ao iniciar a corrida e a cada troca
+  // de fase (embarque → destino) — zoom máximo (18.5, igual parado) + pitch
+  // 45°, nunca uma "visão geral" via fitToCoordinates. Usava fitToCoordinates
+  // com UM único ponto (quando o GPS ainda não tinha resolvido o 1º fix) +
+  // edgePadding grande — combinação que faz o MapKit/Google Maps SDK estourar
+  // o zoom pro mundo inteiro e ficar preso lá (bug conhecido da lib), porque
+  // sem um 2º fix de GPS (ex.: motorista parado) a câmera nunca mais era
+  // corrigida. Agora usa a melhor posição já conhecida na hora (fix de GPS >
+  // posição do aceite, já disponível via param > alvo) e SEMPRE anima direto
+  // pro zoom/pitch de perseguição — o próximo fix real (efeito abaixo) só
+  // refina center/heading/zoom, nunca precisa "consertar" um zoom quebrado.
   useEffect(() => {
     if (!mapRef.current) return;
-    const coords = location
-      ? [
-          { latitude: location.lat, longitude: location.lng },
-          { latitude: target.lat, longitude: target.lng },
-        ]
-      : [{ latitude: target.lat, longitude: target.lng }];
+    const center = location
+      ? { latitude: location.lat, longitude: location.lng }
+      : initialDriverLocation
+        ? { latitude: initialDriverLocation.lat, longitude: initialDriverLocation.lng }
+        : { latitude: target.lat, longitude: target.lng };
     followingRef.current = true;
     setFollowing(true);
-    mapRef.current.fitToCoordinates(coords, {
-      edgePadding: { top: 160, right: 60, bottom: 320, left: 60 },
-      animated: true,
-    });
+    mapRef.current.animateCamera(
+      {
+        center,
+        heading: contHeadingRef.current,
+        pitch: 45,
+        zoom: zoomForSpeed(location?.speed ?? 0),
+      },
+      { duration: 350 },
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
@@ -620,6 +633,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         rotateEnabled={false}
         pitchEnabled={false}
         onPanDrag={pauseFollow}
+        // onPanDrag só cobre arrasto; um PINCH de zoom não passa por ele, então
+        // sem isto o próximo fix de GPS (até ~1.2s depois) desfazia o zoom
+        // manual do motorista. `isGesture` (true só quando a mudança de região
+        // veio de um toque do usuário, não de animateCamera) cobre pinch e
+        // qualquer outro gesto que não seja pan.
+        onRegionChangeComplete={(_region, details) => {
+          if (details?.isGesture) pauseFollow();
+        }}
         mapPadding={{ top: Math.round(screenH * 0.16), right: 0, bottom: 0, left: 0 }}
       >
         <Marker
