@@ -30,7 +30,7 @@ export function DutyStatusBanner({ status, warn }: Props) {
         <Text style={styles.icon}>😴</Text>
         <View style={styles.textCol}>
           <Text style={styles.restTitle}>{t('duty.restTitle', 'Mandatory rest')}</Text>
-          <Text style={styles.body}>
+          <Text style={[styles.body, styles.restBody]}>
             {t('duty.restBody', 'Driving limit reached. Back online at')} {clock(status.restUntil)}
           </Text>
         </View>
@@ -44,7 +44,7 @@ export function DutyStatusBanner({ status, warn }: Props) {
         <Text style={styles.icon}>⏳</Text>
         <View style={styles.textCol}>
           <Text style={styles.warnTitle}>{t('duty.warnTitle', 'Driving limit approaching')}</Text>
-          <Text style={styles.body}>
+          <Text style={[styles.body, styles.warnBody]}>
             {formatHm(status.remainingMinutes)} {t('duty.warnBody', 'left before mandatory rest')}
           </Text>
         </View>
@@ -68,12 +68,16 @@ function makeStyles(colors: AppTheme) {
       paddingHorizontal: 14,
       borderWidth: 1.5,
     },
-    rest: { backgroundColor: 'rgba(220,53,69,0.16)', borderColor: colors.error },
-    warn: { backgroundColor: 'rgba(201,168,76,0.16)', borderColor: colors.accent },
+    rest: { backgroundColor: colors.error, borderColor: colors.black, borderWidth: 2 },
+    warn: { backgroundColor: colors.accent, borderColor: colors.black, borderWidth: 2 },
     icon: { fontSize: 24 },
     textCol: { flex: 1 },
-    restTitle: { color: colors.error, fontSize: 14, fontWeight: '800' },
-    warnTitle: { color: colors.accent, fontSize: 14, fontWeight: '800' },
+    restTitle: { color: colors.black, fontSize: 14, fontWeight: '800' },
+    warnTitle: { color: colors.black, fontSize: 14, fontWeight: '800' },
     body: { color: colors.gray[300], fontSize: 12, marginTop: 2 },
+    // Nos dois banners sólidos (vermelho de descanso e âmbar de aviso) o texto
+    // do corpo vira PRETO para contrastar com o fundo cheio.
+    restBody: { color: colors.black },
+    warnBody: { color: colors.black },
   });
 }
