@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Platform, Alert, Image,
+  Platform, Alert, Image, Dimensions,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, MarkerAnimated, AnimatedRegion, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useIsFocused } from '@react-navigation/native';
@@ -13,7 +13,13 @@ import { AppTheme } from '../../constants/theme';
 import { Button } from '../../components/common/Button';
 import { useDriverRide, notifyPassengerRideCompleted } from '../../hooks/useRide';
 import { useAuth } from '../../hooks/useAuth';
-import { useLocation } from '../../hooks/useLocation';
+import { useNavigationLocation } from '../../hooks/useNavigationLocation';
+import { simulateRouteFixes, SimFix } from '../../lib/nav/simulator';
+import {
+  fromMapCoord, toMapCoord, LatLng,
+  nearestPointOnPath, splitPathAtSnap, shortestAngleDelta, haversineMeters,
+} from '../../lib/nav/geo';
+import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency } from '../../lib/format';
@@ -101,16 +107,50 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  // watch: true → posição contínua durante a navegação
-  const { location } = useLocation({ watch: true });
+  // Simulação (só em DEV): grava um snapshot da rota atual e "dirige" por ela,
+  // 1 fix/s, sem GPS — valida a fluidez do marcador/câmera no emulador.
+  const [simFixes, setSimFixes] = useState<SimFix[] | null>(null);
+  // Fonte de localização de MÁXIMA precisão já suavizada (Kalman + heading
+  // veicular) — substitui o useLocation genérico só nesta tela de navegação.
+  const { fix: location } = useNavigationLocation({ enabled: true, simulate: simFixes, simulateIntervalMs: 1000 });
+
   const { updateRideStatus, refundRide } = useDriverRide(profile?.id);
   const lastUploadedCoord = useRef<{ lat: number; lng: number } | null>(null);
   const isFocused = useIsFocused();
   const [phase, setPhase] = useState<Phase>('pickup');
   const [loading, setLoading] = useState(false);
-  // Mantém o snapshot do marcador ligado por um instante a cada movimento,
-  // para o ícone do carro pintar e acompanhar a posição no iOS.
-  const [tracksCar, setTracksCar] = useState(true);
+  const { height: screenH } = Dimensions.get('window');
+
+  // ── Animação do marcador (posição suave, SEM teleporte) ─────────────────────
+  // O marcador do carro é um MarkerAnimated preso a esta AnimatedRegion; cada
+  // fix ANIMA a região da posição atual até a nova (a lib move o marcador
+  // nativamente, sem re-render do React). Semeia na posição já conhecida do
+  // aceite (ou no ponto de embarque) para não abrir no meio do oceano.
+  const carRegion = useRef(
+    new AnimatedRegion({
+      latitude: (initialDriverLocation ?? rideOrigin(ride)).lat,
+      longitude: (initialDriverLocation ?? rideOrigin(ride)).lng,
+      latitudeDelta: 0,
+      longitudeDelta: 0,
+    }),
+  ).current;
+  const hasFixRef = useRef(false);
+  // Deixa o marcador repintar (tracksViewChanges) só no primeiro fix; depois
+  // congela — a POSIÇÃO já é animada nativamente, não precisa repintar a cada fix.
+  const [markerReady, setMarkerReady] = useState(false);
+  // Rumo CONTÍNUO (desenrolado): acumula deltas mínimos para a câmera girar
+  // sempre pelo caminho angular mais curto (ex.: 359°→1° gira +2°, não -358°).
+  const prevHeadingRef = useRef<number | null>(null);
+  const contHeadingRef = useRef(0);
+  const lastFixTsRef = useRef<number | null>(null);
+  // Câmera "drone" segue o carro; PAUSA quando o motorista arrasta o mapa e
+  // volta ao tocar em "recentralizar".
+  const followingRef = useRef(true);
+  const [following, setFollowing] = useState(true);
+  // Divisão da rota em [percorrido] (cinza) × [restante] (colorido), recalculada
+  // a cada fix pelo ponto mais próximo na polyline.
+  const [routeSplit, setRouteSplit] = useState<{ traveled: LatLng[]; remaining: LatLng[] } | null>(null);
+  const offRouteRef = useRef<OffRouteState>(initialOffRouteState);
 
   const styles = makeStyles(colors);
 
@@ -142,11 +182,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   useChatAlert(ride.id, profile?.id, isFocused, t('driverNav.passenger'));
 
   useEffect(() => {
-    if (!location) return;
-    setTracksCar(true);
-    const t = setTimeout(() => setTracksCar(false), 1000);
+    if (!location || markerReady) return;
+    const t = setTimeout(() => setMarkerReady(true), 800);
     return () => clearTimeout(t);
-  }, [location?.lat, location?.lng, location?.heading]);
+  }, [location, markerReady]);
 
   const origin = rideOrigin(ride);
   const dest   = rideDestination(ride);
@@ -186,11 +225,6 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       : initialDriverLocation ?? null
   );
   const mapRef = useRef<MapView>(null);
-  const lastCameraUpdate = useRef(0);
-  // Último rumo VÁLIDO do GPS. Quando o curso é desconhecido (parado ou GPS sem
-  // heading) mantemos o anterior em vez de "pular" para o norte — é assim que
-  // Waze/Uber giram o mapa continuamente no sentido do deslocamento.
-  const lastHeadingRef = useRef(0);
 
   useEffect(() => {
     if (!location) return;
@@ -206,30 +240,95 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }
   }, [location?.lat, location?.lng]);
 
-  // ── Modo navegação: câmera segue posição + rumo (mapa gira como Waze/Uber) ──
+  // ── Marcador + câmera drone (estilo Waze) ───────────────────────────────────
+  // A cada fix: (1) ANIMA o marcador da posição atual até a nova (nunca
+  // teleporta) e (2) reposiciona a câmera em perspectiva (pitch 45°, zoom por
+  // velocidade, heading-up). Ambas com a MESMA duração (o intervalo entre
+  // fixes), para ficarem em sincronia. Nada aqui reconstrói o mapa — só move
+  // marcador e câmera; iniciar uma nova animação cancela a anterior pendente.
   useEffect(() => {
-    if (!location || !mapRef.current) return;
-    const now = Date.now();
-    if (now - lastCameraUpdate.current < 1000) return;
-    lastCameraUpdate.current = now;
-    // Só atualiza o rumo quando o GPS informa um curso válido; caso contrário
-    // mantém o último (não volta ao norte quando o motorista para no sinal).
-    if (location.heading != null) lastHeadingRef.current = location.heading;
-    mapRef.current.animateCamera(
-      {
-        center: { latitude: location.lat, longitude: location.lng },
-        heading: lastHeadingRef.current,
-        zoom: 17.5,
-        pitch: 55,
-      },
-      { duration: 700 },
-    );
-  }, [location?.lat, location?.lng, location?.heading]);
+    if (!location) return;
+    const now = location.timestampMs;
+    const prevTs = lastFixTsRef.current;
+    lastFixTsRef.current = now;
+    const dt = prevTs != null ? Math.max(400, Math.min(1200, now - prevTs)) : 0;
+
+    // (1) posição do marcador — primeiro fix crava (sem glide de um seed velho).
+    if (!hasFixRef.current) {
+      carRegion.setValue({ latitude: location.lat, longitude: location.lng, latitudeDelta: 0, longitudeDelta: 0 });
+      hasFixRef.current = true;
+    } else {
+      carRegion
+        // A tipagem da lib exige toValue/useNativeDriver, mas o AnimatedRegion
+        // usa mesmo é latitude/longitude — daí o cast pontual.
+        .timing({
+          latitude: location.lat,
+          longitude: location.lng,
+          latitudeDelta: 0,
+          longitudeDelta: 0,
+          duration: dt || 1000,
+          useNativeDriver: false,
+          toValue: 0,
+        } as any)
+        .start();
+    }
+
+    // (2) rumo contínuo (desenrolado) para a câmera girar pelo caminho mais curto.
+    if (prevHeadingRef.current == null) {
+      contHeadingRef.current = location.heading;
+    } else {
+      contHeadingRef.current += shortestAngleDelta(prevHeadingRef.current, location.heading);
+    }
+    prevHeadingRef.current = location.heading;
+
+    // (3) câmera drone — só quando "seguindo" (pausada durante arrasto do mapa).
+    if (followingRef.current && mapRef.current) {
+      mapRef.current.animateCamera(
+        {
+          center: { latitude: location.lat, longitude: location.lng },
+          heading: contHeadingRef.current,
+          pitch: 45,
+          zoom: zoomForSpeed(location.speed),
+        },
+        { duration: dt || 700 },
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.timestampMs]);
 
   const { route: path } = useRideRoute(
     routeOrigin,
     { lat: target.lat, lng: target.lng }
   );
+
+  // ── Snap na rota: separa percorrido/restante + dispara re-rota por desvio ────
+  // A cada fix, projeta o carro na polyline: o trecho antes do ponto vira
+  // "percorrido" (cinza, some) e o depois "restante" (colorido). Se o desvio da
+  // rota passar de 40 m por 5 s contínuos, recalcula a rota a partir da posição
+  // atual (mesmo throttle/estado do útil nav/follow, testado à parte).
+  useEffect(() => {
+    const coords = path?.coordinates;
+    if (!location || !coords || coords.length < 2) {
+      setRouteSplit(null);
+      return;
+    }
+    const lite = coords.map(fromMapCoord);
+    const snap = nearestPointOnPath({ lat: location.lat, lng: location.lng }, lite);
+    if (!snap) {
+      setRouteSplit(null);
+      return;
+    }
+    const { traveled, remaining } = splitPathAtSnap(lite, snap);
+    setRouteSplit({ traveled: traveled.map(toMapCoord), remaining: remaining.map(toMapCoord) });
+
+    const r = updateOffRoute(offRouteRef.current, snap.distanceM, Date.now());
+    offRouteRef.current = r.state;
+    if (r.reroute) {
+      lastRouteCoord.current = { lat: location.lat, lng: location.lng };
+      setRouteOrigin({ lat: location.lat, lng: location.lng });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.lat, location?.lng, path]);
 
   // Passos da rota (turn-by-turn)
   const steps: RouteStep[] = path?.steps ?? [];
@@ -432,8 +531,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const distLabelRaw = currentStep ? formatStepDist(currentStep.distance) : '';
   const distLabel   = typeof distLabelRaw === 'string' ? distLabelRaw : t(distLabelRaw.nowKey);
 
-  // Visão geral ao trocar de fase (embarque → destino); depois a câmera de
-  // navegação retoma o controle automaticamente no próximo update de posição.
+  // Visão geral ao trocar de fase (embarque → destino); depois a câmera drone
+  // retoma o controle no próximo fix (re-engaja o follow).
   useEffect(() => {
     if (!mapRef.current) return;
     const coords = location
@@ -442,7 +541,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           { latitude: target.lat, longitude: target.lng },
         ]
       : [{ latitude: target.lat, longitude: target.lng }];
-    lastCameraUpdate.current = 0; // força re-engajamento do modo navegação logo em seguida
+    followingRef.current = true;
+    setFollowing(true);
     mapRef.current.fitToCoordinates(coords, {
       edgePadding: { top: 160, right: 60, bottom: 320, left: 60 },
       animated: true,
@@ -450,20 +550,46 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
+  // Motorista arrastou o mapa → pausa o follow (deixa ele explorar sem a câmera
+  // "brigar"); o botão de recentralizar reata.
+  function pauseFollow() {
+    if (!followingRef.current) return;
+    followingRef.current = false;
+    setFollowing(false);
+  }
+
   function recenter() {
     if (!location || !mapRef.current) return;
-    lastCameraUpdate.current = 0; // força update imediato no próximo ciclo
-    if (location.heading != null) lastHeadingRef.current = location.heading;
+    followingRef.current = true;
+    setFollowing(true);
     mapRef.current.animateCamera(
       {
         center: { latitude: location.lat, longitude: location.lng },
-        heading: lastHeadingRef.current,
-        zoom: 17.5,
-        pitch: 55,
+        heading: contHeadingRef.current,
+        pitch: 45,
+        zoom: zoomForSpeed(location.speed),
       },
-      { duration: 300 },
+      { duration: 400 },
     );
   }
+
+  // Liga/desliga a simulação (só DEV): congela a rota atual e "dirige" por ela.
+  function toggleSim() {
+    if (simFixes) {
+      setSimFixes(null);
+      return;
+    }
+    const coords = path?.coordinates;
+    if (!coords || coords.length < 2) {
+      Alert.alert('Simulação', 'Aguarde a rota carregar para simular.');
+      return;
+    }
+    setSimFixes(simulateRouteFixes(coords.map(fromMapCoord), { speedMps: 13.9, intervalMs: 1000 }));
+    followingRef.current = true;
+    setFollowing(true);
+  }
+
+  const showCar = !!location || !!initialDriverLocation;
 
   return (
     <View style={styles.container}>
@@ -487,6 +613,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         showsUserLocation={false}
         showsMyLocationButton={false}
         followsUserLocation={false}
+        // Navegação: gestos de ROTAÇÃO/INCLINAÇÃO desligados (a câmera drone
+        // controla heading/pitch); o motorista ainda pode arrastar/dar zoom — e
+        // o arrasto PAUSA o follow (estilo Waze). mapPadding empurra o carro
+        // para o terço inferior, deixando a via à frente ocupar a tela.
+        rotateEnabled={false}
+        pitchEnabled={false}
+        onPanDrag={pauseFollow}
+        mapPadding={{ top: Math.round(screenH * 0.16), right: 0, bottom: 0, left: 0 }}
       >
         <Marker
           coordinate={{ latitude: target.lat, longitude: target.lng }}
@@ -495,67 +629,87 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         >
           <View style={phase === 'pickup' ? styles.markerPickup : styles.markerDropoff} />
         </Marker>
-        {location && (
-          <Marker
-            coordinate={{ latitude: location.lat, longitude: location.lng }}
-            // Marcador de marca (o MESMO CarMarker das demais telas) — idêntico
-            // ao iOS e já robusto no Android (o triângulo "cru" era o antigo
-            // NavChevron, só usado aqui). A CÂMERA já gira para o rumo do
-            // motorista (heading-up, estilo Waze), então a seta do badge aponta
-            // sempre para CIMA (heading={0}) = sentido do movimento. Billboard
-            // (sem `flat`) mantém a logo em pé e legível sobre o mapa inclinado.
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={tracksCar}
-          >
-            <CarMarker scale={0.9} heading={0} />
-          </Marker>
-        )}
-        {/* Traça a rota IMEDIATAMENTE ao abrir a tela: usa a posição já conhecida
-            do motorista (GPS ao vivo ou, na falta dele por 1-2s, a localização
-            capturada no momento do aceite) — nunca fica com o mapa "vazio"
-            enquanto espera um novo fix de GPS. */}
-        {(location || routeOrigin) && (
+
+        {/* ── Rota LARGA com cantos arredondados ──────────────────────────────
+            Contorno dourado (casing) + núcleo navy por cima, ambos com pontas/
+            junções redondas e traço grosso — destaca-se sobre rua, água e
+            parques (modo claro) e some no trecho já percorrido (cinza). Sem
+            rota ainda: linha tracejada reta da posição conhecida até o alvo. */}
+        {routeSplit ? (
+          <>
+            {routeSplit.traveled.length > 1 && (
+              <Polyline
+                coordinates={routeSplit.traveled}
+                strokeColor={colors.gray[400] + '99'}
+                strokeWidth={12}
+                lineCap="round"
+                lineJoin="round"
+                zIndex={2}
+              />
+            )}
+            <Polyline
+              coordinates={routeSplit.remaining}
+              strokeColor={colors.accent}
+              strokeWidth={22}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={3}
+            />
+            <Polyline
+              coordinates={routeSplit.remaining}
+              strokeColor={colors.primary}
+              strokeWidth={14}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={4}
+            />
+          </>
+        ) : path?.coordinates ? (
+          <>
+            <Polyline coordinates={path.coordinates} strokeColor={colors.accent} strokeWidth={22} lineCap="round" lineJoin="round" zIndex={3} />
+            <Polyline coordinates={path.coordinates} strokeColor={colors.primary} strokeWidth={14} lineCap="round" lineJoin="round" zIndex={4} />
+          </>
+        ) : (location || routeOrigin) ? (
           <Polyline
-            // Contorno dourado (mais largo, atrás) + linha navy por cima:
-            // combinação da paleta da marca que se destaca tanto sobre ruas
-            // claras/cinza quanto sobre água/parques do mapa (modo claro).
-            coordinates={
-              path?.coordinates ?? [
-                {
-                  latitude: (location ?? routeOrigin)!.lat,
-                  longitude: (location ?? routeOrigin)!.lng,
-                },
-                { latitude: target.lat, longitude: target.lng },
-              ]
-            }
-            strokeColor={colors.accent}
-            strokeWidth={path ? 7 : 6}
-            lineDashPattern={path ? undefined : [6, 3]}
-            zIndex={1}
-          />
-        )}
-        {(location || routeOrigin) && (
-          <Polyline
-            coordinates={
-              path?.coordinates ?? [
-                {
-                  latitude: (location ?? routeOrigin)!.lat,
-                  longitude: (location ?? routeOrigin)!.lng,
-                },
-                { latitude: target.lat, longitude: target.lng },
-              ]
-            }
+            coordinates={[
+              { latitude: (location ?? routeOrigin)!.lat, longitude: (location ?? routeOrigin)!.lng },
+              { latitude: target.lat, longitude: target.lng },
+            ]}
             strokeColor={colors.primary}
-            strokeWidth={path ? 4 : 3}
-            lineDashPattern={path ? undefined : [6, 3]}
+            strokeWidth={6}
+            lineDashPattern={[6, 3]}
             zIndex={2}
           />
+        ) : null}
+
+        {showCar && (
+          <MarkerAnimated
+            // A posição vem da AnimatedRegion (animada nativamente, sem
+            // teleporte). A CÂMERA gira para o rumo (heading-up), então o badge
+            // é BILLBOARD (flat=false) com a seta apontando p/ cima (heading=0),
+            // mantendo a logo GoXL sempre legível sobre o mapa inclinado.
+            coordinate={carRegion as any}
+            anchor={{ x: 0.5, y: 0.5 }}
+            flat={false}
+            tracksViewChanges={!markerReady}
+          >
+            <CarMarker scale={0.9} heading={0} />
+          </MarkerAnimated>
         )}
       </MapView>
 
-      {location && (
+      {/* Só aparece quando o follow está pausado (motorista arrastou o mapa) —
+          igual ao Waze, que mostra "recentralizar" só quando você saiu do carro. */}
+      {location && !following && (
         <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
           <Text style={styles.recenterIcon}>◎</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Toggle da simulação — só em builds de desenvolvimento. */}
+      {__DEV__ && (
+        <TouchableOpacity style={styles.simBtn} onPress={toggleSim}>
+          <Text style={styles.simBtnText}>{simFixes ? '■' : '▶'} SIM</Text>
         </TouchableOpacity>
       )}
 
@@ -678,6 +832,23 @@ function makeStyles(colors: AppTheme) {
       elevation: 5,
     },
     recenterIcon: { fontSize: 22, color: colors.primary },
+    simBtn: {
+      position: 'absolute',
+      right: 16,
+      top: 110,
+      paddingHorizontal: 12,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
+    simBtnText: { color: colors.accent, fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
     chatBtn: {
       position: 'absolute',
       left: 16,
@@ -870,21 +1041,4 @@ function makeStyles(colors: AppTheme) {
       borderColor: colors.white,
     },
   });
-}
-
-// ─── Utilitário ──────────────────────────────────────────────────────────────
-
-function haversineMeters(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number }
-): number {
-  const R = 6371000;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((a.lat * Math.PI) / 180) *
-      Math.cos((b.lat * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
