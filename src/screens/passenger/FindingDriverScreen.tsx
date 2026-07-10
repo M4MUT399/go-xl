@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Animated, Alert, Platform,
+  Animated, Alert, Platform, Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -198,7 +198,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
             />
           ))}
           <View style={styles.carCircle}>
-            <Text style={styles.carEmoji}>🚗</Text>
+            <Image source={require('../../../assets/icon.png')} style={styles.carLogo} />
           </View>
         </View>
 
@@ -256,7 +256,10 @@ function makeStyles(colors: AppTheme) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    carEmoji: { fontSize: 36 },
+    // Logo GoXL no lugar do emoji de carro — recortada em CÍRCULO (borderRadius
+    // = metade do lado) para ficar concêntrica com o círculo dourado e os anéis
+    // pulsantes. O círculo dourado vira um "halo" ao redor da logo.
+    carLogo: { width: 56, height: 56, borderRadius: 28, resizeMode: 'cover' },
     title: { fontSize: 28, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 12, lineHeight: 36 },
     subtitle: { fontSize: 15, color: colors.gray[400], textAlign: 'center', lineHeight: 22, marginBottom: 32 },
     timer: { alignItems: 'center', marginBottom: 32 },
