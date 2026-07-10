@@ -27,6 +27,8 @@
 
 import Stripe from 'npm:stripe@17';
 import { createClient, SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import { reconcileSettlement, type RideTransferResult } from '../_shared/payout.ts';
+import { centsToDollars, dollarsToCents, sumDollarsToCents } from '../_shared/money.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
@@ -112,39 +114,54 @@ async function payoutDriver(
     return { driver_id: driverId, status: 'skipped', reason: 'payouts_disabled' };
   }
 
-  const total = Math.round(rides.reduce((s, r) => s + Number(r.driver_amount), 0) * 100) / 100;
-  const amountCents = Math.round(total * 100);
+  // Saldo em CENTAVOS inteiros (fim do "saldo fantasma" de float; _shared/money).
+  const amountCents = sumDollarsToCents(rides.map((r) => r.driver_amount));
   if (amountCents <= 0) {
     return { driver_id: driverId, status: 'skipped', reason: 'no_balance' };
   }
 
-  // 1) Cria o payout 'processing' e reserva as corridas ANTES de mover dinheiro.
+  // 1) Cria o payout 'processing'. O índice único parcial (migração 0046) garante
+  //    UM payout ativo por motorista: se houver um repasse manual em andamento, o
+  //    insert falha com 23505 e este motorista é PULADO (não repassa em dobro).
   const { data: payoutRow, error: insErr } = await admin
     .from('payouts')
-    .insert({ driver_id: driverId, amount: total, rides_count: rides.length, status: 'processing' })
-    .select()
+    .insert({ driver_id: driverId, amount: centsToDollars(amountCents), rides_count: rides.length, status: 'processing' })
+    .select('id')
     .single();
 
   if (insErr || !payoutRow) {
+    if (insErr?.code === '23505') {
+      return { driver_id: driverId, status: 'skipped', reason: 'payout_in_progress' };
+    }
     return { driver_id: driverId, status: 'failed', reason: insErr?.message ?? 'insert_failed' };
   }
   const payoutId = (payoutRow as { id: string }).id;
 
-  await admin.from('rides').update({ payout_id: payoutId }).in('id', rides.map((r) => r.id));
+  // RESERVA ATÔMICA: só vincula as corridas AINDA livres (payout_id IS NULL); o
+  // RETURNING (.select) devolve exatamente o que foi reservado.
+  const { data: claimed } = await admin
+    .from('rides')
+    .update({ payout_id: payoutId })
+    .in('id', rides.map((r) => r.id))
+    .is('payout_id', null)
+    .select('id, driver_id, driver_amount, stripe_payment_intent_id');
+  const claimedRows = (claimed as EligibleRide[]) ?? [];
+
+  if (claimedRows.length === 0) {
+    await admin.from('payouts').update({ status: 'failed', failure_reason: 'no_rides_claimed' }).eq('id', payoutId);
+    return { driver_id: driverId, status: 'skipped', reason: 'no_rides_claimed' };
+  }
 
   // 2) Transfer real: UM por corrida, amarrado à cobrança de origem via
   //    `source_transaction` quando disponível — remove a exigência de saldo
   //    disponível na plataforma (causa do "Insufficient funds" em modo teste).
-  //    Corridas cujo transfer falha voltam a payout_id = null para nova tentativa.
-  let transferred = 0;
-  let paidTotal = 0;
-  let firstTransferId: string | undefined;
-  let lastReason: string | undefined;
-  const failedIds: string[] = [];
-
-  for (const ride of rides) {
-    const cents = Math.round(Number(ride.driver_amount) * 100);
-    if (cents <= 0) { failedIds.push(ride.id); continue; }
+  const results: RideTransferResult[] = [];
+  for (const ride of claimedRows) {
+    const cents = dollarsToCents(ride.driver_amount);
+    if (cents <= 0) {
+      results.push({ rideId: ride.id, ok: false, amountCents: 0, reason: 'non_positive_amount' });
+      continue;
+    }
     const chargeId = await resolveChargeId(ride.stripe_payment_intent_id);
     try {
       const params: Stripe.TransferCreateParams = {
@@ -157,40 +174,40 @@ async function payoutDriver(
       const transfer = await stripe.transfers.create(params, {
         idempotencyKey: `payout_${payoutId}_${ride.id}`,
       });
-      transferred += 1;
-      paidTotal = Math.round((paidTotal + Number(ride.driver_amount)) * 100) / 100;
-      if (!firstTransferId) firstTransferId = transfer.id;
+      results.push({ rideId: ride.id, ok: true, amountCents: cents, transferId: transfer.id });
     } catch (e) {
-      lastReason = String(e);
-      failedIds.push(ride.id);
+      results.push({ rideId: ride.id, ok: false, amountCents: 0, reason: String(e) });
     }
   }
 
-  if (failedIds.length) {
-    await admin.from('rides').update({ payout_id: null }).in('id', failedIds);
+  // Conciliação pura (mesma regra do request-payout): completed/failed + quais desvincular.
+  const settled = reconcileSettlement(results);
+  if (settled.failedRideIds.length) {
+    await admin.from('rides').update({ payout_id: null }).in('id', settled.failedRideIds);
   }
 
-  if (transferred === 0) {
+  if (settled.status === 'failed') {
     await admin.from('payouts')
-      .update({ status: 'failed', failure_reason: lastReason ?? 'transfer_failed' })
+      .update({ status: 'failed', failure_reason: settled.lastReason ?? 'transfer_failed' })
       .eq('id', payoutId);
-    return { driver_id: driverId, status: 'failed', reason: lastReason ?? 'transfer_failed' };
+    await admin.from('rides').update({ payout_id: null }).eq('payout_id', payoutId);
+    return { driver_id: driverId, status: 'failed', reason: settled.lastReason ?? 'transfer_failed' };
   }
 
   await admin.from('payouts').update({
     status: 'completed',
     processed_at: new Date().toISOString(),
-    stripe_transfer_id: firstTransferId,
-    amount: paidTotal,
-    rides_count: transferred,
+    stripe_transfer_id: settled.firstTransferId,
+    amount: centsToDollars(settled.transferredCents),
+    rides_count: settled.transferredCount,
   }).eq('id', payoutId);
 
   return {
     driver_id: driverId,
     status: 'paid',
-    amount: paidTotal,
-    rides_count: transferred,
-    transfer_id: firstTransferId,
+    amount: centsToDollars(settled.transferredCents),
+    rides_count: settled.transferredCount,
+    transfer_id: settled.firstTransferId,
   };
 }
 
@@ -261,7 +278,7 @@ Deno.serve(async (req) => {
       }
 
       if (dryRun) {
-        const total = Math.round(rides.reduce((s, r) => s + Number(r.driver_amount), 0) * 100) / 100;
+        const total = centsToDollars(sumDollarsToCents(rides.map((r) => r.driver_amount)));
         results.push({ driver_id: driverId, status: 'paid', amount: total, rides_count: rides.length });
         continue;
       }
@@ -275,7 +292,7 @@ Deno.serve(async (req) => {
     }
 
     const paid = results.filter((r) => r.status === 'paid');
-    const total = Math.round(paid.reduce((s, r) => s + (r.amount ?? 0), 0) * 100) / 100;
+    const total = centsToDollars(sumDollarsToCents(paid.map((r) => r.amount)));
 
     return json({
       ok: true,

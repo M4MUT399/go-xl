@@ -24,6 +24,23 @@ export function functionUrl(name: string): string {
   return `${SUPABASE_URL}/functions/v1/${name}`;
 }
 
+/**
+ * Erro de Edge Function que PRESERVA o `code` estruturado devolvido pelo
+ * servidor (ex.: 'KYC_PENDING', 'PAYOUT_IN_PROGRESS'). Sem isto o app só teria a
+ * mensagem em texto e não poderia ramificar/localizar por código — era a razão
+ * de o repasse mostrar sempre um erro genérico.
+ */
+export class EdgeFunctionError extends Error {
+  code?: string;
+  status: number;
+  constructor(message: string, code: string | undefined, status: number) {
+    super(message);
+    this.name = 'EdgeFunctionError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 export async function callEdgeFunction<T>(
   name: string,
   body: Record<string, unknown> = {},
@@ -49,9 +66,13 @@ export async function callEdgeFunction<T>(
     'Não foi possível conectar. Verifique sua conexão e tente novamente.',
   );
 
-  const json = (await res.json()) as T & { error?: string };
+  const json = (await res.json()) as T & { error?: string; code?: string };
   if (!res.ok || json.error) {
-    throw new Error(json.error ?? 'Algo deu errado. Tente novamente.');
+    throw new EdgeFunctionError(
+      json.error ?? 'Algo deu errado. Tente novamente.',
+      json.code,
+      res.status,
+    );
   }
   return json;
 }

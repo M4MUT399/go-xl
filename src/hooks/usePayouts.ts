@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { callEdgeFunction } from '../lib/edgeFunction';
+import { callEdgeFunction, EdgeFunctionError } from '../lib/edgeFunction';
 
 export interface Payout {
   id: string;
@@ -58,9 +58,9 @@ export function usePayouts(driverId: string | undefined) {
    * conectada, soma as corridas elegíveis e cria o transfer no Stripe. Mover
    * dinheiro nunca pode depender do cliente — o app só dispara e reconsulta.
    */
-  const requestPayout = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
-    if (!driverId) return { ok: false, error: 'Não autenticado' };
-    if (pendingBalance <= 0) return { ok: false, error: 'Sem saldo disponível' };
+  const requestPayout = useCallback(async (): Promise<{ ok: boolean; error?: string; code?: string }> => {
+    if (!driverId) return { ok: false, error: 'Não autenticado', code: 'unauthorized' };
+    if (pendingBalance <= 0) return { ok: false, error: 'Sem saldo disponível', code: 'BALANCE_BELOW_MINIMUM' };
 
     try {
       await callEdgeFunction<{ ok?: boolean }>('request-payout');
@@ -70,7 +70,9 @@ export function usePayouts(driverId: string | undefined) {
       // Reconsulta mesmo em falha: o servidor pode ter registrado um repasse
       // 'failed' no histórico (e devolvido as corridas ao saldo).
       await refresh();
-      return { ok: false, error: e?.message ?? 'Não foi possível solicitar o repasse.' };
+      // Preserva o `code` estruturado do servidor para o app localizar a mensagem.
+      const code = e instanceof EdgeFunctionError ? e.code : undefined;
+      return { ok: false, error: e?.message ?? 'Não foi possível solicitar o repasse.', code };
     }
   }, [driverId, pendingBalance, refresh]);
 

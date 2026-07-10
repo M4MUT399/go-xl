@@ -104,7 +104,17 @@ export function EarningsScreen() {
             if (result.ok) {
               Alert.alert(t('earnings.payoutSentTitle'), t('earnings.payoutSentMessage'));
             } else {
-              Alert.alert(t('earnings.errorTitle'), result.error ?? t('earnings.tryAgain'));
+              // Mapeia o CÓDIGO estruturado do servidor para uma mensagem clara e
+              // localizada (nunca mais "erro genérico" no repasse).
+              const codeKey: Record<string, string> = {
+                NO_ACCOUNT: 'earnings.errNoAccount',
+                KYC_PENDING: 'earnings.errKycPending',
+                PAYOUT_IN_PROGRESS: 'earnings.errPayoutInProgress',
+                BALANCE_BELOW_MINIMUM: 'earnings.errBalanceBelowMin',
+                PROVIDER_ERROR: 'earnings.errProvider',
+              };
+              const key = result.code ? codeKey[result.code] : undefined;
+              Alert.alert(t('earnings.errorTitle'), key ? t(key) : (result.error ?? t('earnings.tryAgain')));
             }
           },
         },
