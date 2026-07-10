@@ -18,15 +18,20 @@ export type UpcomingScheduled = {
 const EMPTY: UpcomingScheduled = { ride: null, minutesUntil: Infinity, showBanner: false, imminent: false };
 
 /**
- * useUpcomingScheduledRide — observa a corrida agendada JÁ confirmada pelo
- * motorista mais próxima e devolve o estado do banner fixo (P2).
+ * useUpcomingScheduledRide — observa a corrida agendada mais próxima que
+ * pertence ao usuário e devolve o estado do banner fixo (P2). Compartilhado:
+ *   • role='driver'    → agendadas que o motorista confirmou (driver_id = eu).
+ *   • role='passenger' → agendadas que o passageiro marcou (passenger_id = eu),
+ *                        com ou sem motorista já atribuído.
  *
- * Fonte de verdade: rides com status='scheduled' e driver_id = eu. A cada 30s
- * (e a cada mudança realtime) recalcula a contagem regressiva. As janelas de
- * "mostrar banner" e "iminente" vêm de system_config (configurável por
- * jurisdição), com fallback local seguro.
+ * A cada 30s (e a cada mudança realtime) recalcula a contagem regressiva. As
+ * janelas de "mostrar banner" e "iminente" vêm de system_config (configurável
+ * por jurisdição), com fallback local seguro.
  */
-export function useUpcomingScheduledRide(driverId: string | undefined): UpcomingScheduled {
+export function useUpcomingScheduledRide(
+  userId: string | undefined,
+  role: 'driver' | 'passenger' = 'driver',
+): UpcomingScheduled {
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [cfg, setCfg] = useState({
     banner: getConfigDefault('scheduled_ride_banner_minutes'),
@@ -36,18 +41,21 @@ export function useUpcomingScheduledRide(driverId: string | undefined): Upcoming
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
 
   const refresh = useCallback(async () => {
-    if (!driverId) {
+    if (!userId) {
       setRides([]);
       return;
     }
+    // Coluna de propriedade conforme o papel: motorista vê as agendadas que ELE
+    // confirmou; passageiro vê as que ELE marcou (com ou sem motorista ainda).
+    const ownerColumn = role === 'driver' ? 'driver_id' : 'passenger_id';
     const { data } = await supabase
       .from('rides')
       .select('*')
       .eq('status', 'scheduled')
-      .eq('driver_id', driverId)
+      .eq(ownerColumn, userId)
       .order('scheduled_for', { ascending: true });
     setRides((data as RideRecord[]) ?? []);
-  }, [driverId]);
+  }, [userId, role]);
 
   // Carrega as janelas configuráveis (uma vez; cache de 60s no getConfig).
   useEffect(() => {
@@ -71,15 +79,15 @@ export function useUpcomingScheduledRide(driverId: string | undefined): Upcoming
 
   // Realtime: recarrega quando qualquer agendada muda (confirmação, release, etc.).
   useEffect(() => {
-    if (!driverId) return;
+    if (!userId) return;
     const channel = supabase
-      .channel(`driver-upcoming-${driverId}-${channelId}`)
+      .channel(`${role}-upcoming-${userId}-${channelId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rides', filter: 'status=eq.scheduled' }, () => {
         refresh();
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [driverId, refresh, channelId]);
+  }, [userId, role, refresh, channelId]);
 
   const now = new Date();
   const ride = pickSoonest(rides, now);

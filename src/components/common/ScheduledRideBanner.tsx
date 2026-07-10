@@ -15,12 +15,12 @@ type Props = {
 };
 
 /**
- * ScheduledRideBanner — banner fixo no mapa do motorista com a próxima corrida
- * agendada JÁ confirmada + contagem regressiva ao vivo (P2).
+ * ScheduledRideBanner — banner fixo com a próxima corrida agendada + contagem
+ * regressiva ao vivo (P2). Compartilhado entre motorista (mapa da DriverHome)
+ * e passageiro (mapa da HomeScreen): é puramente apresentacional, então a
+ * decisão de exibir, o alerta sonoro e o destino do toque ficam no container.
  *
  * Quando `imminent` (dentro da janela de lembrete), ganha destaque de urgência.
- * Tocar leva à tela de agendadas. É puramente apresentacional: a decisão de
- * exibir e o alerta sonoro ficam no container (DriverHomeScreen + hooks).
  */
 export function ScheduledRideBanner({ ride, minutesUntil, imminent, onPress }: Props) {
   const { colors } = useTheme();

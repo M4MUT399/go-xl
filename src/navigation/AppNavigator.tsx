@@ -17,6 +17,7 @@ import { useTheme } from '../hooks/useTheme';
 import { AppTheme } from '../constants/theme';
 import { useNotifications, InAppMessage } from '../hooks/useNotifications';
 import { useDriverReminderScheduler } from '../hooks/useDriverReminderScheduler';
+import { usePassengerReminderScheduler } from '../hooks/usePassengerReminderScheduler';
 import { setNotifyHandler } from '../lib/inAppNotify';
 import { useTranslation, type Lang } from '../i18n';
 
@@ -251,6 +252,11 @@ export function AppNavigator() {
   // Lembretes escalonados (2h/1h/30m/15m) das corridas agendadas do motorista.
   // Dispara mesmo com o app fechado; no-op para passageiro / perfil não carregado.
   useDriverReminderScheduler(profile?.type === 'driver' ? profile.id : undefined);
+
+  // Mesmos lembretes para o PASSAGEIRO (corridas que ele agendou), para que ele
+  // esteja pronto no embarque na hora marcada. Dispara mesmo com o app fechado;
+  // no-op para motorista / perfil não carregado.
+  usePassengerReminderScheduler(profile?.type === 'passenger' ? profile.id : undefined);
 
   // Conecta notifyInApp (usado por useChatAlert) ao banner do AppNavigator.
   // Garante que mensagens via postgres_changes também apareçam quando o broadcast falhar.

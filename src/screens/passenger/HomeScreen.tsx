@@ -18,6 +18,9 @@ import { useAuth } from '../../hooks/useAuth';
 import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
 import { useUnreadMessages } from '../../hooks/useUnreadMessages';
 import { usePassengerRide } from '../../hooks/useRide';
+import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
+import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
+import { ScheduledRideBanner } from '../../components/common/ScheduledRideBanner';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'PassengerTabs'> };
 
@@ -34,6 +37,11 @@ export function HomeScreen({ navigation }: Props) {
   // params de navegação e na subscription realtime). Agora o hook faz um fetch
   // inicial, então conseguimos oferecer "retomar corrida" ao reabrir o app.
   const { activeRide } = usePassengerRide(profile?.id);
+
+  // Próxima corrida AGENDADA do passageiro (com ou sem motorista) → banner fixo
+  // clicável + alerta sonoro in-app quando fica iminente. Espelha o motorista.
+  const upcomingScheduled = useUpcomingScheduledRide(profile?.id, 'passenger');
+  useScheduledReminderAlert(upcomingScheduled.imminent, upcomingScheduled.ride?.id ?? null);
 
   const styles = makeStyles(colors);
   // No Android, o topo (nome, calendário, avatar) fica colado demais na status
@@ -260,6 +268,17 @@ export function HomeScreen({ navigation }: Props) {
         </View>
 
         <View style={styles.bottomArea} pointerEvents="box-none">
+          {/* Banner clicável da próxima corrida agendada → abre a tela de
+              agendadas (card com todos os dados). Só aparece dentro da janela
+              configurável (scheduled_ride_banner_minutes, padrão 2h). */}
+          {upcomingScheduled.showBanner && upcomingScheduled.ride && (
+            <ScheduledRideBanner
+              ride={upcomingScheduled.ride}
+              minutesUntil={upcomingScheduled.minutesUntil}
+              imminent={upcomingScheduled.imminent}
+              onPress={() => navigation.navigate('ScheduledRides')}
+            />
+          )}
           <View style={styles.bottomRow} pointerEvents="box-none">
             <View style={styles.driversStatus}>
               <View style={[styles.statusDot, drivers.length > 0 ? styles.statusOnline : styles.statusOffline]} />

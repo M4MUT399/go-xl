@@ -14,7 +14,7 @@ import { rideOrigin, rideDestination } from '../../lib/ride';
 import { useTranslation } from '../../i18n';
 import { CarMarker } from '../../components/common/CarMarker';
 import { CrosshairIcon } from '../../components/common/CrosshairIcon';
-import { ScheduledRideBanner } from '../../components/driver/ScheduledRideBanner';
+import { ScheduledRideBanner } from '../../components/common/ScheduledRideBanner';
 import { DutyStatusBanner } from '../../components/driver/DutyStatusBanner';
 import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
 import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';

@@ -7,7 +7,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { useAuth } from '../../hooks/useAuth';
 import { showLocalNotification } from '../../lib/notifications';
 import { playScheduledReminderSound } from '../../hooks/useScheduledReminderAlert';
-import { ScheduledRideBanner } from '../../components/driver/ScheduledRideBanner';
+import { ScheduledRideBanner } from '../../components/common/ScheduledRideBanner';
 import { useTranslation } from '../../i18n';
 import type { RideRecord } from '../../types';
 import {
