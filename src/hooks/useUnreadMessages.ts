@@ -36,17 +36,23 @@ export function useUnreadMessages(passengerId: string | undefined) {
   const refresh = useCallback(async () => {
     if (!passengerId) { setChatRides([]); return; }
 
-    // 1. All rides the driver has ACCEPTED (scheduled or active).
-    //    `accepted_at IS NOT NULL` é a marca de que o motorista de fato ACEITOU
-    //    a corrida — uma oferta ainda pendente (driver_id preenchido, mas sem
-    //    accepted_at) ou uma corrida recusada NÃO deve gerar o balão de chat.
+    // 1. Somente a corrida que está EM ANDAMENTO agora (do aceite ao encerramento).
+    //    O balão de chat do passageiro vale APENAS durante a viagem ao vivo:
+    //    da aceitação (`accepted`) até o embarque/desembarque (`driver_en_route`,
+    //    `in_progress`). Assim que a corrida vira `completed`/`cancelled` ela sai
+    //    desta lista e o balão SOME na hora (via realtime UPDATE em `rides`).
+    //    • `accepted_at IS NOT NULL` = o motorista de fato ACEITOU (oferta ainda
+    //      pendente ou recusada NÃO gera balão).
+    //    • `'scheduled'` NÃO entra: um agendamento confirmado fica `scheduled`
+    //      por horas antes de começar — o chat só deve abrir quando a viagem
+    //      efetivamente inicia (o motorista tem o botão de chat próprio na Agenda).
     const { data: rides } = await supabase
       .from('rides')
       .select('id, driver_id, status')
       .eq('passenger_id', passengerId)
       .not('driver_id', 'is', null)
       .not('accepted_at', 'is', null)
-      .in('status', ['scheduled', 'accepted', 'driver_en_route', 'in_progress']);
+      .in('status', ['accepted', 'driver_en_route', 'in_progress']);
 
     if (!rides?.length) { setChatRides([]); return; }
 
