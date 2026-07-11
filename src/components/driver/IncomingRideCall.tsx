@@ -87,7 +87,9 @@ export function IncomingRideCall({
   const styles = makeStyles(colors);
 
   // Som/vibração recorrentes enquanto a chamada estiver ativa (para ao aceitar).
-  useRideCallAlert(!accepting);
+  // Delegado ao singleton offerAlertManager, chaveado por ride.id — ver
+  // useRideCallAlert. `!accepting` silencia na hora quando o aceite começa.
+  useRideCallAlert(!accepting, ride.id);
 
   // ─── Contagem regressiva ────────────────────────────────────────────────────
   const [remaining, setRemaining] = useState(timeoutSeconds);

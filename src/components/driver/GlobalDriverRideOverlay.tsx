@@ -5,6 +5,7 @@ import { useDriverRideContext } from '../../contexts/DriverRideContext';
 import { getConfig, getConfigDefault } from '../../lib/systemConfig';
 import { logRideOfferEvent } from '../../lib/rideOfferEvents';
 import { dismissRideNotifications } from '../../lib/notifications';
+import { offerAlertManager } from '../../lib/offerAlertManager';
 import { navigationRef } from '../../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { IncomingRideCall } from './IncomingRideCall';
@@ -53,6 +54,9 @@ export function GlobalDriverRideOverlay() {
   async function handleAccept() {
     if (!pendingRide) return;
     const pendingId = pendingRide.id;
+    // TERMINAL(accepted): silêncio IMEDIATO no toque em ACEITAR — antes de
+    // qualquer trabalho lento (cobrança do cartão pode levar ~20s). Lapida o id.
+    offerAlertManager.stopAll(pendingId, 'accepted');
     setAccepting(true);
     const ride = await acceptRide(pendingId, location ? { lat: location.lat, lng: location.lng } : null);
     setAccepting(false);
@@ -80,6 +84,9 @@ export function GlobalDriverRideOverlay() {
 
   function handleReject() {
     if (pendingRide) {
+      // TERMINAL(declined): PARA O SOM ANTES de qualquer chamada de rede — não
+      // espera o backend para silenciar. Lapida o id (re-oferta não re-toca).
+      offerAlertManager.stopAll(pendingRide.id, 'declined');
       logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
       releaseQrLockedRide(pendingRide);
       dismissRideNotifications(pendingRide.id);
@@ -89,6 +96,8 @@ export function GlobalDriverRideOverlay() {
 
   function handleExpire() {
     if (pendingRide) {
+      // TERMINAL(expired): esgotou o tempo da chamada.
+      offerAlertManager.stopAll(pendingRide.id, 'expired');
       logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
       releaseQrLockedRide(pendingRide);
       dismissRideNotifications(pendingRide.id);

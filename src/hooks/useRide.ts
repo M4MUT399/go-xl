@@ -11,6 +11,7 @@ import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import { canReceiveNewRideOffer } from '../lib/rideDispatch';
 import { resolveRevocation, type RideRevokeReason } from '../lib/rideRevocation';
+import { offerAlertManager } from '../lib/offerAlertManager';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
@@ -985,6 +986,18 @@ export function useDriverRide(driverId: string | undefined) {
     activeRideRef.current = activeRide;
   }, [activeRide]);
 
+  // ─── OfferAlertManager: fechar o card sob ordem do dono único do alerta ──────
+  // O singleton (watchdog de 20s, revogação, etc.) pode decidir encerrar uma
+  // oferta. Quando isso ocorre para a corrida imediata pendente, ele chama este
+  // callback para zerar o `pendingRide` — mantendo o card em sincronia com o som
+  // (o som já foi parado pelo próprio stopAll). Só age se ainda for a MESMA
+  // corrida, para não apagar uma nova oferta que tenha entrado no meio-tempo.
+  useEffect(() => {
+    return offerAlertManager.registerForceClose((rideId) => {
+      if (pendingRideIdRef.current === rideId) setPendingRide(null);
+    });
+  }, []);
+
   // Descarta o popup de agendamento automaticamente quando o horário passa
   useEffect(() => {
     if (!pendingScheduledRide?.scheduled_for) return;
@@ -1010,7 +1023,11 @@ export function useDriverRide(driverId: string | undefined) {
       .eq('status', 'requesting')
       .maybeSingle()
       .then(({ data }) => {
-        if (data && canReceiveNewRideOffer(activeRideRef.current, data as Ride)) {
+        if (
+          data &&
+          !offerAlertManager.isTombstoned((data as Ride).id) &&
+          canReceiveNewRideOffer(activeRideRef.current, data as Ride)
+        ) {
           setPendingRide(data as Ride);
         }
       });
@@ -1069,6 +1086,7 @@ export function useDriverRide(driverId: string | undefined) {
       if (
         data &&
         (data as Ride).id !== pendingRideIdRef.current &&
+        !offerAlertManager.isTombstoned((data as Ride).id) &&
         canReceiveNewRideOffer(activeRideRef.current, data as Ride)
       ) {
         setPendingRide(data as Ride);
@@ -1195,7 +1213,11 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          if ((!ride.driver_id || ride.driver_id === driverId) && canReceiveNewRideOffer(activeRideRef.current, ride)) {
+          if (
+            (!ride.driver_id || ride.driver_id === driverId) &&
+            !offerAlertManager.isTombstoned(ride.id) &&
+            canReceiveNewRideOffer(activeRideRef.current, ride)
+          ) {
             setPendingRide(ride);
           }
         }
@@ -1236,7 +1258,13 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
-          if (!ride.driver_id && canReceiveNewRideOffer(activeRideRef.current, ride)) setPendingRide(ride);
+          if (
+            !ride.driver_id &&
+            !offerAlertManager.isTombstoned(ride.id) &&
+            canReceiveNewRideOffer(activeRideRef.current, ride)
+          ) {
+            setPendingRide(ride);
+          }
         }
       )
       .on(
@@ -1307,6 +1335,15 @@ export function useDriverRide(driverId: string | undefined) {
 
       // Remove o card de chamada (para o som) desta corrida, se estiver pendente.
       if (actions.clearPendingRide) {
+        // TERMINAL: para o som/vibração/watchdog e lapida o id AGORA — sem
+        // depender do unmount do card (que pode atrasar). stopAll também dispensa
+        // a notificação e fecha o card via forceClose, mas mantemos o
+        // setPendingRide(null) explícito para o caso raro de o callback ainda não
+        // estar registrado.
+        offerAlertManager.stopAll(
+          rideId!,
+          reason === 'taken' ? 'taken' : reason === 'expired' ? 'expired' : 'revoked'
+        );
         setPendingRide(null);
         // Dispensa também a notificação de oferta da bandeja/lockscreen (item 3).
         dismissRideNotifications(rideId!);

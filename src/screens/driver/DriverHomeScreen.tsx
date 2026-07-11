@@ -56,7 +56,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   // chamada de corrida imediata) até o motorista aceitar ou recusar — o
   // passageiro escolheu este motorista especificamente, então a notificação
   // precisa insistir, não apenas tocar uma vez.
-  useRideCallAlert(isQrLockedSchedule);
+  useRideCallAlert(isQrLockedSchedule, isQrLockedSchedule ? (pendingScheduledRide?.id ?? null) : null);
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
   // Item 1: passa os segmentos ociosos do turno (veículo parado) para que a
   // contagem só corra com o veículo em movimento.
