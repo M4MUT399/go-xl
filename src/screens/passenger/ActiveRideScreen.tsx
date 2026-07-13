@@ -231,26 +231,55 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
   // Sai da tela quando a corrida chega a um status terminal — de QUALQUER
   // fonte que atualize `ride.status` (o evento realtime acima OU o polling de
-  // telemetria a cada 4s, logo abaixo). Antes, só o handler do realtime
-  // navegava; como o realtime é instável no Expo Go/app em background (ver
-  // comentário no polling), o passageiro podia ficar "preso" nesta tela com
-  // `ride.status` já 'completed'/'cancelled' no banco (e até em `ride` local,
-  // via polling) mas sem nunca ser redirecionado. `handledTerminalRef` evita
-  // disparar a navegação mais de uma vez.
-  const handledTerminalRef = useRef(false);
+  // telemetria a cada 4s, logo abaixo).
+  //
+  // IMPORTANTE: a navegação pode ser silenciosamente engolida pelo SO quando
+  // um overlay nativo está por cima da tela no exato momento em que o
+  // motorista finaliza — ex.: a folha nativa de compartilhamento
+  // (`Share.share`, ver `handleShareTrip`) ou um `Alert.alert` de
+  // parar/auto-compartilhar (ver `handleStopSharing` e o efeito de
+  // auto-share). Nesse caso `navigation.replace`/`reset` não tem efeito
+  // visual e, com uma trava de "só uma tentativa", o passageiro ficava preso
+  // na tela mesmo com a corrida já concluída no banco.
+  //
+  // Correção: em vez de tentar navegar uma única vez, insistimos a cada
+  // ~1.2s até a tela realmente perder o foco (o que só acontece quando a
+  // navegação de fato aconteceu). O Alert de "corrida cancelada" é mostrado
+  // uma única vez (via `cancelAlertShownRef`), mas o `navigation.reset` em si
+  // pode ser reemitido com segurança a cada tentativa.
+  const cancelAlertShownRef = useRef(false);
   useEffect(() => {
-    if (handledTerminalRef.current) return;
-    if (ride.status === 'completed') {
-      handledTerminalRef.current = true;
-      navigation.replace('RateRide', { ride });
-    } else if (ride.status === 'cancelled') {
-      handledTerminalRef.current = true;
-      Alert.alert(
-        t('activeRide.rideCancelledTitle'),
-        t('activeRide.rideCancelledByDriver'),
-      );
-      navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
+    if (ride.status !== 'completed' && ride.status !== 'cancelled') return;
+
+    let stopped = false;
+
+    function attemptNavigateAway() {
+      if (stopped) return;
+      // Se a tela já perdeu o foco, a navegação anterior deu certo — encerra.
+      if (!navigation.isFocused()) {
+        stopped = true;
+        return;
+      }
+      if (ride.status === 'completed') {
+        navigation.replace('RateRide', { ride });
+      } else {
+        if (!cancelAlertShownRef.current) {
+          cancelAlertShownRef.current = true;
+          Alert.alert(
+            t('activeRide.rideCancelledTitle'),
+            t('activeRide.rideCancelledByDriver'),
+          );
+        }
+        navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
+      }
     }
+
+    attemptNavigateAway();
+    const retry = setInterval(attemptNavigateAway, 1200);
+    return () => {
+      stopped = true;
+      clearInterval(retry);
+    };
   }, [ride.status]);
 
   const origin = rideOrigin(ride);
