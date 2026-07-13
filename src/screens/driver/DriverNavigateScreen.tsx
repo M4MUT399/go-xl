@@ -225,6 +225,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       : initialDriverLocation ?? null
   );
   const mapRef = useRef<MapView>(null);
+  // O MKMapView nativo (iOS) só fica pronto para receber comandos de câmera
+  // depois de `onMapReady` — `mapRef.current` já existe antes disso, então
+  // chamar animateCamera nessa janela é causa conhecida do mapa "explodir"
+  // pro zoom do continente/mundo inteiro e travar os gestos (mesmo bug já
+  // corrigido em ActiveRideScreen.tsx). As duas chamadas de animateCamera
+  // abaixo esperam este flag.
+  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
     if (!location) return;
@@ -281,8 +288,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }
     prevHeadingRef.current = location.heading;
 
-    // (3) câmera drone — só quando "seguindo" (pausada durante arrasto do mapa).
-    if (followingRef.current && mapRef.current) {
+    // (3) câmera drone — só quando "seguindo" (pausada durante arrasto do mapa)
+    // e com o MKMapView/GoogleMap nativo já pronto (ver comentário no
+    // `mapReady`, acima) — sem isso o iOS pode estourar o zoom pro mundo todo.
+    if (followingRef.current && mapRef.current && mapReady) {
       mapRef.current.animateCamera(
         {
           center: { latitude: location.lat, longitude: location.lng },
@@ -294,7 +303,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location?.timestampMs]);
+  }, [location?.timestampMs, mapReady]);
 
   const { route: path } = useRideRoute(
     routeOrigin,
@@ -431,7 +440,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         onPress: async () => {
           // Extorna o pagamento antes de cancelar
           await refundRide(ride.id);
-          await updateRideStatus(ride.id, 'cancelled' as RideStatus);
+          const ok = await updateRideStatus(ride.id, 'cancelled' as RideStatus);
+          if (!ok) {
+            // Escrita não confirmada: NÃO sai da tela, senão a corrida fica
+            // presa como ativa no banco. O motorista pode tentar de novo.
+            Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+            return;
+          }
           navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
         },
       },
@@ -441,12 +456,25 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   async function handleNextPhase() {
     setLoading(true);
     if (phase === 'pickup') {
-      await updateRideStatus(ride.id, 'in_progress' as RideStatus);
+      const ok = await updateRideStatus(ride.id, 'in_progress' as RideStatus);
+      if (!ok) {
+        // Sem escrita confirmada não avança de fase — banco e tela ficariam
+        // dessincronizados (causa de corrida presa em produção).
+        setLoading(false);
+        Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+        return;
+      }
       setPhase('dropoff');
       // Reseta throttle para recalcular rota ao destino
       lastRouteCoord.current = null;
     } else {
-      await updateRideStatus(ride.id, 'completed' as RideStatus);
+      const ok = await updateRideStatus(ride.id, 'completed' as RideStatus);
+      if (!ok) {
+        // Idem: não notifica passageiro nem sai da tela sem o banco confirmar.
+        setLoading(false);
+        Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+        return;
+      }
       // Notifica o passageiro (push remoto para app em background)
       notifyPassengerRideCompleted(ride.passenger_id, ride.price);
       Alert.alert(
@@ -542,8 +570,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // posição do aceite, já disponível via param > alvo) e SEMPRE anima direto
   // pro zoom/pitch de perseguição — o próximo fix real (efeito abaixo) só
   // refina center/heading/zoom, nunca precisa "consertar" um zoom quebrado.
+  // Também espera `mapReady`: no mount, `mapRef.current` já existe antes do
+  // MKMapView (iOS) terminar o layout inicial, e chamar animateCamera nessa
+  // janela é a causa raiz do mapa abrir com zoom out pro continente inteiro e
+  // os gestos (pinch/touch) travados — por isso o efeito também reroda quando
+  // `mapReady` vira true (ex.: fase não mudou, mas o mapa só ficou pronto
+  // depois do mount).
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || !mapReady) return;
     const center = location
       ? { latitude: location.lat, longitude: location.lng }
       : initialDriverLocation
@@ -561,7 +595,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       { duration: 350 },
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [phase, mapReady]);
 
   // Motorista arrastou o mapa → pausa o follow (deixa ele explorar sem a câmera
   // "brigar"); o botão de recentralizar reata.
@@ -626,6 +660,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         showsUserLocation={false}
         showsMyLocationButton={false}
         followsUserLocation={false}
+        onMapReady={() => setMapReady(true)}
         // Navegação: gestos de ROTAÇÃO/INCLINAÇÃO desligados (a câmera drone
         // controla heading/pitch); o motorista ainda pode arrastar/dar zoom — e
         // o arrasto PAUSA o follow (estilo Waze). mapPadding empurra o carro

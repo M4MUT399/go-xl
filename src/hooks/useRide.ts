@@ -1620,11 +1620,35 @@ export function useDriverRide(driverId: string | undefined) {
     return true;
   }, [driverId]);
 
-  const updateRideStatus = useCallback(async (rideId: string, status: RideStatus) => {
-    await supabase
-      .from('rides')
-      .update({ status, ...(status === 'completed' ? { completed_at: new Date().toISOString() } : {}) })
-      .eq('id', rideId);
+  /**
+   * Grava o novo status da corrida — escrita CRÍTICA: se falhar em silêncio, a
+   * corrida fica presa num status ativo pra sempre (bug visto em produção).
+   * Por isso: (1) confirma via `.select()` que alguma linha foi realmente
+   * atualizada (update bloqueado por RLS ou id inexistente NÃO retorna erro,
+   * só 0 linhas); (2) tenta de novo com backoff em falha transitória;
+   * (3) devolve `false` em vez de resolver como sucesso, pra tela poder
+   * avisar o motorista e não avançar o fluxo.
+   */
+  const updateRideStatus = useCallback(async (rideId: string, status: RideStatus): Promise<boolean> => {
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const { data, error } = await supabase
+        .from('rides')
+        .update({ status, ...(status === 'completed' ? { completed_at: new Date().toISOString() } : {}) })
+        .eq('id', rideId)
+        .select('id');
+
+      if (!error && (data?.length ?? 0) > 0) return true;
+
+      console.warn(
+        `[useRide] updateRideStatus('${status}') falhou (tentativa ${attempt}/${MAX_ATTEMPTS}):`,
+        error ? error.message : 'nenhuma linha atualizada (id inexistente ou bloqueado por RLS)'
+      );
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+      }
+    }
+    return false;
   }, []);
 
   return {

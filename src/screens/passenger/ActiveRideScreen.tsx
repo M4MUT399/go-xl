@@ -219,22 +219,39 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           const updated = payload.new as Ride;
           // Merge (não substitui) para preservar origin/destination aninhados e
           // absorver a telemetria (driver_lat/lng/eta_*) que vem na linha.
+          // A NAVEGAÇÃO para o status terminal não acontece aqui — fica só no
+          // efeito abaixo, que reage a `ride.status` (ver comentário lá).
           setRide((prev) => ({ ...prev, ...updated }));
-          if (updated.status === 'completed') {
-            navigation.replace('RateRide', { ride: updated });
-          } else if (updated.status === 'cancelled') {
-            Alert.alert(
-              t('activeRide.rideCancelledTitle'),
-              t('activeRide.rideCancelledByDriver'),
-            );
-            navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
-          }
         }
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, [ride.id]);
+
+  // Sai da tela quando a corrida chega a um status terminal — de QUALQUER
+  // fonte que atualize `ride.status` (o evento realtime acima OU o polling de
+  // telemetria a cada 4s, logo abaixo). Antes, só o handler do realtime
+  // navegava; como o realtime é instável no Expo Go/app em background (ver
+  // comentário no polling), o passageiro podia ficar "preso" nesta tela com
+  // `ride.status` já 'completed'/'cancelled' no banco (e até em `ride` local,
+  // via polling) mas sem nunca ser redirecionado. `handledTerminalRef` evita
+  // disparar a navegação mais de uma vez.
+  const handledTerminalRef = useRef(false);
+  useEffect(() => {
+    if (handledTerminalRef.current) return;
+    if (ride.status === 'completed') {
+      handledTerminalRef.current = true;
+      navigation.replace('RateRide', { ride });
+    } else if (ride.status === 'cancelled') {
+      handledTerminalRef.current = true;
+      Alert.alert(
+        t('activeRide.rideCancelledTitle'),
+        t('activeRide.rideCancelledByDriver'),
+      );
+      navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
+    }
+  }, [ride.status]);
 
   const origin = rideOrigin(ride);
   const dest = rideDestination(ride);
