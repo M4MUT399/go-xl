@@ -958,6 +958,13 @@ export function useDriverRide(driverId: string | undefined) {
   const [pendingRide, setPendingRide] = useState<Ride | null>(null);
   const [pendingScheduledRide, setPendingScheduledRide] = useState<Ride | null>(null);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
+  // Corrida que o motorista já tinha em andamento e precisa "retomar" —
+  // populada apenas pelo fetch inicial (abaixo) quando o app é aberto/
+  // relançado com uma corrida accepted/driver_en_route/in_progress no banco
+  // mas nenhuma tela de navegação ativa (app foi morto/crashou no meio da
+  // corrida). Consumida por GlobalDriverRideOverlay para navegar de volta.
+  const [resumableRide, setResumableRide] = useState<Ride | null>(null);
+  const clearResumableRide = useCallback(() => setResumableRide(null), []);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
   const pendingRideIdRef = useRef<string | null>(null);
   const pendingScheduledRideIdRef = useRef<string | null>(null);
@@ -1010,6 +1017,31 @@ export function useDriverRide(driverId: string | undefined) {
     const timer = setTimeout(() => setPendingScheduledRide(null), msUntilExpiry);
     return () => clearTimeout(timer);
   }, [pendingScheduledRide?.scheduled_for]);
+
+  // ─── Retomada de corrida ativa ────────────────────────────────────────────
+  // Se o app for aberto/relançado (crash, kill manual, etc.) enquanto o
+  // motorista tem uma corrida accepted/driver_en_route/in_progress no banco,
+  // a tela DriverNavigate nunca é remontada sozinha — sem isto, a corrida
+  // fica "presa" (passageiro esperando, motorista sem navegação ativa).
+  // Aqui buscamos essa corrida e expomos via `resumableRide` para que
+  // GlobalDriverRideOverlay possa navegar de volta automaticamente.
+  useEffect(() => {
+    if (!driverId) return;
+    supabase
+      .from('rides')
+      .select('*')
+      .eq('driver_id', driverId)
+      .in('status', ['accepted', 'driver_en_route', 'in_progress'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          setActiveRide(data as Ride);
+          setResumableRide(data as Ride);
+        }
+      });
+  }, [driverId]);
 
   // ─── Fetch inicial ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1657,6 +1689,7 @@ export function useDriverRide(driverId: string | undefined) {
     confirmQrScheduledRide, rejectScheduledRide,
     updateRideStatus, setPendingRide, setPendingScheduledRide,
     refundRide,
+    resumableRide, clearResumableRide,
   };
 }
 

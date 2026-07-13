@@ -29,10 +29,45 @@ import { useTranslation } from '../../i18n';
 export function GlobalDriverRideOverlay() {
   const { profile } = useAuth();
   const { t } = useTranslation();
-  const { pendingRide, setPendingRide, acceptRide, isOnline, location } = useDriverRideContext();
+  const {
+    pendingRide, setPendingRide, acceptRide, isOnline, location,
+    resumableRide, clearResumableRide,
+  } = useDriverRideContext();
   const [accepting, setAccepting] = useState(false);
   const [callTimeout, setCallTimeout] = useState<number>(getConfigDefault('ride_offer_timeout_seconds'));
   const loggedReceivedRef = useRef<string | null>(null);
+  const resumeHandledIdRef = useRef<string | null>(null);
+
+  // ─── Retomada de corrida ativa após relançamento do app ────────────────────
+  // Se o motorista tinha uma corrida accepted/driver_en_route/in_progress e o
+  // app foi morto/crashou (ver useDriverRide), `resumableRide` chega
+  // preenchido no fetch inicial. Sem isto, DriverNavigateScreen nunca é
+  // remontada sozinha e a corrida fica "presa" — passageiro esperando e
+  // motorista sem tela de navegação ativa. Tenta navegar assim que o
+  // navigationRef estiver pronto, com retry (mesma lógica de espera usada no
+  // ActiveRideScreen para overlays nativos bloqueando a navegação).
+  useEffect(() => {
+    if (!resumableRide) return;
+    if (resumeHandledIdRef.current === resumableRide.id) return;
+    let stopped = false;
+    function attemptResume() {
+      if (stopped || !resumableRide) return;
+      if (!navigationRef.isReady()) return;
+      resumeHandledIdRef.current = resumableRide.id;
+      stopped = true;
+      navigationRef.navigate('DriverNavigate', {
+        ride: resumableRide,
+        initialDriverLocation: location ? { lat: location.lat, lng: location.lng } : undefined,
+      });
+      clearResumableRide();
+    }
+    attemptResume();
+    const retry = setInterval(attemptResume, 800);
+    return () => {
+      stopped = true;
+      clearInterval(retry);
+    };
+  }, [resumableRide, location, clearResumableRide]);
 
   // Carrega o timeout configurável da chamada de corrida (fallback local seguro).
   useEffect(() => {

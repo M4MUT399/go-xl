@@ -117,7 +117,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const { updateRideStatus, refundRide } = useDriverRide(profile?.id);
   const lastUploadedCoord = useRef<{ lat: number; lng: number } | null>(null);
   const isFocused = useIsFocused();
-  const [phase, setPhase] = useState<Phase>('pickup');
+  // Inicializa a partir do status real da corrida (não sempre 'pickup') —
+  // essencial para o caso de retomada (app relançado com a corrida já
+  // in_progress): sem isto, a tela reiniciava sempre na fase de embarque,
+  // mesmo que o motorista já estivesse a caminho do destino.
+  const [phase, setPhase] = useState<Phase>(() => (ride.status === 'in_progress' ? 'dropoff' : 'pickup'));
   const [loading, setLoading] = useState(false);
   const { height: screenH } = Dimensions.get('window');
 
