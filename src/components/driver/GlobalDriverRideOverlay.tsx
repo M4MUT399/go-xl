@@ -10,6 +10,7 @@ import { navigationRef } from '../../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { IncomingRideCall } from './IncomingRideCall';
 import { useTranslation } from '../../i18n';
+import { addCarRideActionListener } from '../../native/carRideBridge';
 
 /**
  * Overlay global da chamada de corrida do motorista.
@@ -83,6 +84,21 @@ export function GlobalDriverRideOverlay() {
     }
     if (!id) loggedReceivedRef.current = null;
   }, [pendingRide?.id, profile?.id]);
+
+  // ── Ações vindas do Android Auto (Aceitar/Recusar na tela do carro) ────────
+  // O carro só dispara a intenção (ver MainCarScreen.kt); a decisão de
+  // negócio continua toda aqui, reaproveitando os MESMOS handlers usados
+  // pelo card na tela do celular — sem duplicar lógica de aceite/recusa.
+  // Confere `rideId` contra a oferta pendente ATUAL antes de agir, para não
+  // reagir a um toque tardio sobre uma oferta já expirada/trocada.
+  useEffect(() => {
+    return addCarRideActionListener((action, rideId) => {
+      if (!pendingRide || pendingRide.id !== rideId) return;
+      if (action === 'accept') handleAccept();
+      else if (action === 'reject') handleReject();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRide?.id]);
 
   if (!pendingRide || !(isOnline || !!pendingRide.driver_id)) return null;
 

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Declara ao Android Auto que este app fornece um "app de navegação"
+  projetado (categoria exigida pela Car App Library para apps de
+  motorista/entrega/corrida — ver androidx.car.app.category.NAVIGATION).
+-->
+<automotiveApp>
+    <uses name="template" />
+</automotiveApp>

@@ -8,6 +8,7 @@ import { useDutyIdleTracker } from '../hooks/useDutyIdleTracker';
 import { supabase } from '../lib/supabase';
 import type { Coordinates } from '../types';
 import type { IdleSegment } from '../lib/drivingLimits';
+import { updateCarActiveRide, updateCarRideOffer } from '../native/carRideBridge';
 
 type UseDriverRideReturn = ReturnType<typeof useDriverRide>;
 
@@ -81,6 +82,21 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   }, [location, isOnline, profile?.id, onlineLoaded]);
 
   const ride = useDriverRide(profile?.id);
+
+  // ── Ponte com Android Auto (ver src/native/carRideBridge.ts) ────────────────
+  // Empurra a chamada pendente e a corrida ativa para a tela do carro sempre
+  // que mudam. No-op em iOS/Web (o módulo nativo só existe no Android) — ver
+  // comentário em carRideBridge.ts. A ação de aceitar/recusar disparada pelos
+  // botões do carro é OUVIDA em GlobalDriverRideOverlay.tsx, não aqui: aquele
+  // componente já concentra handleAccept/handleReject (alerta, navegação,
+  // etc.) e não faz sentido duplicar essa lógica.
+  useEffect(() => {
+    updateCarRideOffer(ride.pendingRide);
+  }, [ride.pendingRide]);
+
+  useEffect(() => {
+    updateCarActiveRide(ride.activeRide);
+  }, [ride.activeRide]);
 
   const value: DriverRideContextValue = {
     ...ride,
