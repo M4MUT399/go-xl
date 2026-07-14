@@ -17,6 +17,7 @@
 // Deploy:  npx supabase functions deploy admin-commission-tiers
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { checkAdminRateLimit } from '../_shared/adminRateLimit.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -67,6 +68,9 @@ Deno.serve(async (req) => {
       return json({ error: 'Acesso restrito à equipe de administração' }, 403);
     }
 
+    const rateLimit = await checkAdminRateLimit(admin, user.id, 'admin-commission-tiers');
+    if (!rateLimit.allowed) return json({ error: rateLimit.message }, 429);
+
     const body = (await req.json().catch(() => ({}))) as Body;
     const action = body.action ?? 'summary';
 
@@ -78,6 +82,14 @@ Deno.serve(async (req) => {
         .not('driver_share_percent', 'is', null)
         .order('driver_onboarded_seq', { ascending: true });
       if (error) return json({ error: error.message }, 500);
+
+      await admin.from('admin_audit_log').insert({
+        admin_id: user.id,
+        action: 'commission_tiers_list',
+        resource: 'profiles',
+        metadata: { resultCount: data?.length ?? 0 },
+      });
+
       return json({ drivers: data });
     }
 
@@ -101,6 +113,12 @@ Deno.serve(async (req) => {
       .order('driver_onboarded_seq', { ascending: true })
       .limit(1)
       .maybeSingle();
+
+    await admin.from('admin_audit_log').insert({
+      admin_id: user.id,
+      action: 'commission_tiers_summary',
+      resource: 'profiles',
+    });
 
     return json({
       premiumTier: { sharePercent: 0.85, platformFeePercent: 0.15, limit: PREMIUM_TIER_LIMIT, count: premiumCount ?? 0 },

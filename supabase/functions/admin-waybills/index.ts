@@ -12,6 +12,7 @@
 // Deploy:  npx supabase functions deploy admin-waybills
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { checkAdminRateLimit } from '../_shared/adminRateLimit.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -70,6 +71,9 @@ Deno.serve(async (req) => {
     if (!(callerProfile as { is_admin?: boolean } | null)?.is_admin) {
       return json({ error: 'Acesso restrito à equipe de administração' }, 403);
     }
+
+    const rateLimit = await checkAdminRateLimit(admin, user.id, 'admin-waybills');
+    if (!rateLimit.allowed) return json({ error: rateLimit.message }, 429);
 
     const body = await req.json() as Body;
 

@@ -11,6 +11,7 @@
 // Deploy:  npx supabase functions deploy admin-driver-verification
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { checkAdminRateLimit } from '../_shared/adminRateLimit.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -62,6 +63,9 @@ Deno.serve(async (req) => {
       return json({ error: 'Acesso restrito à equipe de administração' }, 403);
     }
 
+    const rateLimit = await checkAdminRateLimit(admin, user.id, 'admin-driver-verification');
+    if (!rateLimit.allowed) return json({ error: rateLimit.message }, 429);
+
     const body = await req.json() as Body;
 
     // ── Lista todos os motoristas com status de verificação ──────────────────
@@ -106,6 +110,14 @@ Deno.serve(async (req) => {
           .createSignedUrl(d.verification_document_url, 600);
         urls.document = signed?.signedUrl;
       }
+
+      await admin.from('admin_audit_log').insert({
+        admin_id: user.id,
+        action: 'driver_verification_view_documents',
+        resource: 'profiles',
+        resource_id: body.driverId,
+      });
+
       return json({ urls });
     }
 
@@ -118,6 +130,14 @@ Deno.serve(async (req) => {
         verification_notes: null,
       }).eq('id', body.driverId);
       if (error) return json({ error: error.message }, 500);
+
+      await admin.from('admin_audit_log').insert({
+        admin_id: user.id,
+        action: 'driver_verification_approve',
+        resource: 'profiles',
+        resource_id: body.driverId,
+      });
+
       return json({ ok: true });
     }
 
@@ -130,6 +150,15 @@ Deno.serve(async (req) => {
         verification_notes: body.reason ?? null,
       }).eq('id', body.driverId);
       if (error) return json({ error: error.message }, 500);
+
+      await admin.from('admin_audit_log').insert({
+        admin_id: user.id,
+        action: 'driver_verification_reject',
+        resource: 'profiles',
+        resource_id: body.driverId,
+        metadata: { reason: body.reason ?? null },
+      });
+
       return json({ ok: true });
     }
 
@@ -142,6 +171,15 @@ Deno.serve(async (req) => {
         verification_notes: body.reason ?? null,
       }).eq('id', body.driverId);
       if (error) return json({ error: error.message }, 500);
+
+      await admin.from('admin_audit_log').insert({
+        admin_id: user.id,
+        action: 'driver_verification_revoke',
+        resource: 'profiles',
+        resource_id: body.driverId,
+        metadata: { reason: body.reason ?? null },
+      });
+
       return json({ ok: true });
     }
 

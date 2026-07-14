@@ -57,6 +57,44 @@ tabela: motorista vê só o que é seu; escrita sensível restrita a `service_ro
 Cobrem: waybill, tolls, airport fees, background check, driving limits,
 scheduled rides, system config, mask e error reporting.
 
+## Item 9 (admin/backend) — rate limit, retenção, criptografia, audit log
+
+Concluído (migrations `0051`/`0052` + Edge Functions admin). Escopo decidido
+com o fundador, opção "recomendado" em todos os 4 pontos:
+
+1. **Rate limit** — aplicado só nas 3 Edge Functions administrativas
+   (`admin-driver-verification`, `admin-commission-tiers`, `admin-waybills`),
+   não nas funções operacionais do app. Implementado como bucket por janela
+   fixa em `public.admin_rate_limits` (migration `0051`), checado
+   atomicamente via `check_admin_rate_limit()` (SQL) e chamado pelo helper
+   compartilhado `supabase/functions/_shared/adminRateLimit.ts`. Default:
+   30 requisições/admin/função a cada 60s — folga generosa para uso normal
+   do painel, suficiente para barrar loop/bug/abuso. Falha ao checar o
+   limite (RPC indisponível) é permissiva por design — não vira ponto único
+   de indisponibilidade do painel.
+2. **Retenção/TTL** — `public.admin_audit_log` e `public.ride_offer_events`
+   purgados diariamente (06:30 UTC) via `pg_cron`, linhas com mais de 180
+   dias (migration `0052`). `waybills` fica **fora** desse job de propósito:
+   é documento fiscal (recibo de corrida), com necessidade de retenção mais
+   longa que uma trilha de log técnico.
+3. **Criptografia em repouso** — confirmado, sem necessidade de código: o
+   Postgres gerenciado do Supabase (AWS RDS/Aurora subjacente) já criptografa
+   o volume de dados em repouso por padrão (AES-256), assim como os buckets
+   de Storage (`driver-verification`, etc.). Nenhuma coluna do projeto guarda
+   segredo em texto puro adicional além do que a plataforma já protege — os
+   campos mais sensíveis (`stripe_customer_id`, `stripe_payment_method_id`,
+   documentos de verificação) ficam em tabelas/buckets privados com RLS
+   própria (ver `0048`–`0050`), não em texto solto acessível.
+4. **Admin audit log generalizado** — as 3 Edge Functions administrativas
+   agora escrevem em `admin_audit_log` (antes só `admin-waybills`, criada na
+   P4): `admin-driver-verification` registra visualização de documentos,
+   aprovação, rejeição e revogação (`driver_verification_view_documents` /
+   `_approve` / `_reject` / `_revoke`); `admin-commission-tiers` registra
+   consultas de lista e resumo (`commission_tiers_list` /
+   `_summary`). A escrita nessa tabela continua só via `service_role`
+   (RLS `admin_audit_log_service_all`), então não pode ser forjada/apagada a
+   partir do painel.
+
 ## Checklist pré-build (ação do fundador)
 
 1. **app.json — background location declarada mas não usada** (ver ADR-0001 §3):
@@ -75,9 +113,6 @@ scheduled rides, system config, mask e error reporting.
 
 ## Deferido (fora do escopo cross-platform desta frente)
 
-- **Repo admin/backend:** tabela `waybills` + busca administrativa + RBAC/logs/
-  retenção (P4 persistência); rate limit server-side, criptografia em repouso,
-  admin audit log e retenção/TTL (Item 9 backend).
 - **Nativo:** P1b — entrega da chamada em background/lockscreen (exige módulo
   nativo dedicado).
 - **Build/loja:** geração dos binários EAS e submissão.
