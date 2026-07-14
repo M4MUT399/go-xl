@@ -43,7 +43,7 @@ export async function generateAndShareWaybill(
     const { data, error } = await supabase
       .from('rides')
       .select(
-        'id, price, toll_amount, airport_port_fee, tip_amount, distance_km, duration_min, origin_address, destination_address, created_at, completed_at'
+        'id, driver_id, passenger_id, price, toll_amount, airport_port_fee, tip_amount, distance_km, duration_min, origin_address, destination_address, created_at, completed_at'
       )
       .eq('id', rideId)
       .single();
@@ -57,8 +57,38 @@ export async function generateAndShareWaybill(
       vehicleLabel: extras.vehicleLabel ?? undefined,
     };
 
-    const html = waybillToHtml(buildWaybill(ride, company, extras.labels ?? {}));
+    const waybill = buildWaybill(ride, company, extras.labels ?? {});
+    const html = waybillToHtml(waybill);
     const { uri } = await Print.printToFileAsync({ html });
+
+    // Persiste o snapshot (best-effort: falha ao salvar não deve impedir a
+    // emissão/compartilhamento do PDF, que é o que o motorista está esperando
+    // ver na tela). Erros aqui só ficam registrados no console.
+    const rideRow = data as { driver_id?: string; passenger_id?: string };
+    if (rideRow.driver_id) {
+      const { error: insertError } = await supabase.from('waybills').insert({
+        ride_id: waybill.rideId,
+        driver_id: rideRow.driver_id,
+        passenger_id: rideRow.passenger_id ?? null,
+        company_legal_name: company.legalName,
+        company_license_number: company.licenseNumber,
+        company_footer_note: company.footerNote,
+        origin_address: waybill.origin,
+        destination_address: waybill.destination,
+        distance_km: waybill.distanceKm,
+        duration_min: waybill.durationMin,
+        driver_name: waybill.driverName,
+        vehicle_label: waybill.vehicle,
+        passenger_name: waybill.passengerName,
+        fare_lines: waybill.fareLines,
+        total: waybill.total,
+        currency: waybill.currency,
+        issued_at: waybill.issuedAt,
+      });
+      if (insertError) {
+        console.warn('[waybillExport] falha ao persistir snapshot do waybill:', insertError.message);
+      }
+    }
 
     if (await Sharing.isAvailableAsync()) {
       await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
