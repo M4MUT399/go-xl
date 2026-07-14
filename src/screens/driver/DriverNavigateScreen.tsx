@@ -169,7 +169,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     let alive = true;
     if (!ride.passenger_id) return;
     supabase
-      .from('profiles')
+      .from('profiles_public')
       .select('full_name, avatar_url, rating')
       .eq('id', ride.passenger_id)
       .single()
@@ -480,7 +480,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         return;
       }
       // Notifica o passageiro (push remoto para app em background)
-      notifyPassengerRideCompleted(ride.passenger_id, ride.price);
+      notifyPassengerRideCompleted(ride.passenger_id, ride.id, ride.price);
       Alert.alert(
         t('driverNav.rideCompletedTitle'),
         t('driverNav.rideCompletedValue').replace('{value}', formatCurrency(ride.price)),

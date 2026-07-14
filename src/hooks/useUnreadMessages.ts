@@ -70,7 +70,7 @@ export function useUnreadMessages(passengerId: string | undefined) {
     // 3. Driver display names (single batch query)
     const driverIds = [...new Set((rides as { driver_id: string }[]).map((r) => r.driver_id))];
     const { data: drivers } = await supabase
-      .from('profiles')
+      .from('profiles_public')
       .select('id, full_name')
       .in('id', driverIds);
 

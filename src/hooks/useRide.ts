@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppState, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
-import { sendPushAsync, sendSilentRevokePushAsync, dismissRideNotifications } from '../lib/notifications';
+import { dismissRideNotifications } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo, applyMultiplier } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
@@ -135,6 +135,27 @@ async function refundRide(rideId: string): Promise<{ ok: boolean; error?: string
   }
 }
 
+/**
+ * Chama a Edge Function `send-ride-push` — todo o envio de push de corrida
+ * (leitura de push_token e chamada à API do Expo) roda no servidor, com
+ * templates fixos por `kind`. O client nunca mais lê push_token de outro
+ * usuário nem manda título/corpo livre; só `kind` + `rideId` (+ ids-alvo no
+ * broadcast). Best-effort: falhas são engolidas, nunca bloqueiam o fluxo de
+ * corrida (mesma filosofia do antigo sendPushAsync).
+ */
+async function invokeRidePush(body: {
+  kind: string;
+  rideId: string;
+  driverIds?: string[];
+  exceptDriverId?: string;
+}): Promise<void> {
+  try {
+    await supabase.functions.invoke('send-ride-push', { body });
+  } catch (e) {
+    reportError(e, { op: 'invokeRidePush', kind: body.kind });
+  }
+}
+
 async function notifyOnlineDrivers(
   destination: string,
   price: number,
@@ -171,66 +192,23 @@ async function notifyOnlineDrivers(
       destination_lng: destinationCoords?.lng,
     })
   );
-  if (driverIds.length === 0) return;
+  if (driverIds.length === 0 || !rideId) return;
 
-  const { data: drivers } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .in('id', driverIds);
-
-  const tokens = ((drivers as { push_token: string | null }[]) ?? [])
-    .map((d) => d.push_token)
-    .filter((t): t is string => !!t);
-
-  await sendPushAsync(
-    tokens.map((to) => ({
-      to,
-      title: '🚗 Nova corrida Executive XL',
-      body: `Destino: ${destination} • ${formatCurrency(price)}`,
-      // rideId permite dispensar esta notificação da bandeja dos demais
-      // motoristas assim que a corrida for aceita/cancelada/expirada.
-      data: { type: 'new_ride', ...(rideId ? { rideId } : {}) },
-    }))
-  );
+  // Título/corpo agora são templates fixos no servidor — a Edge Function
+  // busca destination/price direto na linha de `rides`, o client só informa
+  // QUEM notificar (o filtro de disponibilidade acima continua client-side).
+  await invokeRidePush({ kind: 'new_ride_broadcast', rideId, driverIds });
 }
 
 /** Notifica apenas o motorista vinculado ao QR code (não transmite para todos). */
 async function notifySpecificDriver(driverId: string, destination: string, price: number, rideId?: string) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', driverId)
-    .single();
-
-  const token = (data as { push_token: string | null })?.push_token;
-  if (token) {
-    await sendPushAsync([{
-      to: token,
-      title: '📲 Corrida via QR Code — Executive XL',
-      body: `Passageiro solicitou pelo seu QR. Destino: ${destination} • ${formatCurrency(price)}`,
-      data: { type: 'new_ride', ...(rideId ? { rideId } : {}) },
-    }]);
-  }
+  if (!rideId) return;
+  await invokeRidePush({ kind: 'new_ride_direct', rideId });
 }
 
 /** Notifica o motorista vinculado ao QR code sobre um AGENDAMENTO (não uma corrida imediata). */
-async function notifySpecificDriverScheduled(driverId: string, destination: string, price: number, scheduledFor: Date) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', driverId)
-    .single();
-
-  const token = (data as { push_token: string | null })?.push_token;
-  if (token) {
-    const when = `${scheduledFor.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${scheduledFor.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
-    await sendPushAsync([{
-      to: token,
-      title: '🗓️📲 Agendamento via QR Code — Executive XL',
-      body: `Passageiro agendou pelo seu QR para ${when}. Destino: ${destination} • ${formatCurrency(price)}`,
-      data: { type: 'new_scheduled_ride' },
-    }]);
-  }
+async function notifySpecificDriverScheduled(driverId: string, destination: string, price: number, scheduledFor: Date, rideId: string) {
+  await invokeRidePush({ kind: 'new_ride_scheduled_direct', rideId });
 }
 
 /**
@@ -256,28 +234,8 @@ async function broadcastToDriver(driverId: string, ride: object) {
   });
 }
 
-async function notifyPassenger(passengerId: string, price?: number, etaMin?: number | null) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', passengerId)
-    .single();
-
-  const token = (data as { push_token: string | null })?.push_token;
-  if (token) {
-    const etaPhrase = etaMin ? ` Chegando em ${etaMin} min.` : ' Motorista a caminho!';
-    const body = price
-      ? `${formatCurrency(price)} cobrado do seu cartão.${etaPhrase}`
-      : `Seu Executive XL foi confirmado.${etaPhrase}`;
-    await sendPushAsync([
-      {
-        to: token,
-        title: '💳 Pagamento confirmado — Motorista a caminho!',
-        body,
-        data: { type: 'ride_accepted' },
-      },
-    ]);
-  }
+async function notifyPassenger(passengerId: string, rideId: string, price?: number, etaMin?: number | null) {
+  await invokeRidePush({ kind: 'ride_accepted', rideId });
 }
 
 /**
@@ -404,16 +362,7 @@ async function pushSilentRevokeToOnlineDrivers(rideId: string, exceptDriverId?: 
       .filter((id) => id !== exceptDriverId);
     if (driverIds.length === 0) return;
 
-    const { data: drivers } = await supabase
-      .from('profiles')
-      .select('push_token')
-      .in('id', driverIds);
-
-    const tokens = ((drivers as { push_token: string | null }[]) ?? [])
-      .map((d) => d.push_token)
-      .filter((t): t is string => !!t);
-
-    await sendSilentRevokePushAsync(tokens, rideId);
+    await invokeRidePush({ kind: 'silent_revoke', rideId, driverIds, exceptDriverId });
   } catch (e) {
     reportError(e, { op: 'pushSilentRevokeToOnlineDrivers' });
   }
@@ -466,69 +415,18 @@ async function broadcastRideCancelledToDriver(driverId: string, rideId: string) 
   });
 }
 
-async function notifyPassengerScheduleConfirmed(passengerId: string) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', passengerId)
-    .single();
-
-  const token = (data as { push_token: string | null })?.push_token;
-  if (token) {
-    await sendPushAsync([
-      {
-        to: token,
-        title: '🗓️ Motorista confirmado!',
-        body: 'Um motorista aceitou seu agendamento. Você pode ver os detalhes na tela de corridas agendadas.',
-        data: { type: 'schedule_confirmed' },
-      },
-    ]);
-  }
+async function notifyPassengerScheduleConfirmed(passengerId: string, rideId: string) {
+  await invokeRidePush({ kind: 'schedule_confirmed', rideId });
 }
 
 /** Avisa o passageiro que o motorista NÃO confirmou o agendamento travado por QR. */
-async function notifyPassengerScheduleRejected(passengerId: string) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', passengerId)
-    .single();
-
-  const token = (data as { push_token: string | null })?.push_token;
-  if (token) {
-    await sendPushAsync([
-      {
-        to: token,
-        title: '🗓️ Agendamento não confirmado',
-        body: 'O motorista não pôde confirmar seu agendamento. Estamos procurando outro motorista para você.',
-        data: { type: 'schedule_rejected' },
-      },
-    ]);
-  }
+async function notifyPassengerScheduleRejected(passengerId: string, rideId: string) {
+  await invokeRidePush({ kind: 'schedule_rejected', rideId });
 }
 
 /** Notifica o passageiro (push) que a corrida foi concluída. */
-export async function notifyPassengerRideCompleted(passengerId: string, price?: number) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', passengerId)
-    .single();
-
-  const token = (data as { push_token: string | null })?.push_token;
-  if (token) {
-    const body = price
-      ? `Valor: ${formatCurrency(price)}. Avalie o motorista e deixe uma gorjeta! 🌟`
-      : 'Sua corrida Executive XL foi concluída. Avalie o motorista!';
-    await sendPushAsync([
-      {
-        to: token,
-        title: '🏁 Corrida finalizada!',
-        body,
-        data: { type: 'ride_completed' },
-      },
-    ]);
-  }
+export async function notifyPassengerRideCompleted(passengerId: string, rideId: string, price?: number) {
+  await invokeRidePush({ kind: 'ride_completed', rideId });
 }
 
 const PRICE_PER_MILE = 2.5;
@@ -787,7 +685,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       // Broadcast in-app (confiável mesmo sem push token no Expo Go)
       broadcastToDriver(options.lockedDriverId, data);
       // Push remoto como reforço (funciona em produção)
-      notifySpecificDriverScheduled(options.lockedDriverId, destination.address, price, scheduledFor);
+      notifySpecificDriverScheduled(options.lockedDriverId, destination.address, price, scheduledFor, (data as Ride).id);
     } else {
       // Notifica motoristas online imediatamente — igual ao requestRide
       notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
@@ -879,7 +777,7 @@ export function useScheduledRides(passengerId: string | undefined) {
       const ride = data as Ride;
       if (preAssigned) {
         // Notifica o motorista pré-confirmado
-        notifyPassenger(ride.passenger_id); // reutiliza lógica de push
+        notifyPassenger(ride.passenger_id, ride.id); // reutiliza lógica de push
       } else {
         const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
         const destLat = ride.destination_lat ?? ride.destination?.lat;
@@ -926,7 +824,7 @@ export function useScheduledRides(passengerId: string | undefined) {
       // Avisa o passageiro — mesma notificação usada pela confirmação via popup
       // (confirmScheduledRide), que até então só disparava por aquele caminho.
       broadcastToPassenger(ride.passenger_id, ride.id);
-      notifyPassengerScheduleConfirmed(ride.passenger_id);
+      notifyPassengerScheduleConfirmed(ride.passenger_id, ride.id);
 
       return true;
     } finally {
@@ -1548,7 +1446,7 @@ export function useDriverRide(driverId: string | undefined) {
 
     // Confirmação ao passageiro: broadcast direto (confiável) + push como fallback
     broadcastRideAccepted(ride.passenger_id, ride);
-    notifyPassenger(ride.passenger_id, ride.price, ride.driver_eta_min);
+    notifyPassenger(ride.passenger_id, ride.id, ride.price, ride.driver_eta_min);
 
     return ride;
   }, [driverId]);
@@ -1589,7 +1487,7 @@ export function useDriverRide(driverId: string | undefined) {
     broadcastToPassenger(ride.passenger_id, ride.id);
 
     // Tenta push remoto como fallback (só funciona se o passageiro tiver token EAS)
-    notifyPassengerScheduleConfirmed(ride.passenger_id);
+    notifyPassengerScheduleConfirmed(ride.passenger_id, ride.id);
 
     return true;
   }, [driverId]);
@@ -1622,7 +1520,7 @@ export function useDriverRide(driverId: string | undefined) {
     // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
     broadcastToPassenger(ride.passenger_id, ride.id);
     // Tenta push remoto como fallback
-    notifyPassengerScheduleConfirmed(ride.passenger_id);
+    notifyPassengerScheduleConfirmed(ride.passenger_id, ride.id);
 
     return true;
   }, [driverId]);
@@ -1647,7 +1545,7 @@ export function useDriverRide(driverId: string | undefined) {
     setPendingScheduledRide(null);
 
     const ride = data as Ride;
-    notifyPassengerScheduleRejected(ride.passenger_id);
+    notifyPassengerScheduleRejected(ride.passenger_id, ride.id);
 
     return true;
   }, [driverId]);

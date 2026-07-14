@@ -51,7 +51,7 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
     try {
       // ── 1. Busca o motorista pelo código ───────────────────────────────────
       const { data: driver } = await supabase
-        .from('profiles')
+        .from('profiles_public')
         .select('id, full_name')
         .eq('driver_code', driverCode)
         .eq('type', 'driver')

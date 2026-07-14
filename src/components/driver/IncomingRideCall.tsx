@@ -125,7 +125,7 @@ export function IncomingRideCall({
   useEffect(() => {
     let alive = true;
     supabase
-      .from('profiles')
+      .from('profiles_public')
       .select('full_name, rating, avatar_url')
       .eq('id', ride.passenger_id)
       .single()

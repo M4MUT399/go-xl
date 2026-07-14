@@ -77,7 +77,7 @@ export function DriverHomeScreen({ navigation }: Props) {
       return;
     }
     supabase
-      .from('profiles')
+      .from('profiles_public')
       .select('full_name')
       .eq('id', passengerId)
       .single()

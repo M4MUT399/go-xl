@@ -50,7 +50,7 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     withDriver.forEach(async (ride) => {
       if (!ride.driver_id || driverInfoMap[ride.driver_id]) return;
       const [{ data: p }, { data: v }] = await Promise.all([
-        supabase.from('profiles').select('full_name').eq('id', ride.driver_id).single(),
+        supabase.from('profiles_public').select('full_name').eq('id', ride.driver_id).single(),
         supabase.from('vehicles').select('model,plate,color').eq('driver_id', ride.driver_id).single(),
       ]);
       const info: DriverInfo = {

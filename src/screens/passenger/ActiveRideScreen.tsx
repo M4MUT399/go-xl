@@ -155,7 +155,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (ride.driver_id) {
       supabase
-        .from('profiles')
+        .from('profiles_public')
         .select('full_name')
         .eq('id', ride.driver_id)
         .single()

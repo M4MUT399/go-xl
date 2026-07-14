@@ -1,27 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { sendPushAsync } from '../lib/notifications';
 import { broadcastRideRevoked } from './useRide';
 import type { RideRecord } from '../types';
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
 
-async function notifyPassengerDriverReleased(passengerId: string, rideId: string) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', passengerId)
-    .single();
-
-  const token = (data as { push_token: string | null } | null)?.push_token;
-  if (token) {
-    await sendPushAsync([{
-      to: token,
-      title: '⚠️ Motorista cancelou o agendamento',
-      body: 'O motorista liberou sua corrida agendada. Aguarde nova confirmação ou solicite agora.',
-      data: { type: 'driver_released', rideId },
-    }]);
+/**
+ * Chama a Edge Function `send-ride-push` (mesmo mecanismo de useRide.ts) — o
+ * push de corrida não lê mais push_token no client nem manda título/corpo
+ * livre, só `kind` + `rideId`. Best-effort: falhas são engolidas.
+ */
+async function invokeRidePush(kind: string, rideId: string): Promise<void> {
+  try {
+    await supabase.functions.invoke('send-ride-push', { body: { kind, rideId } });
+  } catch {
+    // push é best-effort — nunca deve derrubar o fluxo de corrida
   }
+}
+
+async function notifyPassengerDriverReleased(passengerId: string, rideId: string) {
+  await invokeRidePush('driver_released', rideId);
 
   const ch = supabase.channel(`pax-notify-${passengerId}`);
   await new Promise<void>((resolve) => {
@@ -38,21 +36,7 @@ async function notifyPassengerDriverReleased(passengerId: string, rideId: string
 
 /** Notifica o passageiro que o horário do agendamento passou sem aceite de motorista. */
 async function notifyPassengerScheduleExpired(passengerId: string, rideId: string) {
-  const { data } = await supabase
-    .from('profiles')
-    .select('push_token')
-    .eq('id', passengerId)
-    .single();
-
-  const token = (data as { push_token: string | null } | null)?.push_token;
-  if (token) {
-    await sendPushAsync([{
-      to: token,
-      title: '⏰ Agendamento não confirmado',
-      body: 'Nenhum motorista aceitou seu agendamento a tempo. Solicite uma nova corrida.',
-      data: { type: 'schedule_expired', rideId },
-    }]);
-  }
+  await invokeRidePush('schedule_expired', rideId);
 
   // Broadcast direto — funciona sem push token (passageiro com app aberto)
   const ch = supabase.channel(`pax-notify-${passengerId}`);
@@ -162,7 +146,7 @@ export function useDriverScheduledRides(driverId: string | undefined) {
     let profileById = new Map<string, PassengerInfo>();
     if (passengerIds.length > 0) {
       const { data: profs } = await supabase
-        .from('profiles')
+        .from('profiles_public')
         .select('id, full_name, avatar_url, rating')
         .in('id', passengerIds);
       profileById = new Map(

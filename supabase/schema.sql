@@ -27,8 +27,12 @@ create policy "Usuário atualiza o próprio perfil" on public.profiles
 create policy "Usuário cria o próprio perfil" on public.profiles
   for insert with check (auth.uid() = id);
 
-create policy "Perfis públicos para leitura" on public.profiles
-  for select using (true);
+-- A antiga policy "Perfis públicos para leitura" (using (true), qualquer
+-- authenticated lia a linha inteira de qualquer usuário) foi REMOVIDA na
+-- migration 0050 — leitura de outro usuário passou a ir só por
+-- `profiles_public` (colunas não sensíveis) ou por Edge Functions com
+-- service_role. A policy "Usuário vê o próprio perfil" acima já cobre o
+-- caso de leitura do próprio perfil.
 
 -- Veículos dos motoristas
 create table public.vehicles (
@@ -47,8 +51,9 @@ alter table public.vehicles enable row level security;
 create policy "Motorista gerencia seu veículo" on public.vehicles
   for all using (auth.uid() = driver_id);
 
+-- Restrita a `authenticated` (ver migration 0048).
 create policy "Passageiro vê veículos" on public.vehicles
-  for select using (true);
+  for select to authenticated using (true);
 
 -- Localização dos motoristas (realtime)
 create table public.driver_locations (
@@ -162,6 +167,18 @@ create policy "Participantes enviam mensagens" on public.messages
       where r.id = ride_id and (r.passenger_id = auth.uid() or r.driver_id = auth.uid())
     )
   );
+
+-- View com colunas não sensíveis de profiles (nome, foto, nota, tipo,
+-- driver_code), para telas que exibem dados de OUTRO usuário. Ver
+-- migration 0049. A policy ampla de profiles (0048) foi removida na
+-- migration 0050 — push_token agora só é lido server-side (Edge Function
+-- send-ride-push, service_role).
+create or replace view public.profiles_public as
+select id, full_name, avatar_url, rating, type, driver_code
+from public.profiles;
+
+alter view public.profiles_public set (security_invoker = off);
+grant select on public.profiles_public to authenticated;
 
 -- Habilitar realtime nas tabelas principais
 alter publication supabase_realtime add table public.rides;

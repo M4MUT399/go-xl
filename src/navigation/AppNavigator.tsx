@@ -340,7 +340,7 @@ export function AppNavigator() {
     pendingDriverCode.current = null;
 
     const { data } = await supabase
-      .from('profiles')
+      .from('profiles_public')
       .select('id, full_name')
       .eq('driver_code', code)
       .eq('type', 'driver')
