@@ -50,7 +50,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   // `activate` inicia a rota de fato (muda status da corrida) quando o
   // motorista toca no banner fixo — só usamos essa função do hook (a lista
   // interna dele é por passenger_id e não nos interessa aqui).
-  const { activate: activateScheduledRide } = useScheduledRides(profile?.id);
+  const { activate: activateScheduledRide } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [startingBannerRide, setStartingBannerRide] = useState(false);
   // Item #4: sinal sonoro DISTINTO (arpejo, toca uma vez) para o pool aberto.
   useScheduledOfferAlert(!isQrLockedSchedule ? (pendingScheduledRide?.id ?? null) : null);

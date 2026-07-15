@@ -311,7 +311,7 @@ export function DriverScheduledRidesScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { available, claimed, loading, refresh, release } = useDriverScheduledRides(profile?.id);
-  const { claimScheduledRide, activate } = useScheduledRides(profile?.id);
+  const { claimScheduledRide, activate } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [claiming, setClaiming] = useState<string | null>(null);
 
   const styles = makeStyles(colors);

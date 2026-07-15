@@ -31,6 +31,13 @@ export interface Profile {
   verification_notes?: string;
   verification_submitted_at?: string;
   is_admin?: boolean;
+  /**
+   * Região usada pelo rollout gradual de feature flags (ver system_config /
+   * getConfig em src/lib/systemConfig.ts). 'global' por padrão — só o
+   * backend (service_role/admin) pode alterar (migration 0055 trava
+   * auto-edição pelo próprio usuário).
+   */
+  jurisdiction?: string;
   created_at: string;
   // Pagamento Stripe (passageiro)
   stripe_customer_id?: string;

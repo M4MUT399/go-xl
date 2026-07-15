@@ -478,7 +478,7 @@ export function estimateDuration(distanceKm: number) {
 
 const ACTIVE_RIDE_STATUSES: RideStatus[] = ['requesting', 'accepted', 'driver_en_route', 'in_progress'];
 
-export function usePassengerRide(passengerId: string | undefined) {
+export function usePassengerRide(passengerId: string | undefined, jurisdiction: string = 'global') {
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const [loadingActive, setLoadingActive] = useState(true);
   // A HomeScreen (aba, sempre montada) e as telas FindingDriver/ActiveRide
@@ -635,14 +635,14 @@ export function usePassengerRide(passengerId: string | undefined) {
       // distribuição (dispatch-engine create → ride_offers). Se a flag estiver
       // OFF (ou der erro), cai no leque legado — sem nunca deixar a corrida sem
       // distribuição.
-      const useV2 = await getConfig('dispatch_engine_v2');
+      const useV2 = await getConfig('dispatch_engine_v2', jurisdiction);
       const handledByEngine = useV2 ? await dispatchEngineCreate((data as Ride).id) : false;
       if (!handledByEngine) {
         notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
       }
     }
     return data as Ride;
-  }, [passengerId]);
+  }, [passengerId, jurisdiction]);
 
   const scheduleRide = useCallback(async (
     origin: Location,
@@ -769,7 +769,7 @@ export function usePassengerRide(passengerId: string | undefined) {
       // PR-c: motor v2 — encerra o `trip_request` no servidor e revoga as ofertas
       // pendentes (para o tick não continuar a distribuir uma corrida cancelada).
       // Best-effort e no-op se a flag estiver OFF (o servidor responde { skipped }).
-      const useV2 = await getConfig('dispatch_engine_v2');
+      const useV2 = await getConfig('dispatch_engine_v2', jurisdiction);
       if (useV2) {
         const { data: tr } = await supabase
           .from('trip_requests').select('id').eq('ride_id', rideId).maybeSingle();
@@ -783,12 +783,12 @@ export function usePassengerRide(passengerId: string | undefined) {
         }
       }
     }
-  }, []);
+  }, [jurisdiction]);
 
   return { activeRide, loadingActive, refreshActiveRide, requestRide, scheduleRide, cancelRide };
 }
 
-export function useScheduledRides(passengerId: string | undefined) {
+export function useScheduledRides(passengerId: string | undefined, jurisdiction: string = 'global') {
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
   // Debounce de reivindicação: evita que um duplo-toque dispare duas chamadas
@@ -841,7 +841,7 @@ export function useScheduledRides(passengerId: string | undefined) {
         const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
         const destLat = ride.destination_lat ?? ride.destination?.lat;
         const destLng = ride.destination_lng ?? ride.destination?.lng;
-        const useV2 = await getConfig('dispatch_engine_v2');
+        const useV2 = await getConfig('dispatch_engine_v2', jurisdiction);
         const handledByEngine = useV2 ? await dispatchEngineCreate(ride.id) : false;
         if (!handledByEngine) {
           notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined, ride.id);
@@ -849,7 +849,7 @@ export function useScheduledRides(passengerId: string | undefined) {
       }
     }
     return (data as Ride) ?? null;
-  }, [refresh]);
+  }, [refresh, jurisdiction]);
 
   const claimScheduledRide = useCallback(async (rideId: string, driverId: string): Promise<boolean> => {
     // Debounce por rideId: se já há um claim desta corrida em andamento, ignora
@@ -915,20 +915,20 @@ export function useScheduledRides(passengerId: string | undefined) {
   return { rides, loading, refresh, activate, cancel, claimScheduledRide };
 }
 
-export function useDriverRide(driverId: string | undefined) {
+export function useDriverRide(driverId: string | undefined, jurisdiction: string = 'global') {
   // PR-a (dispatch concorrente): fila FIFO de ofertas imediatas. A CABEÇA
   // (offerQueue[0]) é a chamada que o motorista vê/ouve agora; as demais ficam
   // aguardando sem serem canceladas. Com a flag `dispatch_multi_offer_fix`
   // DESLIGADA, `arriveOffer`/`resolveOffer` reduzem a fila a no máximo 1 item —
   // reproduzindo exatamente o slot único legado (`setPendingRide`).
-  const multiOffer = useFeatureFlag('dispatch_multi_offer_fix');
+  const multiOffer = useFeatureFlag('dispatch_multi_offer_fix', jurisdiction);
   const multiOfferRef = useRef(multiOffer);
   multiOfferRef.current = multiOffer;
 
   // PR-c: motor v2 no servidor. Com a flag LIGADA, o card do pool aberto passa a
   // ser dirigido pela tabela `ride_offers` (não mais pelo leque em `rides`).
   // Enquanto OFF, tudo abaixo é no-op e o fluxo legado segue idêntico.
-  const engineV2 = useFeatureFlag('dispatch_engine_v2');
+  const engineV2 = useFeatureFlag('dispatch_engine_v2', jurisdiction);
   const engineV2Ref = useRef(engineV2);
   engineV2Ref.current = engineV2;
   // Mapeia trip_request_id ↔ ride_id para não refazer a resolução a cada evento

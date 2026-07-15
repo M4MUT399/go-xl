@@ -123,7 +123,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // veicular) — substitui o useLocation genérico só nesta tela de navegação.
   const { fix: location } = useNavigationLocation({ enabled: true, simulate: simFixes, simulateIntervalMs: 1000 });
 
-  const { updateRideStatus, refundRide } = useDriverRide(profile?.id);
+  const { updateRideStatus, refundRide } = useDriverRide(profile?.id, profile?.jurisdiction);
   const lastUploadedCoord = useRef<{ lat: number; lng: number } | null>(null);
   const isFocused = useIsFocused();
   // Inicializa a partir do status real da corrida (não sempre 'pickup') —

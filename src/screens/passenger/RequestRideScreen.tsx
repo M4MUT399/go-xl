@@ -37,7 +37,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { location } = useLocation();
-  const { requestRide, scheduleRide } = usePassengerRide(profile?.id);
+  const { requestRide, scheduleRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
 
   const styles = makeStyles(colors);
 

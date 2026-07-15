@@ -97,7 +97,7 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     });
   }, [location, isOnline, profile?.id, onlineLoaded]);
 
-  const ride = useDriverRide(profile?.id);
+  const ride = useDriverRide(profile?.id, profile?.jurisdiction);
 
   // ── Ponte com Android Auto (ver src/native/carRideBridge.ts) ────────────────
   // Empurra a chamada pendente e a corrida ativa para a tela do carro sempre

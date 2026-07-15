@@ -33,7 +33,7 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { rides, loading, refresh, activate, cancel } = useScheduledRides(profile?.id);
+  const { rides, loading, refresh, activate, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
 
   const styles = makeStyles(colors);

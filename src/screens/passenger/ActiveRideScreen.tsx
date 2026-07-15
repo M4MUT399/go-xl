@@ -42,7 +42,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { cancelRide } = usePassengerRide(profile?.id);
+  const { cancelRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
   const isFocused = useIsFocused();
   const [ride, setRide] = useState<Ride>(route.params.ride);
   const [driverLoc, setDriverLoc] = useState<{ lat: number; lng: number; heading?: number } | null>(null);

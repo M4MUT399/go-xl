@@ -37,7 +37,7 @@ export function HomeScreen({ navigation }: Props) {
   // Antes, ao sair da tela de busca/corrida, a viagem "sumia" (só vivia nos
   // params de navegação e na subscription realtime). Agora o hook faz um fetch
   // inicial, então conseguimos oferecer "retomar corrida" ao reabrir o app.
-  const { activeRide } = usePassengerRide(profile?.id);
+  const { activeRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
 
   // Próxima corrida AGENDADA do passageiro (com ou sem motorista) → banner fixo
   // clicável + alerta sonoro in-app quando fica iminente. Espelha o motorista.

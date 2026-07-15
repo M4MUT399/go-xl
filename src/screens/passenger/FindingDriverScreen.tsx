@@ -26,7 +26,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
   const { ride: initialRide } = route.params;
   const { profile } = useAuth();
   const { colors } = useTheme();
-  const { cancelRide } = usePassengerRide(profile?.id);
+  const { cancelRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
