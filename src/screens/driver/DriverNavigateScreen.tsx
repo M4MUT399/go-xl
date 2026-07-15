@@ -20,6 +20,15 @@ import {
   nearestPointOnPath, splitPathAtSnap, shortestAngleDelta, haversineMeters,
 } from '../../lib/nav/geo';
 import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
+import {
+  advanceHeading,
+  initialHeadingState,
+  topPaddingForAnchor,
+  DEFAULT_COURSE_UP,
+  type HeadingState,
+} from '../../lib/nav/courseUp';
+import { useCameraController } from '../../hooks/useCameraController';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency } from '../../lib/format';
@@ -147,6 +156,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const prevHeadingRef = useRef<number | null>(null);
   const contHeadingRef = useRef(0);
   const lastFixTsRef = useRef<number | null>(null);
+  // Bloco 3 (course-up estilo Waze): quando ligado, o rumo da câmera vem do
+  // curso do GPS só acima de 4 km/h (congela parado) + filtro passa-baixa
+  // (sem jitter/saltos de 180°). Quando desligado (flag OFF), mantém o rumo
+  // contínuo cru legado (contHeadingRef). O estado abaixo sobrevive entre fixes.
+  const courseUpEnabled = useFeatureFlag('nav_course_up_enabled');
+  const courseUpRef = useRef(courseUpEnabled);
+  courseUpRef.current = courseUpEnabled;
+  const headingStateRef = useRef<HeadingState>(initialHeadingState);
   // Câmera "drone" segue o carro; PAUSA quando o motorista arrasta o mapa e
   // volta ao tocar em "recentralizar".
   const followingRef = useRef(true);
@@ -236,6 +253,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // corrigido em ActiveRideScreen.tsx). As duas chamadas de animateCamera
   // abaixo esperam este flag.
   const [mapReady, setMapReady] = useState(false);
+  // Bloco 1: TODA atualização de câmera desta tela passa pelo CameraController
+  // (valida coordenada, faz clamp de zoom, mantém a última câmera válida e loga
+  // rejeições). Substitui as chamadas diretas a mapRef.animateCamera abaixo.
+  const cam = useCameraController(mapRef, 'DriverNavigate');
 
   useEffect(() => {
     if (!location) return;
@@ -285,25 +306,31 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }
 
     // (2) rumo contínuo (desenrolado) para a câmera girar pelo caminho mais curto.
+    // Legado (flag OFF): rumo cru a cada fix. Course-up (flag ON): congela parado
+    // (< 4 km/h) + passa-baixa (headingStateRef), estilo Waze.
     if (prevHeadingRef.current == null) {
       contHeadingRef.current = location.heading;
     } else {
       contHeadingRef.current += shortestAngleDelta(prevHeadingRef.current, location.heading);
     }
     prevHeadingRef.current = location.heading;
+    headingStateRef.current = advanceHeading(
+      headingStateRef.current,
+      location.speed,
+      location.heading,
+    );
+    const heading = courseUpRef.current
+      ? headingStateRef.current.smoothed
+      : contHeadingRef.current;
 
     // (3) câmera drone — só quando "seguindo" (pausada durante arrasto do mapa)
     // e com o MKMapView/GoogleMap nativo já pronto (ver comentário no
     // `mapReady`, acima) — sem isso o iOS pode estourar o zoom pro mundo todo.
-    if (followingRef.current && mapRef.current && mapReady) {
-      mapRef.current.animateCamera(
-        {
-          center: { latitude: location.lat, longitude: location.lng },
-          heading: contHeadingRef.current,
-          pitch: 45,
-          zoom: zoomForSpeed(location.speed),
-        },
-        { duration: dt || 700 },
+    if (followingRef.current) {
+      cam.follow(
+        { lat: location.lat, lng: location.lng },
+        { heading, pitch: DEFAULT_COURSE_UP.pitch, zoom: zoomForSpeed(location.speed) },
+        dt || 700,
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -581,22 +608,25 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // `mapReady` vira true (ex.: fase não mudou, mas o mapa só ficou pronto
   // depois do mount).
   useEffect(() => {
-    if (!mapRef.current || !mapReady) return;
+    if (!mapReady) return;
+    // Melhor posição já conhecida na hora: fix de GPS > posição do aceite > alvo.
     const center = location
-      ? { latitude: location.lat, longitude: location.lng }
+      ? { lat: location.lat, lng: location.lng }
       : initialDriverLocation
-        ? { latitude: initialDriverLocation.lat, longitude: initialDriverLocation.lng }
-        : { latitude: target.lat, longitude: target.lng };
+        ? { lat: initialDriverLocation.lat, lng: initialDriverLocation.lng }
+        : { lat: target.lat, lng: target.lng };
     followingRef.current = true;
     setFollowing(true);
-    mapRef.current.animateCamera(
+    // Bloco 1: toda câmera passa pelo CameraController (valida coord, clampa zoom,
+    // espera mapReady). Nunca chama animateCamera direto no mapRef.
+    cam.follow(
+      center,
       {
-        center,
-        heading: contHeadingRef.current,
-        pitch: 45,
+        heading: courseUpRef.current ? headingStateRef.current.smoothed : contHeadingRef.current,
+        pitch: DEFAULT_COURSE_UP.pitch,
         zoom: zoomForSpeed(location?.speed ?? 0),
       },
-      { duration: 350 },
+      350,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, mapReady]);
@@ -609,18 +639,28 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     setFollowing(false);
   }
 
+  // Bloco 3: ao entrar em "modo livre" (arrasto pausou o follow), reata o
+  // course-up automaticamente após 10 s sem interação — igual Waze/Google Maps.
+  // Só com a flag ligada; no legado o motorista reata manualmente pelo botão.
+  useEffect(() => {
+    if (!courseUpEnabled || following) return;
+    const id = setTimeout(() => recenter(), 10_000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [following, courseUpEnabled]);
+
   function recenter() {
-    if (!location || !mapRef.current) return;
+    if (!location) return;
     followingRef.current = true;
     setFollowing(true);
-    mapRef.current.animateCamera(
+    cam.follow(
+      { lat: location.lat, lng: location.lng },
       {
-        center: { latitude: location.lat, longitude: location.lng },
-        heading: contHeadingRef.current,
-        pitch: 45,
+        heading: courseUpRef.current ? headingStateRef.current.smoothed : contHeadingRef.current,
+        pitch: DEFAULT_COURSE_UP.pitch,
         zoom: zoomForSpeed(location.speed),
       },
-      { duration: 400 },
+      400,
     );
   }
 
@@ -664,7 +704,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         showsUserLocation={false}
         showsMyLocationButton={false}
         followsUserLocation={false}
-        onMapReady={() => setMapReady(true)}
+        onMapReady={() => {
+          cam.setReady(true);
+          setMapReady(true);
+        }}
         // Navegação: gestos de ROTAÇÃO/INCLINAÇÃO desligados (a câmera drone
         // controla heading/pitch); o motorista ainda pode arrastar/dar zoom — e
         // o arrasto PAUSA o follow (estilo Waze). mapPadding empurra o carro
@@ -680,7 +723,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         onRegionChangeComplete={(_region, details) => {
           if (details?.isGesture) pauseFollow();
         }}
-        mapPadding={{ top: Math.round(screenH * 0.16), right: 0, bottom: 0, left: 0 }}
+        // Course-up (Bloco 3): ancora o carro a ~1/3 do rodapé (mais via à
+        // frente). Legado (flag OFF): mantém o padding suave de 16%.
+        mapPadding={{
+          top: courseUpEnabled ? topPaddingForAnchor(screenH) : Math.round(screenH * 0.16),
+          right: 0,
+          bottom: 0,
+          left: 0,
+        }}
       >
         <Marker
           coordinate={{ latitude: target.lat, longitude: target.lng }}
