@@ -70,6 +70,24 @@ export const CONFIG_DEFAULTS = {
   // válidas ao mesmo tempo e atende uma por vez (FIFO). DESLIGADO por padrão →
   // mantém o comportamento de slot único legado até o rollout gradual.
   dispatch_multi_offer_fix: false,
+  // Dispatch PR-b: motor estilo Uber no SERVIDOR (Edge Function `dispatch-engine`
+  // + tabelas trip_requests/ride_offers como fonte da verdade). Máquina de estados
+  // por pedido, oferta sequencial por ETA, aceite atômico, re-dispatch e expansão
+  // de raio. DESLIGADO por padrão → o fluxo legado (leque via send-ride-push)
+  // segue intacto; ligar por jurisdição só após validação.
+  dispatch_engine_v2: false,
+  // PR-b: timer (s) de cada oferta antes de expirar e passar ao próximo motorista.
+  dispatch_offer_ttl_seconds: 15,
+  // PR-b: 'sequential' (uma oferta por vez, padrão) ou 'broadcast' (leque a todos).
+  dispatch_mode: 'sequential',
+  // PR-b: raio inicial de busca de motoristas (km).
+  dispatch_radius_initial_km: 3,
+  // PR-b: incremento de raio a cada expansão quando ninguém aceita (km).
+  dispatch_radius_step_km: 2,
+  // PR-b: raio máximo (km) antes de desistir → NO_DRIVERS.
+  dispatch_radius_max_km: 15,
+  // PR-b: tempo global (s) do pedido antes de desistir → NO_DRIVERS.
+  dispatch_global_timeout_seconds: 300,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
