@@ -22,6 +22,7 @@ import { useScheduledOfferAlert } from '../../hooks/useScheduledOfferAlert';
 import { useRideCallAlert } from '../../hooks/useRideCallAlert';
 import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
+import { useDriverOnboardingGate } from '../../hooks/useDriverOnboardingGate';
 import { useCameraController } from '../../hooks/useCameraController';
 import { supabase } from '../../lib/supabase';
 
@@ -71,6 +72,11 @@ export function DriverHomeScreen({ navigation }: Props) {
     dutyMovementEnabled ? dutyMovementMinutes : null,
   );
   const bgCheck = useBackgroundCheck(profile?.id);
+  // Bloco 3 (compliance TNC F.S. 627.748): gates NOVOS deste bloco — desqualificação
+  // já persistida, recheck trienal e disclosure legal. O gate de verificação/Stripe
+  // já existente acima permanece como está (evita duplicar o mesmo aviso por dois
+  // caminhos); aqui só usamos os motivos que ainda não têm um `if` próprio.
+  const onboardingGate = useDriverOnboardingGate();
   const [confirming, setConfirming] = useState(false);
   const mapRef = useRef<MapView>(null);
   // Bloco 1: toda câmera passa pelo CameraController (valida coord + clampa zoom).
@@ -163,6 +169,19 @@ export function DriverHomeScreen({ navigation }: Props) {
       );
       return;
     }
+    // Bloco 3: achado desqualificante já apurado (bane vitalício/limiar — ver
+    // disqualificationRules.ts). Sem botão de ação: é uma decisão que exige contato
+    // com o suporte, não algo que o motorista resolve sozinho no app.
+    if (val && onboardingGate.reasons.includes('background_check_disqualified')) {
+      Alert.alert(t('driver.disqualifiedTitle'), t('driver.disqualifiedBody'));
+      return;
+    }
+    // Bloco 3: recheck trienal vencido — teto independente da validade operacional
+    // do check (ver ambiguidade documentada em driverOnboardingGate.ts).
+    if (val && onboardingGate.reasons.includes('background_check_recheck_due')) {
+      Alert.alert(t('driver.recheckDueTitle'), t('driver.recheckDueBody'));
+      return;
+    }
     // Stripe Connect: só pode ficar online com a conta de repasse habilitada
     // (charges + payouts). O backend também força isso (trigger em
     // driver_locations) — aqui é só o aviso amigável direcionando ao onboarding.
@@ -173,6 +192,19 @@ export function DriverHomeScreen({ navigation }: Props) {
         [
           { text: t('common.cancel'), style: 'cancel' },
           { text: t('driver.payoutSetupGo', 'Set up payouts'), onPress: () => navigation.navigate('DriverTabs', { screen: 'Ganhos' } as never) },
+        ]
+      );
+      return;
+    }
+    // Bloco 3: aceite do disclosure legal (driver_disclosure_acceptances) — quando
+    // a jurisdição exige, leva o motorista direto para a tela de revisão/aceite.
+    if (val && onboardingGate.reasons.includes('disclosure_not_accepted')) {
+      Alert.alert(
+        t('driver.disclosureRequiredTitle'),
+        t('driver.disclosureRequiredBody'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('driver.disclosureGo'), onPress: () => navigation.navigate('Disclosure') },
         ]
       );
       return;

@@ -210,6 +210,10 @@ export type RootStackParamList = {
   // período P0-P3, nos mesmos moldes da tela "Insurance" do app do motorista
   // da Uber (ver docs/bloco1-compliance-periodos.md).
   Insurance: undefined;
+  // Compliance TNC (F.S. 627.748, Bloco 3): termo de divulgação legal do
+  // motorista — aceite gravado em driver_disclosure_acceptances (migration
+  // 0059). Mesmos moldes de navegação da tela "Insurance" (Bloco 1).
+  Disclosure: undefined;
   EditProfile: undefined;
   NotificationSettings: undefined;
   Support: undefined;

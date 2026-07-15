@@ -663,6 +663,14 @@ export const translations: Record<Lang, Dict> = {
     'driver.payoutSetupRequiredTitle': 'Finish payout setup',
     'driver.payoutSetupRequiredBody': 'Complete your Stripe payout onboarding before going online so you can get paid.',
     'driver.payoutSetupGo': 'Set up payouts',
+    // Bloco 3 (compliance TNC F.S. 627.748): gates de onboarding
+    'driver.disqualifiedTitle': 'Account not eligible',
+    'driver.disqualifiedBody': 'Your background check result does not meet the requirements to drive on the platform. Contact support if you believe this is an error.',
+    'driver.recheckDueTitle': 'Background check renewal required',
+    'driver.recheckDueBody': 'It’s time to redo your background check to keep driving. Contact support to start a new check.',
+    'driver.disclosureRequiredTitle': 'Review required',
+    'driver.disclosureRequiredBody': 'Please review and accept the driver disclosure before going online.',
+    'driver.disclosureGo': 'Review now',
     // Incoming ride call (P1)
     'driverCall.title': 'New ride!',
     'driverCall.expiresIn': 'Expires in',
@@ -761,6 +769,23 @@ export const translations: Record<Lang, Dict> = {
     'insurance.p3.body': 'The passenger is on board, until the final drop-off. The same $1,000,000 commercial policy applies for the whole trip.',
     'insurance.footer': 'This is a summary for informational purposes and does not replace the full policy. For questions about a specific incident, contact suporte@goxl.app.',
     'insurance.legal': 'Legal basis: Florida Statute 627.748 — Transportation Network Companies.',
+
+    // Driver disclosure (Bloco 3, compliance TNC F.S. 627.748)
+    'disclosure.title': 'Driver disclosure',
+    'disclosure.updated': 'Required acknowledgment for Transportation Network Company drivers (F.S. 627.748)',
+    'disclosure.intro': 'Before going online, please review and acknowledge the points below about how the platform works.',
+    'disclosure.point1Title': 'Background check',
+    'disclosure.point1Body': 'Your eligibility depends on a background check that is periodically renewed. Certain findings (e.g. violent or sexual offenses, human trafficking, license suspension/revocation) permanently disqualify a driver from the platform.',
+    'disclosure.point2Title': 'Insurance coverage by period',
+    'disclosure.point2Body': 'Insurance coverage changes depending on your status in the app (offline, available, en route, on trip). See the full breakdown on the Insurance & coverage screen.',
+    'disclosure.point3Title': 'Zero tolerance',
+    'disclosure.point3Body': 'Reports of serious misconduct (e.g. violence, discrimination, drug/alcohol use while driving) may lead to immediate suspension pending investigation.',
+    'disclosure.point4Title': 'Data use',
+    'disclosure.point4Body': 'Trip and location data collected while online is used for safety, dispatch, and regulatory compliance, and is retained per the platform’s data retention policy.',
+    'disclosure.accept': 'I have read and acknowledge this disclosure',
+    'disclosure.acceptedLabel': 'Acknowledged',
+    'disclosure.footer': 'Acknowledging this disclosure does not waive any legal rights. For questions, contact suporte@goxl.app.',
+    'disclosure.legal': 'Legal basis: Florida Statute 627.748 — Transportation Network Companies.',
 
     // Support / help
     'support.title': 'Help & support',
@@ -1465,6 +1490,14 @@ export const translations: Record<Lang, Dict> = {
     'driver.payoutSetupRequiredTitle': 'Completa la configuración de pagos',
     'driver.payoutSetupRequiredBody': 'Completa tu registro de pagos en Stripe antes de conectarte para poder recibir tus ganancias.',
     'driver.payoutSetupGo': 'Configurar pagos',
+    // Bloque 3 (compliance TNC F.S. 627.748): gates de onboarding
+    'driver.disqualifiedTitle': 'Cuenta no elegible',
+    'driver.disqualifiedBody': 'El resultado de tu verificación de antecedentes no cumple los requisitos para conducir en la plataforma. Contacta a soporte si crees que esto es un error.',
+    'driver.recheckDueTitle': 'Renovación de antecedentes requerida',
+    'driver.recheckDueBody': 'Es momento de repetir tu verificación de antecedentes para seguir conduciendo. Contacta a soporte para iniciar una nueva verificación.',
+    'driver.disclosureRequiredTitle': 'Revisión requerida',
+    'driver.disclosureRequiredBody': 'Revisa y acepta la divulgación del conductor antes de conectarte.',
+    'driver.disclosureGo': 'Revisar ahora',
     // Llamada de viaje entrante (P1)
     'driverCall.title': '¡Nuevo viaje!',
     'driverCall.expiresIn': 'Expira en',
@@ -1563,6 +1596,23 @@ export const translations: Record<Lang, Dict> = {
     'insurance.p3.body': 'El pasajero está a bordo, hasta el último punto de bajada. Se aplica la misma póliza comercial de $1,000,000 durante todo el viaje.',
     'insurance.footer': 'Este es un resumen informativo y no reemplaza la póliza completa. Para dudas sobre un incidente específico, contacta a suporte@goxl.app.',
     'insurance.legal': 'Base legal: Estatuto de Florida 627.748 — Transportation Network Companies.',
+
+    // Divulgación al conductor (Bloque 3, compliance TNC F.S. 627.748)
+    'disclosure.title': 'Divulgación al conductor',
+    'disclosure.updated': 'Reconocimiento requerido para conductores de Transportation Network Companies (F.S. 627.748)',
+    'disclosure.intro': 'Antes de conectarte, revisa y reconoce los siguientes puntos sobre cómo funciona la plataforma.',
+    'disclosure.point1Title': 'Verificación de antecedentes',
+    'disclosure.point1Body': 'Tu elegibilidad depende de una verificación de antecedentes que se renueva periódicamente. Ciertos hallazgos (por ejemplo, delitos violentos o sexuales, trata de personas, suspensión/revocación de licencia) descalifican permanentemente a un conductor de la plataforma.',
+    'disclosure.point2Title': 'Cobertura de seguro por período',
+    'disclosure.point2Body': 'La cobertura de seguro cambia según tu estado en la app (desconectado, disponible, en camino, en viaje). Consulta el detalle completo en la pantalla de Seguro y cobertura.',
+    'disclosure.point3Title': 'Tolerancia cero',
+    'disclosure.point3Body': 'Los reportes de mala conducta grave (por ejemplo, violencia, discriminación, uso de drogas/alcohol al conducir) pueden llevar a una suspensión inmediata mientras se investiga.',
+    'disclosure.point4Title': 'Uso de datos',
+    'disclosure.point4Body': 'Los datos de viaje y ubicación recolectados mientras estás en línea se usan para seguridad, despacho y cumplimiento regulatorio, y se conservan según la política de retención de datos de la plataforma.',
+    'disclosure.accept': 'He leído y reconozco esta divulgación',
+    'disclosure.acceptedLabel': 'Reconocido',
+    'disclosure.footer': 'Reconocer esta divulgación no renuncia a ningún derecho legal. Para dudas, contacta a suporte@goxl.app.',
+    'disclosure.legal': 'Base legal: Estatuto de Florida 627.748 — Transportation Network Companies.',
 
     // Soporte / ayuda
     'support.title': 'Ayuda y soporte',
@@ -2267,6 +2317,14 @@ export const translations: Record<Lang, Dict> = {
     'driver.payoutSetupRequiredTitle': 'Conclua o cadastro de repasse',
     'driver.payoutSetupRequiredBody': 'Conclua seu cadastro de repasse no Stripe antes de ficar online para poder receber.',
     'driver.payoutSetupGo': 'Configurar repasse',
+    // Bloco 3 (compliance TNC F.S. 627.748): gates de onboarding
+    'driver.disqualifiedTitle': 'Conta não elegível',
+    'driver.disqualifiedBody': 'O resultado da sua verificação de antecedentes não atende aos requisitos para dirigir na plataforma. Entre em contato com o suporte se acredita que isso é um erro.',
+    'driver.recheckDueTitle': 'Renovação da verificação de antecedentes necessária',
+    'driver.recheckDueBody': 'É hora de refazer sua verificação de antecedentes para continuar dirigindo. Entre em contato com o suporte para iniciar uma nova verificação.',
+    'driver.disclosureRequiredTitle': 'Revisão necessária',
+    'driver.disclosureRequiredBody': 'Revise e aceite o termo de divulgação do motorista antes de ficar online.',
+    'driver.disclosureGo': 'Revisar agora',
     // Chamada de corrida recebida (P1)
     'driverCall.title': 'Nova corrida!',
     'driverCall.expiresIn': 'Expira em',
@@ -2365,6 +2423,23 @@ export const translations: Record<Lang, Dict> = {
     'insurance.p3.body': 'O passageiro está a bordo, até o último desembarque. A mesma apólice comercial de US$ 1.000.000 vale durante toda a corrida.',
     'insurance.footer': 'Este é um resumo informativo e não substitui a apólice completa. Para dúvidas sobre um sinistro específico, fale com suporte@goxl.app.',
     'insurance.legal': 'Base legal: Estatuto da Flórida 627.748 — Transportation Network Companies.',
+
+    // Termo de divulgação do motorista (Bloco 3, compliance TNC F.S. 627.748)
+    'disclosure.title': 'Termo de divulgação do motorista',
+    'disclosure.updated': 'Reconhecimento exigido para motoristas de Transportation Network Companies (F.S. 627.748)',
+    'disclosure.intro': 'Antes de ficar online, revise e reconheça os pontos abaixo sobre como a plataforma funciona.',
+    'disclosure.point1Title': 'Verificação de antecedentes',
+    'disclosure.point1Body': 'Sua elegibilidade depende de uma verificação de antecedentes renovada periodicamente. Alguns achados (ex.: crimes violentos ou sexuais, tráfico humano, CNH suspensa/cassada) desqualificam o motorista da plataforma permanentemente.',
+    'disclosure.point2Title': 'Cobertura de seguro por período',
+    'disclosure.point2Body': 'A cobertura de seguro muda conforme seu status no app (offline, disponível, a caminho, em viagem). Veja o detalhamento completo na tela de Seguro e cobertura.',
+    'disclosure.point3Title': 'Tolerância zero',
+    'disclosure.point3Body': 'Denúncias de má conduta grave (ex.: violência, discriminação, uso de álcool/drogas ao dirigir) podem levar à suspensão imediata enquanto se investiga.',
+    'disclosure.point4Title': 'Uso de dados',
+    'disclosure.point4Body': 'Os dados de viagem e localização coletados enquanto você está online são usados para segurança, despacho e compliance regulatório, e retidos conforme a política de retenção de dados da plataforma.',
+    'disclosure.accept': 'Li e reconheço este termo de divulgação',
+    'disclosure.acceptedLabel': 'Reconhecido',
+    'disclosure.footer': 'Reconhecer este termo não renuncia a nenhum direito legal. Dúvidas: suporte@goxl.app.',
+    'disclosure.legal': 'Base legal: Estatuto da Flórida 627.748 — Transportation Network Companies.',
 
     // Suporte / ajuda
     'support.title': 'Ajuda e suporte',

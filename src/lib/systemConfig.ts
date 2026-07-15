@@ -107,6 +107,25 @@ export const CONFIG_DEFAULTS = {
   // validação. NÃO afeta a manutenção de partição/retenção em si, que roda
   // sempre independente desta flag (é infraestrutura invisível ao usuário).
   period_audit_v1_enabled: false,
+  // Bloco 3 (compliance TNC F.S. 627.748): liga os gates de onboarding no
+  // SERVIDOR (função driver_can_go_online() + trigger em driver_locations —
+  // ver migration 0059): desqualificação, recheck trienal e disclosure legal.
+  // DESLIGADO por padrão — enquanto off, driver_can_go_online() sempre
+  // devolve true e o gate de disponibilidade fica como estava antes do
+  // Bloco 3 (só verification_status + Stripe Connect, migration 0038).
+  onboarding_gates_v1_enabled: false,
+  // Bloco 3: TETO de anos entre reapurações de background check, independente
+  // da validade operacional (`background_check_valid_days`, P7). Ver
+  // ambiguidade documentada em src/lib/driverOnboardingGate.ts — as duas
+  // regras são independentes; a mais restritiva prevalece.
+  background_check_recheck_years: 3,
+  // Bloco 3: exige aceite do disclosure legal (driver_disclosure_acceptances)
+  // para o motorista ficar online. DESLIGADO por padrão.
+  driver_disclosure_required: false,
+  // Bloco 3: versão vigente do texto do disclosure legal. Trocar este valor
+  // (por jurisdição) faz o motorista precisar aceitar de novo — aceites de
+  // versões antigas continuam no histórico (tabela é append-only).
+  driver_disclosure_version: '1',
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
