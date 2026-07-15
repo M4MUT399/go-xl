@@ -28,7 +28,13 @@ export type DrivingLimit = {
  */
 export function useDrivingLimit(
   driverId: string | undefined,
-  idleSegments: IdleSegment[] = []
+  idleSegments: IdleSegment[] = [],
+  /**
+   * Bloco 2: minutos de direção pela máquina por MOVIMENTO. Quando um número
+   * (flag `duty_movement_v2_enabled` ligada), vira a fonte autoritativa do
+   * acúmulo; `null`/ausente → mantém o cálculo v1 (sessão − ociosidade).
+   */
+  movementMinutes: number | null = null
 ): DrivingLimit {
   const [sessions, setSessions] = useState<DutySession[]>([]);
   const [cfg, setCfg] = useState({
@@ -116,7 +122,7 @@ export function useDrivingLimit(
     await refresh();
   }, [driverId, refresh]);
 
-  const status = computeDutyStatus(sessions, cfg, new Date(), idleSegments);
+  const status = computeDutyStatus(sessions, cfg, new Date(), idleSegments, movementMinutes);
   const warn = status.online && !status.mustRest && status.remainingMinutes <= warnMinutes;
 
   return { status, warnMinutes, warn, startSession, endSession, refresh };

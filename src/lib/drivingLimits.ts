@@ -53,7 +53,16 @@ export function computeDutyStatus(
   sessions: DutySession[],
   cfg: DutyLimitConfig,
   now: Date = new Date(),
-  idleSegments: IdleSegment[] = []
+  idleSegments: IdleSegment[] = [],
+  /**
+   * Bloco 2 (rollout `duty_movement_v2_enabled`): quando fornecido (número), os
+   * minutos de direção acumulados vêm da máquina de estados por MOVIMENTO
+   * (persistida por timestamps, sobrevive a kill/reboot) em vez do cálculo v1
+   * "sessão − ociosidade excedente". É a fonte autoritativa da contagem; o resto
+   * do status (online, âncora do descanso via lastDutyEnd) segue vindo das
+   * sessões. `null`/ausente → mantém o comportamento v1 (padrão).
+   */
+  movementMinutes: number | null = null
 ): DutyStatus {
   const limitMin = cfg.limitHours * 60;
   const restMin = cfg.restHours * 60;
@@ -105,6 +114,13 @@ export function computeDutyStatus(
       excludedMin += Math.max(0, durMin - graceMin);
     }
     accMin = Math.max(0, accMin - excludedMin);
+  }
+
+  // Bloco 2: se a contagem por MOVIMENTO está ativa, ela é autoritativa e
+  // substitui o acúmulo v1 (sessão − ociosidade). Mantemos lastDutyEnd/online
+  // das sessões para ancorar o restUntil e o rótulo online.
+  if (movementMinutes != null && Number.isFinite(movementMinutes)) {
+    accMin = Math.max(0, movementMinutes);
   }
 
   const mustRest = accMin >= limitMin;

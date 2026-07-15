@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useLocation } from '../hooks/useLocation';
 import { useDriverRide } from '../hooks/useRide';
 import { useDutyIdleTracker } from '../hooks/useDutyIdleTracker';
+import { useDutyMovementTracker } from '../hooks/useDutyMovementTracker';
 import { supabase } from '../lib/supabase';
 import type { Coordinates } from '../types';
 import type { IdleSegment } from '../lib/drivingLimits';
@@ -20,6 +21,10 @@ interface DriverRideContextValue extends UseDriverRideReturn {
   location: Coordinates | null;
   /** Item 1: períodos parado do turno atual (alimenta o limite de direção). */
   dutyIdleSegments: IdleSegment[];
+  /** Bloco 2: minutos de jornada pela máquina por movimento (0 se flag off). */
+  dutyMovementMinutes: number;
+  /** Bloco 2: true quando a contagem por movimento (v2) está habilitada. */
+  dutyMovementEnabled: boolean;
 }
 
 const DriverRideContext = createContext<DriverRideContextValue | null>(null);
@@ -65,6 +70,17 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   // durante a corrida (tela de Navegação), não só o da Home.
   const dutyIdleSegments = useDutyIdleTracker(isOnline, location?.speed);
 
+  // Bloco 2: contagem de jornada pela máquina de estados por MOVIMENTO
+  // (persistida por timestamps epoch, sobrevive a kill/reboot; emite transições
+  // à trilha de auditoria). Roda em paralelo ao v1, mas é no-op enquanto a flag
+  // `duty_movement_v2_enabled` estiver desligada (padrão) — não altera a regra
+  // de descanso atual até o rollout por jurisdição.
+  const { enabled: dutyMovementEnabled, workedMinutes: dutyMovementMinutes } = useDutyMovementTracker(
+    profile?.id,
+    isOnline,
+    location?.speed,
+  );
+
   // Sincroniza localização + status online no banco (só após carregar o valor
   // persistido). Vive aqui — e não em DriverHomeScreen — para continuar
   // atualizando mesmo enquanto o motorista está em outra tela (Navegação,
@@ -105,6 +121,8 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     setIsOnline,
     location,
     dutyIdleSegments,
+    dutyMovementMinutes,
+    dutyMovementEnabled,
   };
 
   return <DriverRideContext.Provider value={value}>{children}</DriverRideContext.Provider>;

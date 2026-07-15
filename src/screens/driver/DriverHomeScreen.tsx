@@ -22,6 +22,7 @@ import { useScheduledOfferAlert } from '../../hooks/useScheduledOfferAlert';
 import { useRideCallAlert } from '../../hooks/useRideCallAlert';
 import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
+import { useCameraController } from '../../hooks/useCameraController';
 import { supabase } from '../../lib/supabase';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
@@ -37,6 +38,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   const {
     isOnline, setIsOnline, location, pendingRide, pendingScheduledRide, setPendingScheduledRide,
     confirmScheduledRide, confirmQrScheduledRide, rejectScheduledRide, dutyIdleSegments,
+    dutyMovementEnabled, dutyMovementMinutes,
   } = useDriverRideContext();
   // Agendamento travado por QR (o passageiro escolheu este motorista pelo
   // código dele): diferente do pool aberto, aqui `driver_id` já vem preenchido
@@ -60,10 +62,19 @@ export function DriverHomeScreen({ navigation }: Props) {
   // P3: limite de direção (12h) + descanso obrigatório (6h), configurável.
   // Item 1: passa os segmentos ociosos do turno (veículo parado) para que a
   // contagem só corra com o veículo em movimento.
-  const duty = useDrivingLimit(profile?.id, dutyIdleSegments);
+  // Bloco 2: com a flag `duty_movement_v2_enabled` ligada, a contagem por
+  // movimento (persistida, sobrevive a kill/reboot) vira a fonte autoritativa do
+  // acúmulo de direção; desligada → mantém o cálculo v1 (sessão − ociosidade).
+  const duty = useDrivingLimit(
+    profile?.id,
+    dutyIdleSegments,
+    dutyMovementEnabled ? dutyMovementMinutes : null,
+  );
   const bgCheck = useBackgroundCheck(profile?.id);
   const [confirming, setConfirming] = useState(false);
   const mapRef = useRef<MapView>(null);
+  // Bloco 1: toda câmera passa pelo CameraController (valida coord + clampa zoom).
+  const cam = useCameraController(mapRef, 'DriverHome');
 
   // Nome do passageiro do agendamento pendente — mesmo padrão já usado em
   // IncomingRideCall.tsx para a chamada imediata (fetch pontual em profiles,
@@ -101,12 +112,8 @@ export function DriverHomeScreen({ navigation }: Props) {
   }, [location?.lat, location?.lng, location?.heading]);
 
   function recenter() {
-    if (location && mapRef.current) {
-      mapRef.current.animateCamera(
-        { center: { latitude: location.lat, longitude: location.lng }, zoom: 16 },
-        { duration: 300 }
-      );
-    }
+    if (!location) return;
+    cam.follow({ lat: location.lat, lng: location.lng }, { zoom: 16 }, 300);
   }
 
   // P3: se o limite de direção estourar enquanto online, força offline e avisa
@@ -257,6 +264,7 @@ export function DriverHomeScreen({ navigation }: Props) {
         // escuro renderiza como "modo noturno" no Google Maps (Android); usamos o
         // estilo padrão (claro) nessa plataforma.
         customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
+        onMapReady={() => cam.setReady(true)}
       >
         {location && (
           <Marker
