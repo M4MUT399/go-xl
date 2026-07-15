@@ -12,6 +12,8 @@ import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import { canReceiveNewRideOffer } from '../lib/rideDispatch';
 import { resolveRevocation, type RideRevokeReason } from '../lib/rideRevocation';
 import { offerAlertManager } from '../lib/offerAlertManager';
+import { arriveOffer, resolveOffer, queueHasOffer } from '../lib/offerQueue';
+import { useFeatureFlag } from './useFeatureFlag';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
 import type { Ride, RideStatus, Location, RideRecord } from '../types';
@@ -593,6 +595,8 @@ export function usePassengerRide(passengerId: string | undefined) {
 
     setActiveRide(data as Ride);
     if (options?.lockedDriverId) {
+      // Corrida travada por QR: exclusiva do motorista dono do QR — segue sempre
+      // no fluxo legado (o motor v2 é para o pool aberto).
       // Broadcast in-app (confiável mesmo sem push token no Expo Go)
       broadcastToDriver(options.lockedDriverId, data);
       // Push remoto como reforço (funciona em produção)
@@ -779,6 +783,8 @@ export function useScheduledRides(passengerId: string | undefined) {
         // Notifica o motorista pré-confirmado
         notifyPassenger(ride.passenger_id, ride.id); // reutiliza lógica de push
       } else {
+        // Pool aberto (agendada ativada agora → requesting): mesma regra do
+        // requestRide.
         const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
         const destLat = ride.destination_lat ?? ride.destination?.lat;
         const destLng = ride.destination_lng ?? ride.destination?.lng;
@@ -853,7 +859,36 @@ export function useScheduledRides(passengerId: string | undefined) {
 }
 
 export function useDriverRide(driverId: string | undefined) {
-  const [pendingRide, setPendingRide] = useState<Ride | null>(null);
+  // PR-a (dispatch concorrente): fila FIFO de ofertas imediatas. A CABEÇA
+  // (offerQueue[0]) é a chamada que o motorista vê/ouve agora; as demais ficam
+  // aguardando sem serem canceladas. Com a flag `dispatch_multi_offer_fix`
+  // DESLIGADA, `arriveOffer`/`resolveOffer` reduzem a fila a no máximo 1 item —
+  // reproduzindo exatamente o slot único legado (`setPendingRide`).
+  const multiOffer = useFeatureFlag('dispatch_multi_offer_fix');
+  const multiOfferRef = useRef(multiOffer);
+  multiOfferRef.current = multiOffer;
+
+  const [offerQueue, setOfferQueue] = useState<Ride[]>([]);
+  const pendingRide = offerQueue.length > 0 ? offerQueue[0] : null;
+  // Espelho síncrono da fila para leitura dentro de handlers/intervals.
+  const offerQueueRef = useRef<Ride[]>([]);
+  useEffect(() => { offerQueueRef.current = offerQueue; }, [offerQueue]);
+
+  // Remove uma oferta por id (de qualquer posição da fila) — se era a cabeça, a
+  // próxima assume automaticamente. Idempotente (id ausente = no-op).
+  const dismissOffer = useCallback((rideId: string) => {
+    setOfferQueue((q) => resolveOffer(q, rideId));
+  }, []);
+
+  // Shim compatível com a API antiga `setPendingRide`:
+  //   • setPendingRide(ride) → enfileira (FIFO; substitui quando flag off).
+  //   • setPendingRide(null) → resolve a CABEÇA atual (promove a próxima).
+  // Callers que sabem o id devem preferir `dismissOffer(id)` (por-id, idempotente).
+  const setPendingRide = useCallback((r: Ride | null) => {
+    if (r) setOfferQueue((q) => arriveOffer(q, r, multiOfferRef.current));
+    else setOfferQueue((q) => (q.length > 0 ? q.slice(1) : q));
+  }, []);
+
   const [pendingScheduledRide, setPendingScheduledRide] = useState<Ride | null>(null);
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   // Corrida que o motorista já tinha em andamento e precisa "retomar" —
@@ -898,10 +933,14 @@ export function useDriverRide(driverId: string | undefined) {
   // (o som já foi parado pelo próprio stopAll). Só age se ainda for a MESMA
   // corrida, para não apagar uma nova oferta que tenha entrado no meio-tempo.
   useEffect(() => {
+    // O singleton, ao levar uma corrida a TERMINAL (stopAll), pede para fechar o
+    // card daquele id. Removemos POR ID de qualquer posição da fila — se era a
+    // cabeça, a próxima oferta assume; se era da cauda (revogada), some sem
+    // tocar a que está tocando. Idempotente.
     return offerAlertManager.registerForceClose((rideId) => {
-      if (pendingRideIdRef.current === rideId) setPendingRide(null);
+      dismissOffer(rideId);
     });
-  }, []);
+  }, [dismissOffer]);
 
   // Descarta o popup de agendamento automaticamente quando o horário passa
   useEffect(() => {
@@ -1076,7 +1115,11 @@ export function useDriverRide(driverId: string | undefined) {
       // entre o disparo do fetch e a sua resposta).
       if (!stillOffered && pendingRideIdRef.current === pendingId) {
         if (__DEV__) console.log(`[${Platform.OS}][backstop] LIMPANDO card/som — oferta não é mais válida`);
-        setPendingRide(null);
+        // Encerra o alarme e LAPIDA o id (o forceClose remove da fila e promove a
+        // próxima). dismissOffer explícito é defensivo caso o callback ainda não
+        // esteja registrado. Remove só ESTA oferta — as demais da fila seguem.
+        offerAlertManager.stopAll(pendingId, 'expired');
+        dismissOffer(pendingId);
         // Backstop também para a notificação da bandeja, caso o broadcast tenha
         // se perdido e ela ainda esteja lá.
         dismissRideNotifications(pendingId);
@@ -1209,7 +1252,11 @@ export function useDriverRide(driverId: string | undefined) {
           const ride = payload.new as Ride;
           if (['accepted', 'driver_en_route', 'in_progress'].includes(ride.status)) {
             setActiveRide(ride);
-            setPendingRide(null);
+            // Motorista ficou OCUPADO: esvazia toda a fila de ofertas — ele não
+            // pode atender outra chamada enquanto vai buscar/conduzir esta. As
+            // outras ofertas seguem vivas para os DEMAIS motoristas (cada device
+            // tem sua própria fila); aqui só limpamos a fila DESTE motorista.
+            setOfferQueue((q) => (q.length > 0 ? [] : q));
           } else {
             setActiveRide(null);
           }
@@ -1263,22 +1310,28 @@ export function useDriverRide(driverId: string | undefined) {
       const firstTime = !handledRevocations.current.has(key);
       handledRevocations.current.add(key);
 
-      // Remove o card de chamada (para o som) desta corrida, se estiver pendente.
-      if (actions.clearPendingRide) {
+      // Remove esta oferta se ela estiver na fila do motorista. Com a flag on, a
+      // oferta revogada pode estar na CAUDA (não só na cabeça) — resolveRevocation
+      // só enxerga a cabeça (pendingRideId), então cobrimos a cauda via a fila.
+      const clearThisOffer = multiOfferRef.current
+        ? queueHasOffer(offerQueueRef.current, rideId ?? '')
+        : actions.clearPendingRide;
+      if (clearThisOffer && rideId) {
         // TERMINAL: para o som/vibração/watchdog e lapida o id AGORA — sem
         // depender do unmount do card (que pode atrasar). stopAll também dispensa
-        // a notificação e fecha o card via forceClose, mas mantemos o
-        // setPendingRide(null) explícito para o caso raro de o callback ainda não
-        // estar registrado.
+        // a notificação e fecha o card via forceClose (remove da fila e promove a
+        // próxima); mantemos o dismissOffer explícito para o caso raro de o
+        // callback ainda não estar registrado. Só remove ESTA oferta — as demais
+        // da fila permanecem.
         offerAlertManager.stopAll(
-          rideId!,
+          rideId,
           reason === 'taken' ? 'taken' : reason === 'expired' ? 'expired' : 'revoked'
         );
-        setPendingRide(null);
+        dismissOffer(rideId);
         // Dispensa também a notificação de oferta da bandeja/lockscreen (item 3).
-        dismissRideNotifications(rideId!);
-        if (actions.logTakenByOther && firstTime) {
-          logRideOfferEvent(rideId!, driverId, 'taken_by_other', { reason });
+        dismissRideNotifications(rideId);
+        if (firstTime) {
+          logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason });
         }
       }
       // Mesma corrida agendada (pool aberto) revogada enquanto via o popup.
@@ -1586,6 +1639,9 @@ export function useDriverRide(driverId: string | undefined) {
     activeRide, acceptRide, confirmScheduledRide,
     confirmQrScheduledRide, rejectScheduledRide,
     updateRideStatus, setPendingRide, setPendingScheduledRide,
+    // PR-a: remove UMA oferta por id (idempotente). Preferir a setPendingRide(null)
+    // nos caminhos terminais — não remove a próxima oferta já promovida da fila.
+    dismissOffer,
     refundRide,
     resumableRide, clearResumableRide,
   };

@@ -64,6 +64,12 @@ export const CONFIG_DEFAULTS = {
   // muda regra de compliance (limiar 8 km/h + histerese) — habilitar por
   // jurisdição só após validação. Off → mantém o tracker de ociosidade atual.
   duty_movement_v2_enabled: false,
+  // Dispatch PR-a: fila FIFO de ofertas no app do motorista. Corrige o bug em que
+  // uma 2ª solicitação (P2) SOBRESCREVIA/lapidava a 1ª (P1) no slot único —
+  // matando as duas corridas. Com a flag LIGADA o motorista mantém várias ofertas
+  // válidas ao mesmo tempo e atende uma por vez (FIFO). DESLIGADO por padrão →
+  // mantém o comportamento de slot único legado até o rollout gradual.
+  dispatch_multi_offer_fix: false,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
