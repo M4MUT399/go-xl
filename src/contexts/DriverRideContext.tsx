@@ -6,6 +6,8 @@ import { useLocation } from '../hooks/useLocation';
 import { useDriverRide } from '../hooks/useRide';
 import { useDutyIdleTracker } from '../hooks/useDutyIdleTracker';
 import { useDutyMovementTracker } from '../hooks/useDutyMovementTracker';
+import { useDriverPeriodTracker } from '../hooks/useDriverPeriodTracker';
+import type { DriverPeriod } from '../lib/driverPeriodMachine';
 import { supabase } from '../lib/supabase';
 import type { Coordinates } from '../types';
 import type { IdleSegment } from '../lib/drivingLimits';
@@ -25,6 +27,10 @@ interface DriverRideContextValue extends UseDriverRideReturn {
   dutyMovementMinutes: number;
   /** Bloco 2: true quando a contagem por movimento (v2) está habilitada. */
   dutyMovementEnabled: boolean;
+  /** Bloco 1 (compliance TNC): período legal P0-P3 atual (ver driverPeriodMachine.ts). */
+  driverPeriod: DriverPeriod;
+  /** Bloco 1: true quando o tracking de período (`period_tracking_v1_enabled`) está habilitado. */
+  driverPeriodEnabled: boolean;
 }
 
 const DriverRideContext = createContext<DriverRideContextValue | null>(null);
@@ -81,6 +87,16 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     location?.speed,
   );
 
+  // Bloco 1 (compliance TNC F.S. 627.748): máquina de períodos P0-P3, dirigida
+  // por eventos de SERVIDOR (driver_locations/rides via realtime), não pelo
+  // `isOnline`/`ride` locais — ver comentário em useDriverPeriodTracker.ts.
+  // No-op enquanto `period_tracking_v1_enabled` estiver desligada (padrão).
+  const { enabled: driverPeriodEnabled, period: driverPeriod } = useDriverPeriodTracker(
+    profile?.id,
+    profile?.jurisdiction,
+    location,
+  );
+
   // Sincroniza localização + status online no banco (só após carregar o valor
   // persistido). Vive aqui — e não em DriverHomeScreen — para continuar
   // atualizando mesmo enquanto o motorista está em outra tela (Navegação,
@@ -123,6 +139,8 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     dutyIdleSegments,
     dutyMovementMinutes,
     dutyMovementEnabled,
+    driverPeriod,
+    driverPeriodEnabled,
   };
 
   return <DriverRideContext.Provider value={value}>{children}</DriverRideContext.Provider>;

@@ -21,7 +21,7 @@ import type { RootStackParamList } from '../types';
 import type { UserStats } from '../hooks/useUserStats';
 import type { Profile } from '../types';
 
-type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'TrustedContacts' | 'Support' | 'Terms' | 'QRCode' | 'DriverVerification';
+type ProfileRoute = 'EditProfile' | 'Payment' | 'NotificationSettings' | 'TrustedContacts' | 'Support' | 'Terms' | 'QRCode' | 'DriverVerification' | 'Insurance';
 
 const MENU_ITEMS: { icon: string; labelKey: string; route: ProfileRoute; driverOnly?: boolean; passengerOnly?: boolean }[] = [
   { icon: '👤', labelKey: 'profile.personalData', route: 'EditProfile' },
@@ -30,6 +30,9 @@ const MENU_ITEMS: { icon: string; labelKey: string; route: ProfileRoute; driverO
   { icon: '💳', labelKey: 'profile.payment', route: 'Payment' },
   { icon: '🔔', labelKey: 'profile.notifications', route: 'NotificationSettings' },
   { icon: '🛡️', labelKey: 'profile.trustedContacts', route: 'TrustedContacts', passengerOnly: true },
+  // Compliance TNC (F.S. 627.748, Bloco 1) — resumo de cobertura por período
+  // P0-P3, nos mesmos moldes da tela "Insurance" do app do motorista da Uber.
+  { icon: '🛡️', labelKey: 'profile.insurance', route: 'Insurance', driverOnly: true },
   { icon: '🛟', labelKey: 'profile.support', route: 'Support' },
   { icon: '📄', labelKey: 'profile.terms', route: 'Terms' },
 ];

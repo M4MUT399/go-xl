@@ -88,6 +88,12 @@ export const CONFIG_DEFAULTS = {
   dispatch_radius_max_km: 15,
   // PR-b: tempo global (s) do pedido antes de desistir → NO_DRIVERS.
   dispatch_global_timeout_seconds: 300,
+  // Bloco 1 (compliance TNC F.S. 627.748): liga a máquina de estados P0-P3
+  // (src/lib/driverPeriodMachine.ts) + acumulador de milhagem por período
+  // (src/lib/driverPeriodMileage.ts) via a camada de wiring impura. DESLIGADO
+  // por padrão — enquanto off, nada é escrito em driver_period_transitions/
+  // driver_period_daily_mileage; habilitar por jurisdição só após validação.
+  period_tracking_v1_enabled: false,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;

@@ -130,7 +130,11 @@ export interface Ride {
   driver_eta_km?: number;
   created_at: string;
   accepted_at?: string;
+  /** Bloco 1 (compliance TNC): marco P2→P3, carimbado pelo servidor (ver migration 0056). */
+  boarded_at?: string;
   completed_at?: string;
+  /** Bloco 1 (compliance TNC): carimbado pelo servidor quando status vira 'cancelled'. */
+  cancelled_at?: string;
   paid?: boolean;
   stripe_payment_intent_id?: string;
   tip_amount?: number;
@@ -202,6 +206,10 @@ export type RootStackParamList = {
   DriverNavigate: { ride: Ride; initialDriverLocation?: { lat: number; lng: number } };
   VehicleForm: undefined;
   DriverVerification: undefined;
+  // Compliance TNC (F.S. 627.748, Bloco 1): resumo de cobertura de seguro por
+  // período P0-P3, nos mesmos moldes da tela "Insurance" do app do motorista
+  // da Uber (ver docs/bloco1-compliance-periodos.md).
+  Insurance: undefined;
   EditProfile: undefined;
   NotificationSettings: undefined;
   Support: undefined;

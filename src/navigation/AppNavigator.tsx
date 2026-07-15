@@ -442,6 +442,8 @@ export function AppNavigator() {
               <Stack.Screen name="VehicleForm" getComponent={() => require('../screens/driver/VehicleFormScreen').VehicleFormScreen} />
               <Stack.Screen name="DriverVerification" getComponent={() => require('../screens/driver/DriverVerificationScreen').DriverVerificationScreen} />
               <Stack.Screen name="QRCode" getComponent={() => require('../screens/driver/QRCodeScreen').QRCodeScreen} />
+              {/* Compliance TNC (F.S. 627.748, Bloco 1) — resumo de cobertura P0-P3. */}
+              <Stack.Screen name="Insurance" getComponent={() => require('../screens/driver/DriverInsuranceScreen').DriverInsuranceScreen} />
               <Stack.Screen name="Chat" getComponent={() => require('../screens/ChatScreen').ChatScreen} />
               <Stack.Screen name="EditProfile" getComponent={() => require('../screens/profile/EditProfileScreen').EditProfileScreen} />
               <Stack.Screen name="NotificationSettings" getComponent={() => require('../screens/profile/NotificationSettingsScreen').NotificationSettingsScreen} />
