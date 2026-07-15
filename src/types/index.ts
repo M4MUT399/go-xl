@@ -132,6 +132,8 @@ export interface Ride {
   accepted_at?: string;
   /** Bloco 1 (compliance TNC): marco P2→P3, carimbado pelo servidor (ver migration 0056). */
   boarded_at?: string;
+  /** Bloco 4 (compliance TNC): passageiro confirmou motorista+veículo antes do embarque (ver migration 0060). */
+  passenger_confirmed_driver_at?: string;
   completed_at?: string;
   /** Bloco 1 (compliance TNC): carimbado pelo servidor quando status vira 'cancelled'. */
   cancelled_at?: string;

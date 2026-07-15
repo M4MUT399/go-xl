@@ -149,6 +149,14 @@ export function DriverHomeScreen({ navigation }: Props) {
   // Só permite ficar online se a verificação (selfie + documento) já tiver
   // sido aprovada pela equipe — duplo grau de conferência antes de aceitar corridas.
   function handleOnlineChange(val: boolean) {
+    // Bloco 4: suspensão de tolerância zero (driver_suspensions) — checada
+    // primeiro de propósito, mesma prioridade do servidor em
+    // driver_can_go_online() (migration 0060, checada antes do early-return
+    // do Bloco 3). Sem botão de ação: exige contato com o suporte.
+    if (val && onboardingGate.reasons.includes('safety_suspension')) {
+      Alert.alert(t('driver.suspendedTitle'), t('driver.suspendedBody'));
+      return;
+    }
     if (val && profile?.verification_status !== 'approved') {
       Alert.alert(
         t('driver.verificationRequiredTitle'),

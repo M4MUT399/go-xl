@@ -234,3 +234,26 @@ describe('evaluateOnboardingGate — acumula múltiplos motivos', () => {
     );
   });
 });
+
+describe('evaluateOnboardingGate — suspensão de tolerância zero (Bloco 4)', () => {
+  it('safetySuspended=true → bloqueia com motivo específico, mesmo com tudo mais em dia', () => {
+    const r = evaluateOnboardingGate({ ...baseInput, safetySuspended: true });
+    expect(r.canGoOnline).toBe(false);
+    expect(r.reasons).toEqual(['safety_suspension']);
+  });
+
+  it('safetySuspended=false → não bloqueia por isso', () => {
+    const r = evaluateOnboardingGate({ ...baseInput, safetySuspended: false });
+    expect(r.reasons).not.toContain('safety_suspension');
+  });
+
+  it('safetySuspended undefined (default) → não bloqueia por isso (comportamento pré-existente preservado)', () => {
+    const r = evaluateOnboardingGate(baseInput);
+    expect(r.reasons).not.toContain('safety_suspension');
+  });
+
+  it('safetySuspended=true se soma a outros motivos já existentes', () => {
+    const r = evaluateOnboardingGate({ ...baseInput, verificationStatus: 'pending', safetySuspended: true });
+    expect(r.reasons.sort()).toEqual(['safety_suspension', 'verification_pending'].sort());
+  });
+});

@@ -126,6 +126,26 @@ export const CONFIG_DEFAULTS = {
   // (por jurisdição) faz o motorista precisar aceitar de novo — aceites de
   // versões antigas continuam no histórico (tabela é append-only).
   driver_disclosure_version: '1',
+  // Bloco 4 (compliance TNC F.S. 627.748): liga a ENFORCEMENT de suspensão de
+  // tolerância zero em driver_can_go_online() (migration 0060). O registro em
+  // driver_suspensions acontece sempre, independente desta flag — só o
+  // BLOQUEIO é condicional. Independente de onboarding_gates_v1_enabled
+  // (Bloco 3). DESLIGADO por padrão.
+  safety_suspension_gate_v1_enabled: false,
+  // Bloco 4: solicita ao passageiro que confirme foto do motorista + placa do
+  // veículo antes do embarque (prompt forte, não bloqueio rígido — ver
+  // src/lib/driverBoardingConfirmation.ts). DESLIGADO por padrão.
+  driver_confirmation_required: false,
+  // Bloco 4: mostra ao passageiro o botão de baixar/compartilhar o recibo
+  // eletrônico completo da corrida (reaproveita src/lib/waybill.ts +
+  // waybillExport.ts, já usados pelo motorista). DESLIGADO por padrão.
+  receipt_passenger_v1_enabled: false,
+  // Bloco 4: mostra ao passageiro (tela RateRide) o botão de denúncia de
+  // segurança contra o motorista (src/lib/safetyIncidents.ts). O registro em
+  // driver_safety_reports e o trigger de suspensão automática (migration
+  // 0060) SEMPRE existem no servidor — esta flag só controla se a UI de
+  // denúncia aparece no app. DESLIGADO por padrão.
+  safety_reports_v1_enabled: false,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;

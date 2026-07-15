@@ -18,6 +18,8 @@ export type DriverOnboardingGateState = {
   disclosureVersion: string;
   /** O motorista já tem uma linha de aceite para a versão vigente? */
   disclosureAccepted: boolean;
+  /** Bloco 4: o motorista tem alguma suspensão ativa (driver_suspensions, lifted_at nulo)? */
+  safetySuspended: boolean;
   /** Chama a RPC `accept_driver_disclosure` e recarrega o estado. */
   acceptDisclosure: () => Promise<boolean>;
   refresh: () => Promise<void>;
@@ -37,6 +39,11 @@ const DISCLOSURE_KEY = 'tnc_driver_disclosure';
  * `driver_can_go_online()` (migration 0059), então o cliente NUNCA é a
  * autoridade final — é só para dar o aviso certo na hora certa.
  *
+ * Bloco 4 (F.S. 627.748): também lê `safetySuspended` (veredito JÁ
+ * PERSISTIDO de `driver_suspensions`, lifted_at nulo — ver
+ * safetyIncidents.ts) pelo mesmo motivo — o cliente só LÊ, nunca decide
+ * suspensão a partir de denúncias brutas.
+ *
  * `backgroundCheckDisqualified` é passado como o veredito JÁ PERSISTIDO
  * (`driver_background_checks.disqualified`) — o hook nunca reavalia achados
  * brutos no cliente (ver comentário em driverOnboardingGate.ts).
@@ -52,6 +59,10 @@ export function useDriverOnboardingGate(): DriverOnboardingGateState {
   const [disclosureRequired, setDisclosureRequired] = useState<boolean>(getConfigDefault('driver_disclosure_required'));
   const [disclosureVersion, setDisclosureVersion] = useState<string>(getConfigDefault('driver_disclosure_version'));
   const [disclosureAccepted, setDisclosureAccepted] = useState(false);
+  // Bloco 4: veredito JÁ PERSISTIDO de suspensão ativa (driver_suspensions,
+  // lifted_at nulo) — mesmo princípio de `disqualified` acima: o hook só LÊ,
+  // nunca reavalia denúncias brutas (ver safetyIncidents.ts).
+  const [safetySuspended, setSafetySuspended] = useState(false);
   const channelId = useRef(Math.random().toString(36).slice(2)).current;
 
   // Config resolvida por jurisdição (uma vez; getConfig tem cache de 60s).
@@ -95,14 +106,28 @@ export function useDriverOnboardingGate(): DriverOnboardingGateState {
     setDisclosureAccepted(!!(data && data.length > 0));
   }, [driverId, disclosureVersion]);
 
+  // Bloco 4: existe alguma suspensão ainda não levantada? (RLS já permite o
+  // próprio motorista ler suas linhas em driver_suspensions.)
+  const refreshSuspension = useCallback(async () => {
+    if (!driverId) { setSafetySuspended(false); return; }
+    const { data } = await supabase
+      .from('driver_suspensions')
+      .select('id')
+      .eq('driver_id', driverId)
+      .is('lifted_at', null)
+      .limit(1);
+    setSafetySuspended(!!(data && data.length > 0));
+  }, [driverId]);
+
   const refresh = useCallback(async () => {
-    await Promise.all([bgCheck.refresh(), refreshDisqualification(), refreshDisclosureAcceptance()]);
-  }, [bgCheck, refreshDisqualification, refreshDisclosureAcceptance]);
+    await Promise.all([bgCheck.refresh(), refreshDisqualification(), refreshDisclosureAcceptance(), refreshSuspension()]);
+  }, [bgCheck, refreshDisqualification, refreshDisclosureAcceptance, refreshSuspension]);
 
   useEffect(() => { refreshDisqualification(); }, [refreshDisqualification]);
   useEffect(() => { refreshDisclosureAcceptance(); }, [refreshDisclosureAcceptance]);
+  useEffect(() => { refreshSuspension(); }, [refreshSuspension]);
 
-  // Realtime: reflete o veredito de desqualificação assim que persistido.
+  // Realtime: reflete o veredito de desqualificação/suspensão assim que persistido.
   useEffect(() => {
     if (!driverId) return;
     const channel = supabase
@@ -113,9 +138,12 @@ export function useDriverOnboardingGate(): DriverOnboardingGateState {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_disclosure_acceptances', filter: `driver_id=eq.${driverId}` }, () => {
         refreshDisclosureAcceptance();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_suspensions', filter: `driver_id=eq.${driverId}` }, () => {
+        refreshSuspension();
+      })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [driverId, channelId, refreshDisqualification, refreshDisclosureAcceptance]);
+  }, [driverId, channelId, refreshDisqualification, refreshDisclosureAcceptance, refreshSuspension]);
 
   const acceptDisclosure = useCallback(async (): Promise<boolean> => {
     const { error } = await supabase.rpc('accept_driver_disclosure', {
@@ -138,6 +166,7 @@ export function useDriverOnboardingGate(): DriverOnboardingGateState {
     stripePayoutsEnabled: !!profile?.stripe_payouts_enabled,
     disclosureRequired,
     disclosureAccepted,
+    safetySuspended,
   });
 
   return {
@@ -146,6 +175,7 @@ export function useDriverOnboardingGate(): DriverOnboardingGateState {
     disclosureRequired,
     disclosureVersion,
     disclosureAccepted,
+    safetySuspended,
     acceptDisclosure,
     refresh,
   };

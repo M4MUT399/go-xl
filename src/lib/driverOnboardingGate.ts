@@ -43,7 +43,11 @@ export type OnboardingGateReason =
   | 'background_check_disqualified'
   | 'background_check_recheck_due'
   | 'payout_setup_incomplete'
-  | 'disclosure_not_accepted';
+  | 'disclosure_not_accepted'
+  // Bloco 4 (F.S. 627.748): suspensão imediata por denúncia de tolerância
+  // zero (ver src/lib/safetyIncidents.ts) — mesmo princípio de veredito
+  // persistido do `background_check_disqualified` acima.
+  | 'safety_suspension';
 
 export type OnboardingGateInput = {
   /** `profiles.verification_status` — precisa ser 'approved'. */
@@ -77,6 +81,15 @@ export type OnboardingGateInput = {
   disclosureRequired: boolean;
   /** O motorista já tem uma linha de aceite pra versão vigente do disclosure. */
   disclosureAccepted: boolean;
+  /**
+   * Bloco 4: veredito JÁ PERSISTIDO de suspensão ativa (`driver_suspensions`
+   * com `lifted_at` nulo — ver `hasActiveSuspension` em safetyIncidents.ts e
+   * a trigger de suspensão automática na migration do Bloco 4). Mesmo
+   * princípio de `backgroundCheckDisqualified`: o cliente só LÊ o resultado
+   * já computado no servidor, nunca decide suspensão a partir de denúncias
+   * brutas.
+   */
+  safetySuspended?: boolean;
   now?: Date;
 };
 
@@ -145,6 +158,13 @@ export function evaluateOnboardingGate(input: OnboardingGateInput): OnboardingGa
 
   if (input.disclosureRequired && !input.disclosureAccepted) {
     reasons.push('disclosure_not_accepted');
+  }
+
+  // Bloco 4: suspensão de tolerância zero — checada por último de propósito,
+  // mas isso não muda o resultado (todos os motivos aplicáveis já são
+  // acumulados); só documenta que é a checagem mais "urgente" do conjunto.
+  if (input.safetySuspended) {
+    reasons.push('safety_suspension');
   }
 
   return { canGoOnline: reasons.length === 0, reasons };

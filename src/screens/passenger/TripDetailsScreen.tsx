@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Platform,
+  View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Platform, Alert, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -9,6 +9,9 @@ import { useTheme } from '../../hooks/useTheme';
 import { useTranslation } from '../../i18n';
 import { AppTheme } from '../../constants/theme';
 import { formatCurrency, formatDistance } from '../../lib/format';
+import { useAuth } from '../../hooks/useAuth';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
+import { generateAndShareWaybill } from '../../lib/waybillExport';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetails'>;
 
@@ -48,8 +51,26 @@ export function TripDetailsScreen({ navigation, route }: Props) {
   const { ride } = route.params;
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const { profile } = useAuth();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
+
+  // Bloco 4 (compliance TNC F.S. 627.748): recibo eletrônico completo pro
+  // passageiro -- reaproveita 100% a infra do waybill do motorista (mesma
+  // generateAndShareWaybill/PDF, ver src/lib/waybillExport.ts). Só disponível
+  // pra corrida já concluída (paga).
+  const receiptEnabled = useFeatureFlag('receipt_passenger_v1_enabled', profile?.jurisdiction ?? 'global');
+  const [generatingReceipt, setGeneratingReceipt] = useState(false);
+
+  async function handleReceipt() {
+    if (generatingReceipt) return;
+    setGeneratingReceipt(true);
+    const result = await generateAndShareWaybill(ride.id, { passengerName: profile?.full_name });
+    setGeneratingReceipt(false);
+    if (!result.ok && result.error !== 'disabled') {
+      Alert.alert(t('tripDetails.receiptUnavailableTitle'), t('tripDetails.receiptUnavailableMessage'));
+    }
+  }
 
   const info = statusInfo(ride);
   const isCancelled = ride.status === 'cancelled';
@@ -134,6 +155,20 @@ export function TripDetailsScreen({ navigation, route }: Props) {
               <Text style={styles.totalLabel}>{t('tripDetails.total')}</Text>
               <Text style={styles.totalValue}>{formatCurrency(ride.price)}</Text>
             </View>
+
+            {receiptEnabled && ride.status === 'completed' && (
+              <TouchableOpacity
+                style={styles.receiptBtn}
+                onPress={handleReceipt}
+                disabled={generatingReceipt}
+                accessibilityRole="button"
+                accessibilityLabel={t('tripDetails.receiptA11y')}
+              >
+                {generatingReceipt
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Text style={styles.receiptBtnText}>{t('tripDetails.downloadReceipt')}</Text>}
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -212,6 +247,13 @@ function makeStyles(colors: AppTheme) {
     },
     totalLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
     totalValue: { fontSize: 22, fontWeight: '800', color: colors.primary },
+
+    // Recibo eletrônico do passageiro (Bloco 4)
+    receiptBtn: {
+      marginTop: 14, paddingVertical: 12, borderRadius: 10,
+      borderWidth: 1.5, borderColor: colors.primary, alignItems: 'center',
+    },
+    receiptBtnText: { fontSize: 14, fontWeight: '700', color: colors.primary },
 
     idRow: {
       flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

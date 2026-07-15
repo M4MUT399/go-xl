@@ -16,6 +16,7 @@ import { useDriverVehicle } from '../../hooks/useVehicle';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { useTripShare } from '../../hooks/useTripShare';
+import { useDriverBoardingConfirmation } from '../../hooks/useDriverBoardingConfirmation';
 import { useCameraController } from '../../hooks/useCameraController';
 import { KM_TO_MILES } from '../../lib/format';
 import { CarMarker } from '../../components/common/CarMarker';
@@ -65,6 +66,18 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   const vehicle = useDriverVehicle(ride.driver_id);
 
   const canCancel = ride.status === 'accepted' || ride.status === 'driver_en_route';
+
+  // Bloco 4 (compliance TNC F.S. 627.748): confirmação de motorista+veículo
+  // pelo passageiro antes do embarque (prompt, não bloqueio — ver
+  // src/lib/driverBoardingConfirmation.ts e migration 0060).
+  const boarding = useDriverBoardingConfirmation(ride, !!vehicle, profile?.jurisdiction ?? 'global');
+  const [confirmingDriver, setConfirmingDriver] = useState(false);
+  async function handleConfirmDriver() {
+    setConfirmingDriver(true);
+    const ok = await boarding.confirm();
+    setConfirmingDriver(false);
+    if (!ok) Alert.alert(t('activeRide.confirmDriverTitle'), t('activeRide.confirmDriverFailed'));
+  }
 
   // ── Compartilhar viagem ao vivo (Tarefa 1) ────────────────────────────────
   const { creating: sharingBusy, active: shareActive, createShare, revokeShare } = useTripShare(ride.id);
@@ -503,6 +516,21 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           <Text style={styles.vehicleLabel}>{vehicle.model} • {vehicle.color}</Text>
         )}
 
+        {/* Bloco 4 (compliance TNC F.S. 627.748): prompt de confirmação de
+            motorista+veículo antes do embarque — não bloqueia nada, só
+            registra o aceite (ver useDriverBoardingConfirmation). */}
+        {boarding.shouldPrompt && (
+          <TouchableOpacity
+            style={styles.confirmDriverBtn}
+            onPress={handleConfirmDriver}
+            disabled={confirmingDriver}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.confirmDriverIcon}>✓</Text>
+            <Text style={styles.confirmDriverBtnText}>{t('activeRide.confirmDriverPrompt')}</Text>
+          </TouchableOpacity>
+        )}
+
         {canShare && (
           <TouchableOpacity
             style={styles.shareBtn}
@@ -692,6 +720,20 @@ function makeStyles(colors: AppTheme) {
       marginBottom: 14,
       marginLeft: 58,
     },
+
+    // ── Confirmação de motorista/veículo (Bloco 4) ───────────────────────────────
+    confirmDriverBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.accent,
+      borderRadius: 12,
+      paddingVertical: 14,
+      marginBottom: 10,
+    },
+    confirmDriverIcon: { fontSize: 16, fontWeight: '800', color: colors.primary },
+    confirmDriverBtnText: { color: colors.primary, fontSize: 15, fontWeight: '700' },
 
     // ── Compartilhar viagem ─────────────────────────────────────────────────────
     shareBtn: {

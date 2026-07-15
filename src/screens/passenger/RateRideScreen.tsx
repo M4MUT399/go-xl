@@ -16,6 +16,8 @@ import { useAuth } from '../../hooks/useAuth';
 import { tipRide } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useTranslation } from '../../i18n';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
+import { SAFETY_INCIDENT_CATEGORIES, type SafetyIncidentCategory } from '../../lib/safetyIncidents';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
@@ -41,6 +43,19 @@ export function RateRideScreen({ navigation, route }: Props) {
   const [isCustom, setIsCustom]         = useState(false);
   const [customTip, setCustomTip]       = useState('');
   const [tipLoading, setTipLoading]     = useState(false);
+
+  // Bloco 4 (compliance TNC F.S. 627.748): denúncia de segurança contra o
+  // motorista. Ação INDEPENDENTE da avaliação/gorjeta -- o passageiro pode
+  // denunciar mesmo sem dar nota. Gravação direta em driver_safety_reports
+  // (RLS já permite reporter_id = auth.uid()); o trigger de suspensão
+  // automática de tolerância zero roda no servidor (migration 0060),
+  // independente da flag abaixo, que só controla a VISIBILIDADE desta UI.
+  const safetyReportsEnabled = useFeatureFlag('safety_reports_v1_enabled', profile?.jurisdiction ?? 'global');
+  const [showReportForm, setShowReportForm]     = useState(false);
+  const [reportCategory, setReportCategory]     = useState<SafetyIncidentCategory | null>(null);
+  const [reportDescription, setReportDescription] = useState('');
+  const [reporting, setReporting]               = useState(false);
+  const [reportSubmitted, setReportSubmitted]   = useState(false);
 
   const farePrice = Number(ride.price) || 0;
 
@@ -119,6 +134,41 @@ export function RateRideScreen({ navigation, route }: Props) {
 
   function handleSkip() {
     navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
+  }
+
+  // Bloco 4: envia a denúncia -- confirma antes por ser uma ação sensível
+  // (pode disparar suspensão IMEDIATA do motorista se a categoria for de
+  // tolerância zero, ver src/lib/safetyIncidents.ts).
+  function handleSubmitReport() {
+    if (!reportCategory) return;
+    Alert.alert(
+      t('rate.reportConfirmTitle'),
+      t('rate.reportConfirmMsg'),
+      [
+        { text: t('rate.reportCancel'), style: 'cancel' },
+        {
+          text: t('rate.reportConfirmSend'),
+          style: 'destructive',
+          onPress: async () => {
+            setReporting(true);
+            const { error } = await supabase.from('driver_safety_reports').insert({
+              driver_id:   ride.driver_id,
+              reporter_id: profile?.id,
+              ride_id:     ride.id,
+              category:    reportCategory,
+              description: reportDescription.trim() || null,
+            });
+            setReporting(false);
+            if (error) {
+              Alert.alert(t('rate.reportErrorTitle'), t('rate.reportErrorMsg'));
+              return;
+            }
+            setReportSubmitted(true);
+            setShowReportForm(false);
+          },
+        },
+      ]
+    );
   }
 
   const finalTip = getFinalTip();
@@ -234,6 +284,62 @@ export function RateRideScreen({ navigation, route }: Props) {
           numberOfLines={3}
           textAlignVertical="top"
         />
+
+        {/* ── Denúncia de segurança (Bloco 4, compliance TNC F.S. 627.748) ── */}
+        {safetyReportsEnabled && (
+          <View style={styles.reportSection}>
+            {reportSubmitted ? (
+              <Text style={styles.reportSubmittedText}>✓ {t('rate.reportSubmitted')}</Text>
+            ) : !showReportForm ? (
+              <TouchableOpacity onPress={() => setShowReportForm(true)}>
+                <Text style={styles.reportToggleText}>⚠️ {t('rate.reportToggle')}</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.reportForm}>
+                <Text style={styles.reportFormTitle}>{t('rate.reportFormTitle')}</Text>
+                <View style={styles.reportChips}>
+                  {SAFETY_INCIDENT_CATEGORIES.map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.reportChip, reportCategory === cat && styles.reportChipActive]}
+                      onPress={() => setReportCategory(cat)}
+                    >
+                      <Text style={[styles.reportChipText, reportCategory === cat && styles.reportChipTextActive]}>
+                        {t(`rate.category.${cat}`)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TextInput
+                  style={styles.reportDescInput}
+                  value={reportDescription}
+                  onChangeText={setReportDescription}
+                  placeholder={t('rate.reportDescPlaceholder')}
+                  placeholderTextColor={colors.gray[400]}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+                <View style={styles.reportFormBtns}>
+                  <TouchableOpacity
+                    onPress={() => { setShowReportForm(false); setReportCategory(null); setReportDescription(''); }}
+                  >
+                    <Text style={styles.reportCancelText}>{t('rate.reportCancel')}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.reportSubmitBtn, !reportCategory && styles.reportSubmitBtnDisabled]}
+                    onPress={handleSubmitReport}
+                    disabled={!reportCategory || reporting}
+                  >
+                    {reporting
+                      ? <ActivityIndicator color={colors.white} size="small" />
+                      : <Text style={styles.reportSubmitBtnText}>{t('rate.reportSend')}</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
 
         {/* ── Resumo da corrida ── */}
         <View style={styles.tripSummary}>
@@ -387,6 +493,54 @@ function makeStyles(colors: AppTheme) {
       marginBottom: 20,
       textAlignVertical: 'top',
     },
+
+    // Denúncia de segurança (Bloco 4)
+    reportSection: { width: '100%', marginBottom: 20 },
+    reportToggleText: { fontSize: 13, fontWeight: '700', color: colors.gray[500], textAlign: 'center' },
+    reportSubmittedText: { fontSize: 13, fontWeight: '700', color: colors.success, textAlign: 'center' },
+    reportForm: {
+      width: '100%',
+      backgroundColor: colors.gray[100],
+      borderRadius: 14,
+      padding: 16,
+      borderWidth: 1.5,
+      borderColor: colors.gray[200],
+    },
+    reportFormTitle: { fontSize: 14, fontWeight: '800', color: colors.text, marginBottom: 12 },
+    reportChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+    reportChip: {
+      borderWidth: 1.5,
+      borderColor: colors.gray[300],
+      borderRadius: 20,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+    },
+    reportChipActive: { backgroundColor: colors.error, borderColor: colors.error },
+    reportChipText: { fontSize: 12, fontWeight: '600', color: colors.gray[600] },
+    reportChipTextActive: { color: colors.white },
+    reportDescInput: {
+      width: '100%',
+      backgroundColor: colors.white,
+      borderRadius: 10,
+      padding: 12,
+      fontSize: 14,
+      color: colors.text,
+      borderWidth: 1.5,
+      borderColor: colors.gray[200],
+      minHeight: 64,
+      marginBottom: 12,
+      textAlignVertical: 'top',
+    },
+    reportFormBtns: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 16 },
+    reportCancelText: { fontSize: 13, fontWeight: '700', color: colors.gray[500] },
+    reportSubmitBtn: {
+      backgroundColor: colors.error,
+      borderRadius: 10,
+      paddingVertical: 10,
+      paddingHorizontal: 18,
+    },
+    reportSubmitBtnDisabled: { opacity: 0.5 },
+    reportSubmitBtnText: { color: colors.white, fontSize: 13, fontWeight: '700' },
 
     // Trip summary
     tripSummary: {

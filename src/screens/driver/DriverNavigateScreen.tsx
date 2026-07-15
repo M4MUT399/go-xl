@@ -29,6 +29,7 @@ import {
 } from '../../lib/nav/courseUp';
 import { useCameraController } from '../../hooks/useCameraController';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
+import { boardingWarning } from '../../lib/driverBoardingConfirmation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency } from '../../lib/format';
@@ -132,6 +133,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // mesmo que o motorista já estivesse a caminho do destino.
   const [phase, setPhase] = useState<Phase>(() => (ride.status === 'in_progress' ? 'dropoff' : 'pickup'));
   const [loading, setLoading] = useState(false);
+  // Bloco 4 (compliance TNC F.S. 627.748): aviso não bloqueante se o
+  // passageiro ainda não confirmou motorista+veículo (ver
+  // src/lib/driverBoardingConfirmation.ts — DECISÃO DE DESIGN: nunca trava o
+  // botão "Cheguei", só avisa).
+  const boardingConfirmationRequired = useFeatureFlag('driver_confirmation_required', profile?.jurisdiction ?? 'global');
   const { height: screenH } = Dimensions.get('window');
 
   // ── Animação do marcador (posição suave, SEM teleporte) ─────────────────────
@@ -546,7 +552,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   // Confirmação DUPLA antes de avançar de fase (embarque → destino → finalizar):
   // evita toque acidental encerrando/avançando a corrida sem querer.
-  function handleNextPhasePress() {
+  function startPhaseConfirmation() {
     const isFinal = phase === 'dropoff';
     Alert.alert(
       isFinal ? t('driverNav.finishRideQuestion') : t('driverNav.confirmPickupQuestion'),
@@ -576,6 +582,46 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         },
       ]
     );
+  }
+
+  // Bloco 4: antes de iniciar a dupla confirmação do EMBARQUE (não do
+  // encerramento — a confirmação de motorista/veículo só faz sentido antes de
+  // "Cheguei"), busca o carimbo mais recente de `passenger_confirmed_driver_at`
+  // (não confia no valor estático de `route.params.ride`, ver levantamento) e,
+  // se a jurisdição exige a confirmação e ela ainda não aconteceu, mostra um
+  // AVISO extra — não bloqueante, o motorista pode seguir mesmo assim.
+  async function handleNextPhasePress() {
+    if (phase !== 'pickup' || !boardingConfirmationRequired) {
+      startPhaseConfirmation();
+      return;
+    }
+
+    const { data } = await supabase
+      .from('rides')
+      .select('passenger_confirmed_driver_at')
+      .eq('id', ride.id)
+      .maybeSingle();
+
+    const warning = boardingWarning({
+      rideStatus: ride.status,
+      hasDriverAssigned: true,
+      hasVehicleAssigned: true,
+      alreadyConfirmed: !!data?.passenger_confirmed_driver_at,
+      confirmationRequired: boardingConfirmationRequired,
+    });
+
+    if (warning === 'unconfirmed') {
+      Alert.alert(
+        t('driverNav.boardingConfirmationWarningTitle'),
+        t('driverNav.boardingConfirmationWarningMsg'),
+        [
+          { text: t('driverNav.ok'), onPress: startPhaseConfirmation },
+        ]
+      );
+      return;
+    }
+
+    startPhaseConfirmation();
   }
 
   // Instrução atual
