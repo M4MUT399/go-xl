@@ -8,6 +8,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../types';
 import { useTheme } from '../hooks/useTheme';
+import { useCameraController } from '../hooks/useCameraController';
 import { AppTheme } from '../constants/theme';
 import { supabaseUrl } from '../lib/supabase';
 import { useTranslation } from '../i18n';
@@ -53,6 +54,8 @@ export function TrackTripScreen({ navigation, route }: Props) {
   const [payload, setPayload] = useState<PublicTripPayload | null>(null);
   const [firstLoad, setFirstLoad] = useState(true);
   const mapRef = useRef<MapView>(null);
+  // Bloco 1: câmera passa pelo CameraController (sanitiza coords antes do fit).
+  const cam = useCameraController(mapRef, 'TrackTrip');
   const [mapReady, setMapReady] = useState(false);
   const didFitRef = useRef(false);
   const [tracksCar, setTracksCar] = useState(true);
@@ -94,19 +97,19 @@ export function TrackTripScreen({ navigation, route }: Props) {
 
   // Enquadra origem + destino + motorista na primeira leitura ativa.
   useEffect(() => {
-    if (!mapReady || didFitRef.current || !payload?.active || !mapRef.current) return;
+    if (!mapReady || didFitRef.current || !payload?.active) return;
     const coords = [
-      { latitude: payload.origin.lat, longitude: payload.origin.lng },
-      { latitude: payload.destination.lat, longitude: payload.destination.lng },
+      { lat: payload.origin.lat, lng: payload.origin.lng },
+      { lat: payload.destination.lat, lng: payload.destination.lng },
     ];
     if (payload.position) {
-      coords.push({ latitude: payload.position.lat, longitude: payload.position.lng });
+      coords.push({ lat: payload.position.lat, lng: payload.position.lng });
     }
-    mapRef.current.fitToCoordinates(coords, {
+    const applied = cam.fit(coords, {
       edgePadding: { top: 120, right: 60, bottom: 240, left: 60 },
       animated: true,
     });
-    didFitRef.current = true;
+    if (applied) didFitRef.current = true;
   }, [mapReady, payload]);
 
   function statusLabel(status: string): string {
@@ -165,7 +168,10 @@ export function TrackTripScreen({ navigation, route }: Props) {
         style={styles.map}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         userInterfaceStyle="light"
-        onMapReady={() => setMapReady(true)}
+        onMapReady={() => {
+          cam.setReady(true);
+          setMapReady(true);
+        }}
         initialRegion={{
           latitude: (p.origin.lat + p.destination.lat) / 2,
           longitude: (p.origin.lng + p.destination.lng) / 2,

@@ -16,6 +16,7 @@ import { useDriverVehicle } from '../../hooks/useVehicle';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { useTripShare } from '../../hooks/useTripShare';
+import { useCameraController } from '../../hooks/useCameraController';
 import { KM_TO_MILES } from '../../lib/format';
 import { CarMarker } from '../../components/common/CarMarker';
 import { rideOrigin, rideDestination } from '../../lib/ride';
@@ -49,6 +50,8 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // instante a cada atualização para o ícone do carro realmente pintar no iOS.
   const [tracksCar, setTracksCar] = useState(true);
   const mapRef = useRef<MapView>(null);
+  // Bloco 1: câmera passa pelo CameraController (sanitiza coords antes do fit).
+  const cam = useCameraController(mapRef, 'PassengerActiveRide');
   // `fitToCoordinates` chamado ANTES do MapView nativo terminar seu layout
   // inicial pode calcular uma região absurda (mapa mostrando o continente
   // inteiro) — bug conhecido do react-native-maps. `onMapReady` garante que só
@@ -341,37 +344,29 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   //   • a caminho do embarque → motorista + ponto de embarque
   //   • in_progress (corrida em andamento) → motorista + destino final
   useEffect(() => {
-    if (!mapReady || !driverLoc || !mapRef.current) return;
-    const coords = ride.status === 'in_progress'
-      ? [
-          { latitude: driverLoc.lat, longitude: driverLoc.lng },
-          { latitude: dest.lat, longitude: dest.lng },
-        ]
-      : [
-          { latitude: driverLoc.lat, longitude: driverLoc.lng },
-          { latitude: origin.lat, longitude: origin.lng },
-        ];
-    mapRef.current.fitToCoordinates(coords, {
-      edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
-      animated: true,
-    });
+    if (!mapReady || !driverLoc) return;
+    fitToRide();
   }, [mapReady, driverLoc, ride.status]);
 
-  function recenter() {
-    if (!mapReady || !driverLoc || !mapRef.current) return;
+  function fitToRide() {
+    if (!driverLoc) return;
     const coords = ride.status === 'in_progress'
       ? [
-          { latitude: driverLoc.lat, longitude: driverLoc.lng },
-          { latitude: dest.lat, longitude: dest.lng },
+          { lat: driverLoc.lat, lng: driverLoc.lng },
+          { lat: dest.lat, lng: dest.lng },
         ]
       : [
-          { latitude: driverLoc.lat, longitude: driverLoc.lng },
-          { latitude: origin.lat, longitude: origin.lng },
+          { lat: driverLoc.lat, lng: driverLoc.lng },
+          { lat: origin.lat, lng: origin.lng },
         ];
-    mapRef.current.fitToCoordinates(coords, {
+    cam.fit(coords, {
       edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
       animated: true,
     });
+  }
+
+  function recenter() {
+    fitToRide();
   }
 
   return (
@@ -387,7 +382,10 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         // comentário antigo assumia.
         customMapStyle={Platform.OS === 'android' ? [] : undefined}
         userInterfaceStyle="light"
-        onMapReady={() => setMapReady(true)}
+        onMapReady={() => {
+          cam.setReady(true);
+          setMapReady(true);
+        }}
         initialRegion={{
           latitude: (origin.lat + dest.lat) / 2,
           longitude: (origin.lng + dest.lng) / 2,

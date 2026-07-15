@@ -14,6 +14,7 @@ import { useTheme } from '../../hooks/useTheme';
 import { useTranslation } from '../../i18n';
 import { AppTheme } from '../../constants/theme';
 import { useLocation } from '../../hooks/useLocation';
+import { useCameraController } from '../../hooks/useCameraController';
 import { useAuth } from '../../hooks/useAuth';
 import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
 import { useUnreadMessages } from '../../hooks/useUnreadMessages';
@@ -60,6 +61,8 @@ export function HomeScreen({ navigation }: Props) {
     React.useCallback(() => { refresh(); }, [refresh])
   );
   const mapRef = useRef<MapView>(null);
+  // Bloco 1: câmera passa pelo CameraController (valida coord + clampa deltas).
+  const cam = useCameraController(mapRef, 'PassengerHome');
   const [destination, setDestination] = useState('');
 
   // Antes o mapa só montava depois do primeiro fix de GPS (`location` !=
@@ -70,14 +73,12 @@ export function HomeScreen({ navigation }: Props) {
   // ela — sem bloquear a primeira renderização.
   const hasCenteredRef = useRef(false);
   useEffect(() => {
-    if (location && mapRef.current && !hasCenteredRef.current) {
+    if (location && !hasCenteredRef.current) {
       hasCenteredRef.current = true;
-      mapRef.current.animateToRegion({
-        latitude: location.lat,
-        longitude: location.lng,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }, 500);
+      cam.region(
+        { lat: location.lat, lng: location.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 },
+        500,
+      );
     }
   }, [location]);
 
@@ -131,14 +132,11 @@ export function HomeScreen({ navigation }: Props) {
           : t('home.resumeInProgress');
 
   function recenter() {
-    if (location && mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: location.lat,
-        longitude: location.lng,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      });
-    }
+    if (!location) return;
+    cam.region(
+      { lat: location.lat, lng: location.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+      500,
+    );
   }
 
   return (
@@ -177,6 +175,7 @@ export function HomeScreen({ navigation }: Props) {
           // (iOS), que aplica o mesmo customMapStyle de forma mais suave. Por
           // isso, no Android usamos o estilo padrão (claro) do Maps.
           customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
+          onMapReady={() => cam.setReady(true)}
         >
           {/* O ponto de localização do usuário é o nativo (showsUserLocation
            * acima), que reflete o GPS ao vivo do sistema — nunca fica
