@@ -13,6 +13,8 @@ import { canReceiveNewRideOffer } from '../lib/rideDispatch';
 import { resolveRevocation, type RideRevokeReason } from '../lib/rideRevocation';
 import { offerAlertManager } from '../lib/offerAlertManager';
 import { arriveOffer, resolveOffer, queueHasOffer } from '../lib/offerQueue';
+import { decideOfferAction, livePendingOffers, type OfferRow } from '../lib/dispatchClientBridge';
+import { getConfig } from '../lib/systemConfig';
 import { useFeatureFlag } from './useFeatureFlag';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
@@ -155,6 +157,33 @@ async function invokeRidePush(body: {
     await supabase.functions.invoke('send-ride-push', { body });
   } catch (e) {
     reportError(e, { op: 'invokeRidePush', kind: body.kind });
+  }
+}
+
+/**
+ * PR-c (motor v2): entrega a corrida ao SERVIDOR como fonte da verdade. Chama a
+ * Edge Function `dispatch-engine` (action=create), que cria o `trip_request`,
+ * roda o núcleo puro para ofertar ao(s) motorista(s) por ETA e persiste em
+ * `ride_offers` (+ push best-effort). Retorna `true` se o motor assumiu a
+ * distribuição; `false` se a flag `dispatch_engine_v2` está OFF no servidor
+ * (`{ skipped: true }`) ou se houve erro — nesse caso o chamador cai no fluxo
+ * legado (`notifyOnlineDrivers`), garantindo que a corrida nunca fique sem
+ * distribuição. Best-effort quanto a exceções (mesma filosofia de invokeRidePush).
+ */
+async function dispatchEngineCreate(rideId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.functions.invoke('dispatch-engine', {
+      body: { action: 'create', rideId },
+    });
+    if (error) {
+      reportError(error, { op: 'dispatchEngineCreate', rideId });
+      return false;
+    }
+    // { skipped: true } → flag OFF no servidor: o chamador usa o legado.
+    return !(data && (data as { skipped?: boolean }).skipped);
+  } catch (e) {
+    reportError(e, { op: 'dispatchEngineCreate', rideId });
+    return false;
   }
 }
 
@@ -602,7 +631,15 @@ export function usePassengerRide(passengerId: string | undefined) {
       // Push remoto como reforço (funciona em produção)
       notifySpecificDriver(options.lockedDriverId, destination.address, price, (data as Ride).id);
     } else {
-      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
+      // Pool aberto: com `dispatch_engine_v2` LIGADA, o servidor assume a
+      // distribuição (dispatch-engine create → ride_offers). Se a flag estiver
+      // OFF (ou der erro), cai no leque legado — sem nunca deixar a corrida sem
+      // distribuição.
+      const useV2 = await getConfig('dispatch_engine_v2');
+      const handledByEngine = useV2 ? await dispatchEngineCreate((data as Ride).id) : false;
+      if (!handledByEngine) {
+        notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
+      }
     }
     return data as Ride;
   }, [passengerId]);
@@ -729,6 +766,22 @@ export function usePassengerRide(passengerId: string | undefined) {
       // Se um motorista já havia ACEITO, avisa-o diretamente para interromper a
       // navegação e voltar ao início ("Corrida cancelada pelo passageiro").
       if (assignedDriverId) broadcastRideCancelledToDriver(assignedDriverId, rideId);
+      // PR-c: motor v2 — encerra o `trip_request` no servidor e revoga as ofertas
+      // pendentes (para o tick não continuar a distribuir uma corrida cancelada).
+      // Best-effort e no-op se a flag estiver OFF (o servidor responde { skipped }).
+      const useV2 = await getConfig('dispatch_engine_v2');
+      if (useV2) {
+        const { data: tr } = await supabase
+          .from('trip_requests').select('id').eq('ride_id', rideId).maybeSingle();
+        const tripRequestId = (tr as { id: string } | null)?.id;
+        if (tripRequestId) {
+          try {
+            await supabase.functions.invoke('dispatch-engine', { body: { action: 'cancel', tripRequestId } });
+          } catch (e) {
+            reportError(e, { op: 'cancelRide.v2', rideId });
+          }
+        }
+      }
     }
   }, []);
 
@@ -784,11 +837,15 @@ export function useScheduledRides(passengerId: string | undefined) {
         notifyPassenger(ride.passenger_id, ride.id); // reutiliza lógica de push
       } else {
         // Pool aberto (agendada ativada agora → requesting): mesma regra do
-        // requestRide.
+        // requestRide — motor v2 quando ligado, com fallback ao leque legado.
         const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
         const destLat = ride.destination_lat ?? ride.destination?.lat;
         const destLng = ride.destination_lng ?? ride.destination?.lng;
-        notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined, ride.id);
+        const useV2 = await getConfig('dispatch_engine_v2');
+        const handledByEngine = useV2 ? await dispatchEngineCreate(ride.id) : false;
+        if (!handledByEngine) {
+          notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined, ride.id);
+        }
       }
     }
     return (data as Ride) ?? null;
@@ -868,6 +925,17 @@ export function useDriverRide(driverId: string | undefined) {
   const multiOfferRef = useRef(multiOffer);
   multiOfferRef.current = multiOffer;
 
+  // PR-c: motor v2 no servidor. Com a flag LIGADA, o card do pool aberto passa a
+  // ser dirigido pela tabela `ride_offers` (não mais pelo leque em `rides`).
+  // Enquanto OFF, tudo abaixo é no-op e o fluxo legado segue idêntico.
+  const engineV2 = useFeatureFlag('dispatch_engine_v2');
+  const engineV2Ref = useRef(engineV2);
+  engineV2Ref.current = engineV2;
+  // Mapeia trip_request_id ↔ ride_id para não refazer a resolução a cada evento
+  // (o aceite v2 precisa do trip_request_id; a revogação precisa do ride_id).
+  const tripReqByRideRef = useRef<Map<string, string>>(new Map());
+  const rideByTripReqRef = useRef<Map<string, string>>(new Map());
+
   const [offerQueue, setOfferQueue] = useState<Ride[]>([]);
   const pendingRide = offerQueue.length > 0 ? offerQueue[0] : null;
   // Espelho síncrono da fila para leitura dentro de handlers/intervals.
@@ -878,6 +946,26 @@ export function useDriverRide(driverId: string | undefined) {
   // próxima assume automaticamente. Idempotente (id ausente = no-op).
   const dismissOffer = useCallback((rideId: string) => {
     setOfferQueue((q) => resolveOffer(q, rideId));
+  }, []);
+
+  // PR-c: notifica o SERVIDOR da recusa/expiração desta oferta para promover o
+  // próximo candidato IMEDIATAMENTE (motor v2 → dispatch-engine action=reject).
+  // No-op quando a flag está OFF ou quando não há trip_request conhecido (fluxo
+  // legado / QR). Best-effort: o `tick` do servidor também expira/promove sozinho.
+  const rejectServerOffer = useCallback(async (rideId: string) => {
+    if (!engineV2Ref.current) return;
+    let tripRequestId = tripReqByRideRef.current.get(rideId);
+    if (!tripRequestId) {
+      const { data: tr } = await supabase
+        .from('trip_requests').select('id').eq('ride_id', rideId).maybeSingle();
+      tripRequestId = (tr as { id: string } | null)?.id ?? undefined;
+    }
+    if (!tripRequestId) return;
+    try {
+      await supabase.functions.invoke('dispatch-engine', { body: { action: 'reject', tripRequestId } });
+    } catch (e) {
+      reportError(e, { op: 'rejectServerOffer', rideId });
+    }
   }, []);
 
   // Shim compatível com a API antiga `setPendingRide`:
@@ -1186,6 +1274,10 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
+          // PR-c: com o motor v2 ligado, a oferta do POOL ABERTO chega por
+          // `ride_offers` (assinatura dedicada abaixo), não pelo leque em `rides`.
+          // Corrida travada por QR (driver_id = este motorista) continua no legado.
+          if (engineV2Ref.current && !ride.driver_id) return;
           if (
             (!ride.driver_id || ride.driver_id === driverId) &&
             !offerAlertManager.isTombstoned(ride.id) &&
@@ -1231,6 +1323,9 @@ export function useDriverRide(driverId: string | undefined) {
         },
         (payload) => {
           const ride = payload.new as Ride;
+          // PR-c: pool aberto (agendada ativada → requesting) é dirigido pelo
+          // motor v2 via `ride_offers` quando a flag está ligada.
+          if (engineV2Ref.current) return;
           if (
             !ride.driver_id &&
             !offerAlertManager.isTombstoned(ride.id) &&
@@ -1266,6 +1361,93 @@ export function useDriverRide(driverId: string | undefined) {
 
     return () => { supabase.removeChannel(channel); };
   }, [driverId]);
+
+  // ─── PR-c: card do POOL ABERTO dirigido por `ride_offers` (motor v2) ─────────
+  // Servidor = fonte da verdade. Com `dispatch_engine_v2` LIGADA, as ofertas do
+  // pool aberto chegam por esta tabela (INSERT PENDING → card; UPDATE
+  // REVOKED/EXPIRED/REJECTED → some), e não mais pelo leque em `rides` (suprimido
+  // acima). Também reconstrói o card ao (re)abrir o app a partir das ofertas
+  // ainda vivas no servidor (critério 5 — sem card fantasma). Efeito inteiro é
+  // no-op enquanto a flag estiver OFF (não abre canal, não lê nada).
+  useEffect(() => {
+    if (!driverId || !engineV2) return;
+    let cancelled = false;
+
+    // Resolve ride_id ← trip_request (com cache), busca a linha de `rides` e
+    // enfileira reusando a MESMA fila/UI do card legado (offerQueue).
+    const enqueueFromOffer = async (tripRequestId: string) => {
+      if (cancelled) return;
+      let rideId = rideByTripReqRef.current.get(tripRequestId);
+      if (!rideId) {
+        const { data: tr } = await supabase
+          .from('trip_requests').select('ride_id').eq('id', tripRequestId).maybeSingle();
+        rideId = (tr as { ride_id: string | null } | null)?.ride_id ?? undefined;
+        if (!rideId) return;
+        rideByTripReqRef.current.set(tripRequestId, rideId);
+        tripReqByRideRef.current.set(rideId, tripRequestId);
+      }
+      if (offerAlertManager.isTombstoned(rideId)) return;
+      const { data: ride } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+      if (!ride || cancelled) return;
+      // Mesma guarda de disponibilidade do fluxo legado (não incomoda motorista
+      // já a caminho/em corrida, salvo destino igual/perto).
+      if (!canReceiveNewRideOffer(activeRideRef.current, ride as Ride)) return;
+      setPendingRide(ride as Ride);
+    };
+
+    const dismissFromOffer = (tripRequestId: string) => {
+      const rideId = rideByTripReqRef.current.get(tripRequestId);
+      if (!rideId) return;
+      // TERMINAL: para som/vibração/watchdog, lapida o id e remove SÓ esta oferta
+      // da fila (a próxima assume). Idempotente.
+      offerAlertManager.stopAll(rideId, 'revoked');
+      dismissOffer(rideId);
+      dismissRideNotifications(rideId);
+    };
+
+    const applyRow = (row: OfferRow) => {
+      const rideId = rideByTripReqRef.current.get(row.trip_request_id);
+      const action = decideOfferAction(row, {
+        driverId,
+        nowMs: Date.now(),
+        tombstoned: (id) => offerAlertManager.isTombstoned(id),
+        rideId,
+      });
+      if (action === 'enqueue') void enqueueFromOffer(row.trip_request_id);
+      else if (action === 'dismiss') dismissFromOffer(row.trip_request_id);
+    };
+
+    // Reconstrução (critério 5): ofertas vivas do servidor ao (re)abrir o app.
+    (async () => {
+      const { data } = await supabase
+        .from('ride_offers')
+        .select('trip_request_id, driver_id, status, expires_at')
+        .eq('driver_id', driverId)
+        .eq('status', 'PENDING')
+        .order('offered_at', { ascending: true });
+      const rows = (data as OfferRow[] | null) ?? [];
+      for (const row of livePendingOffers(rows, Date.now(), driverId)) {
+        if (cancelled) break;
+        await enqueueFromOffer(row.trip_request_id);
+      }
+    })();
+
+    const channel = supabase
+      .channel(`driver-offers-${driverId}-${channelId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'ride_offers', filter: `driver_id=eq.${driverId}` },
+        (payload) => applyRow(payload.new as OfferRow)
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'ride_offers', filter: `driver_id=eq.${driverId}` },
+        (payload) => applyRow(payload.new as OfferRow)
+      )
+      .subscribe();
+
+    return () => { cancelled = true; supabase.removeChannel(channel); };
+  }, [driverId, engineV2, dismissOffer, setPendingRide]);
 
   // ─── Broadcast "corrida aceita por outro motorista" ──────────────────────────
   // Modelo de dispatch em leque: a mesma corrida em 'requesting' aparece para
@@ -1390,6 +1572,39 @@ export function useDriverRide(driverId: string | undefined) {
       // aos motoristas livres que silenciamos otimisticamente no passo 0.
       reofferRide(rideId);
       return 'payment_error';
+    }
+
+    // PR-c: com o motor v2 LIGADO, o VENCEDOR entre aceites simultâneos é eleito
+    // ATOMICAMENTE no servidor (RPC accept_trip_offer via dispatch-engine), que
+    // também revoga os perdedores e promove o próximo pedido (redispatch). Se
+    // este motorista NÃO vencer a disputa, aborta aqui — sem tocar na linha de
+    // `rides`. Se vencer (ou se a flag estiver OFF no servidor → resposta
+    // { skipped } sem `result`), segue para o UPDATE de `rides` abaixo, que
+    // permanece a fonte de tarifa/pagamento. O silêncio otimista do passo 0 já
+    // fechou o card dos demais, então na prática só o vencedor chega até aqui.
+    if (engineV2Ref.current) {
+      let tripRequestId = tripReqByRideRef.current.get(rideId);
+      if (!tripRequestId) {
+        const { data: tr } = await supabase
+          .from('trip_requests').select('id').eq('ride_id', rideId).maybeSingle();
+        tripRequestId = (tr as { id: string } | null)?.id ?? undefined;
+      }
+      if (tripRequestId) {
+        try {
+          const { data: res, error } = await supabase.functions.invoke('dispatch-engine', {
+            body: { action: 'accept', tripRequestId },
+          });
+          const outcome = res as { result?: string; skipped?: boolean } | null;
+          if (error || (outcome?.result && outcome.result !== 'ACCEPTED')) {
+            logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason: 'v2_lost' });
+            return null;
+          }
+        } catch (e) {
+          // Falha de rede na eleição atômica: não é seguro assumir vitória.
+          reportError(e, { op: 'acceptRide.v2', rideId });
+          return null;
+        }
+      }
     }
 
     // 1) UPDATE (sem RETURNING — o .select().single() falha silenciosamente em alguns casos)
@@ -1642,6 +1857,9 @@ export function useDriverRide(driverId: string | undefined) {
     // PR-a: remove UMA oferta por id (idempotente). Preferir a setPendingRide(null)
     // nos caminhos terminais — não remove a próxima oferta já promovida da fila.
     dismissOffer,
+    // PR-c: avisa o servidor (motor v2) da recusa/expiração para promover o
+    // próximo candidato na hora. No-op quando a flag está OFF.
+    rejectServerOffer,
     refundRide,
     resumableRide, clearResumableRide,
   };

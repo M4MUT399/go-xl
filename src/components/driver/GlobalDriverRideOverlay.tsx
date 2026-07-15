@@ -31,7 +31,7 @@ export function GlobalDriverRideOverlay() {
   const { profile } = useAuth();
   const { t } = useTranslation();
   const {
-    pendingRide, setPendingRide, acceptRide, isOnline, location,
+    pendingRide, dismissOffer, rejectServerOffer, acceptRide, isOnline, location,
     resumableRide, clearResumableRide,
   } = useDriverRideContext();
   const [accepting, setAccepting] = useState(false);
@@ -116,7 +116,9 @@ export function GlobalDriverRideOverlay() {
     dismissRideNotifications(pendingId);
     if (ride === 'payment_error') {
       Alert.alert(t('rideOverlay.paymentDeclinedTitle'), t('rideOverlay.paymentDeclinedMessage'));
-      setPendingRide(null);
+      // Remove ESTA oferta por id (a próxima da fila, se houver, já foi promovida
+      // pelo stopAll no topo). setPendingRide(null) removeria a oferta seguinte.
+      dismissOffer(pendingId);
     } else if (ride) {
       // Passa a localização atual do motorista como origem inicial da rota —
       // assim o mapa em DriverNavigateScreen já traça o caminho até o
@@ -129,31 +131,40 @@ export function GlobalDriverRideOverlay() {
       }
     } else {
       Alert.alert(t('rideOverlay.alreadyTakenTitle'), t('rideOverlay.alreadyTakenMessage'));
-      setPendingRide(null);
+      dismissOffer(pendingId);
     }
   }
 
   function handleReject() {
     if (pendingRide) {
+      const rejectedId = pendingRide.id;
       // TERMINAL(declined): PARA O SOM ANTES de qualquer chamada de rede — não
       // espera o backend para silenciar. Lapida o id (re-oferta não re-toca).
-      offerAlertManager.stopAll(pendingRide.id, 'declined');
-      logRideOfferEvent(pendingRide.id, profile?.id, 'rejected');
+      offerAlertManager.stopAll(rejectedId, 'declined');
+      logRideOfferEvent(rejectedId, profile?.id, 'rejected');
       releaseQrLockedRide(pendingRide);
-      dismissRideNotifications(pendingRide.id);
+      dismissRideNotifications(rejectedId);
+      // Motor v2: avisa o servidor para promover o próximo motorista na hora
+      // (no-op com a flag OFF). Best-effort, não bloqueia a UI.
+      void rejectServerOffer(rejectedId);
+      // Remove SÓ a oferta recusada (por id) — a próxima da fila assume.
+      dismissOffer(rejectedId);
     }
-    setPendingRide(null);
   }
 
   function handleExpire() {
     if (pendingRide) {
+      const expiredId = pendingRide.id;
       // TERMINAL(expired): esgotou o tempo da chamada.
-      offerAlertManager.stopAll(pendingRide.id, 'expired');
-      logRideOfferEvent(pendingRide.id, profile?.id, 'expired');
+      offerAlertManager.stopAll(expiredId, 'expired');
+      logRideOfferEvent(expiredId, profile?.id, 'expired');
       releaseQrLockedRide(pendingRide);
-      dismissRideNotifications(pendingRide.id);
+      dismissRideNotifications(expiredId);
+      // Motor v2: a oferta expirou neste device — avisa o servidor para promover
+      // o próximo (no-op com a flag OFF).
+      void rejectServerOffer(expiredId);
+      dismissOffer(expiredId);
     }
-    setPendingRide(null);
   }
 
   /**
