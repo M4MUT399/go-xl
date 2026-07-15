@@ -94,6 +94,19 @@ export const CONFIG_DEFAULTS = {
   // por padrão — enquanto off, nada é escrito em driver_period_transitions/
   // driver_period_daily_mileage; habilitar por jurisdição só após validação.
   period_tracking_v1_enabled: false,
+  // Bloco 2 (compliance TNC F.S. 627.748): anos de retenção de
+  // driver_period_transitions antes de a partição mensal correspondente ser
+  // purgada (DROP TABLE da partição — ver migration 0057). Piso técnico de 1
+  // ano é sempre aplicado na própria função de purge, mesmo que este valor
+  // seja configurado abaixo disso por engano.
+  period_retention_years: 5,
+  // Bloco 2 (compliance TNC F.S. 627.748): liga as Edge Functions
+  // administrativas admin-telematics-claims (claims lookup para a
+  // seguradora) e admin-telematics-export (export mensal de milhagem por
+  // período). DESLIGADO por padrão — habilitar por jurisdição só após
+  // validação. NÃO afeta a manutenção de partição/retenção em si, que roda
+  // sempre independente desta flag (é infraestrutura invisível ao usuário).
+  period_audit_v1_enabled: false,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
