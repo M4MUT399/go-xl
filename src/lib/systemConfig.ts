@@ -51,6 +51,19 @@ export const CONFIG_DEFAULTS = {
   background_check_provider: 'mock',
   // P7: validade (dias) de um background check aprovado antes de exigir renovação.
   background_check_valid_days: 365,
+  // ── Feature flags de rollout gradual (câmera / navegação / jornada) ──────────
+  // Bloco 1: roteia TODA atualização de câmera pelo CameraController (validação
+  // de coordenada + clamp de zoom + fallback). Ligado por padrão — é correção do
+  // bug crítico de zoom-out no iOS; desligar volta ao comportamento legado.
+  camera_controller_enabled: true,
+  // Bloco 3: modo course-up (mapa gira conforme o deslocamento) na navegação do
+  // motorista. Ligado por padrão (já é o comportamento atual da tela de navegação).
+  nav_course_up_enabled: true,
+  // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
+  // (persistida por timestamps, sobrevive a kill/reboot). DESLIGADO por padrão:
+  // muda regra de compliance (limiar 8 km/h + histerese) — habilitar por
+  // jurisdição só após validação. Off → mantém o tracker de ociosidade atual.
+  duty_movement_v2_enabled: false,
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
