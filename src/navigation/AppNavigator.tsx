@@ -8,8 +8,10 @@ import {
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import * as SplashScreen from 'expo-splash-screen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
+import { readDeferredDriverCode } from '../lib/deferredDeepLink';
 
 import { RootStackParamList } from '../types';
 import { useAuth } from '../hooks/useAuth';
@@ -375,6 +377,29 @@ export function AppNavigator() {
     });
   }
 
+  /**
+   * Roteia um `pendingDriverCode` já assentado, escolhendo o destino pelo estado
+   * de auth ATUAL (via `isAuthedRef`). Usado pelo deferred deep link, que resolve
+   * de forma assíncrona (leitura do clipboard) e pode chegar DEPOIS que o efeito
+   * `[loading, session]` já rodou — por isso replica a mesma decisão aqui:
+   *   • autenticado  → trava a corrida (RequestRide) no motorista do QR;
+   *   • sem login    → manda para o cadastro expresso levando o driverCode.
+   */
+  function routePendingCodeByAuth() {
+    if (!pendingDriverCode.current) return;
+    if (isAuthedRef.current) {
+      setTimeout(dispatchPendingDeepLink, 600);
+      return;
+    }
+    const driverCode = pendingDriverCode.current;
+    pendingDriverCode.current = null;
+    setTimeout(() => {
+      if (navigationRef.isReady()) {
+        navigationRef.navigate('ExpressRegister', { driverCode });
+      }
+    }, 500);
+  }
+
   // Mantém a flag de sessão pronta para o listener de URL (warm start).
   useEffect(() => {
     isAuthedRef.current = !loading && !!session;
@@ -442,6 +467,38 @@ export function AppNavigator() {
     const sub = ExpoLinking.addEventListener('url', ({ url }: { url: string }) => captureDeepLink(url, false));
     return () => sub.remove();
   }, []);
+
+  // Deferred deep link (QR lido SEM o app instalado): no primeiríssimo open, o
+  // app lê o clipboard UMA vez. Se houver `goxl-ride:CODE` (gravado pela landing
+  // goxl.app/qr antes de mandar pra loja), trava a corrida no motorista dono do
+  // QR — mesmo sem um deep link direto ter sobrevivido à ida à loja. Só roda
+  // quando não há deep link direto pendente (o bounce goxl:// tem prioridade) e
+  // grava um flag em AsyncStorage para NUNCA reler o clipboard depois (evita o
+  // banner de "colado" do iOS e não pega conteúdo alheio em opens futuros).
+  const deferredChecked = useRef(false);
+  useEffect(() => {
+    if (loading) return;                 // espera o auth resolver
+    if (deferredChecked.current) return; // idempotente dentro deste processo
+    deferredChecked.current = true;
+
+    (async () => {
+      try {
+        const already = await AsyncStorage.getItem('goxl_deferred_dl_checked');
+        if (already) return;             // já lido em um open anterior
+        await AsyncStorage.setItem('goxl_deferred_dl_checked', '1');
+
+        // Deep link direto (bounce goxl://ride ou /track) tem prioridade.
+        if (pendingDriverCode.current || pendingTrackToken.current) return;
+
+        const code = await readDeferredDriverCode();
+        if (!code) return;
+        pendingDriverCode.current = code;
+        routePendingCodeByAuth();
+      } catch {
+        // best-effort: qualquer falha degrada para o fluxo normal (sem trava)
+      }
+    })();
+  }, [loading]);
 
   if (loading) return <LoadingScreen />;
 

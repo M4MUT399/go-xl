@@ -4,7 +4,6 @@ import {
   ActivityIndicator, Share, Alert, ScrollView,
 } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import * as ExpoLinking from 'expo-linking';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme } from '../../hooks/useTheme';
 import { supabase } from '../../lib/supabase';
@@ -66,12 +65,18 @@ export function QRCodeScreen({ navigation }: Props) {
   }, [profile?.id]);
 
   /** URL que o QR code vai codificar.
-   *  Em Expo Go  → exp+go-xl://ride?driver=ABC123
-   *  Produção    → goxl://ride?driver=ABC123
+   *
+   *  Agora é uma landing **https** (goxl.app/qr?driver=CODE) em vez do custom
+   *  scheme direto. Motivo: a câmera nativa (iOS/Android) e qualquer leitor de
+   *  QR abrem https sem atrito, mesmo em quem **não** tem o app. A landing:
+   *   • se o app está instalado → faz o "bounce" para goxl://ride?driver=CODE
+   *     (mesmo padrão da página /track), e o AppNavigator trava a corrida;
+   *   • se NÃO está instalado → grava `goxl-ride:CODE` no clipboard (deferred
+   *     deep link) e manda para a loja; no 1º open o app lê o clipboard e trava
+   *     a corrida no motorista dono do QR.
+   *  Ver src/lib/deferredDeepLink.ts e go-xl-site/qr/index.html.
    */
-  const deepLink = code
-    ? ExpoLinking.createURL('ride', { queryParams: { driver: code } })
-    : null;
+  const deepLink = code ? `https://goxl.app/qr?driver=${code}` : null;
 
   const handleShare = useCallback(async () => {
     if (!deepLink || !code) return;
