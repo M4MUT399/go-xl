@@ -86,6 +86,13 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Métodos de pagamento: NÃO definimos `payment_method_types` de propósito.
+    // No Stripe Checkout hospedado, omitir esse campo faz a Stripe usar os
+    // métodos habilitados no Dashboard (Settings → Payments → Payment methods) —
+    // hoje: cartão, Apple Pay e Venmo (USD/EUA). Apple Pay funciona automático na
+    // página hospedada (sem registro de domínio); Venmo exige cliente nos EUA.
+    // ⚠️ NÃO adicione `payment_method_types: ['card']` aqui — isso TRAVARIA a
+    // sessão só em cartão e esconderia Apple Pay/Venmo mesmo ligados no Dashboard.
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: [

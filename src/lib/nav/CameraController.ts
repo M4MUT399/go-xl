@@ -26,6 +26,7 @@ import {
   DEFAULT_GUARD,
   type GuardConfig,
 } from './cameraGuard';
+import { setLastValidCamera } from './lastCamera';
 
 export interface CameraTarget {
   lat: number;
@@ -76,6 +77,13 @@ export class CameraController {
     return this.lastValid;
   }
 
+  /** Marca o centro como o último válido — local (para checar saltos) e GLOBAL
+   *  (para a próxima tela herdar o enquadramento e não montar em região default). */
+  private commitValid(lat: number, lng: number): void {
+    this.lastValid = { lat, lng };
+    setLastValidCamera({ lat, lng });
+  }
+
   private reject(reason: string, detail?: Record<string, number>): void {
     // Toda rejeição vira telemetria — é como confirmamos a causa raiz em prod.
     addBreadcrumb('camera_update_rejected', { source: this.opts.source, reason, ...detail });
@@ -124,7 +132,7 @@ export class CameraController {
     const { zoom, clamped } = clampZoom(pose.zoom, this.guard);
     if (clamped) this.reject('zoom_clamped', { zoom: pose.zoom ?? 0 });
 
-    this.lastValid = { lat: target!.lat, lng: target!.lng };
+    this.commitValid(target!.lat, target!.lng);
     map.animateCamera(
       {
         center: { latitude: target!.lat, longitude: target!.lng },
@@ -172,7 +180,7 @@ export class CameraController {
       this.guard,
     );
     if (clamped) this.reject('region_delta_clamped');
-    this.lastValid = { lat: r.lat, lng: r.lng };
+    this.commitValid(r.lat, r.lng);
     map.animateToRegion(
       { latitude: r.lat, longitude: r.lng, latitudeDelta, longitudeDelta },
       durationMs,
@@ -204,7 +212,7 @@ export class CameraController {
     // Reancora o "último válido" no centroide, para futuras validações de salto.
     const cx = clean.reduce((s, c) => s + c.lat, 0) / clean.length;
     const cy = clean.reduce((s, c) => s + c.lng, 0) / clean.length;
-    this.lastValid = { lat: cx, lng: cy };
+    this.commitValid(cx, cy);
     return true;
   }
 }

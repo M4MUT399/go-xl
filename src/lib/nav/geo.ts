@@ -92,6 +92,39 @@ export function bearingBetween(a: LatLngLite, b: LatLngLite): number {
   return normalizeDeg(toDeg(Math.atan2(y, x)));
 }
 
+/**
+ * Ponto de destino a `distanceM` metros de `from`, seguindo `bearingDeg`
+ * (grande círculo). Base do "dead reckoning": projeta a posição à frente entre
+ * dois fixes de GPS, usando o último rumo e a velocidade, para o marcador não
+ * congelar quando o fix atrasa. distanceM ≤ 0 devolve o próprio ponto.
+ */
+export function destinationPoint(
+  from: LatLngLite,
+  bearingDeg: number,
+  distanceM: number,
+): LatLngLite {
+  if (!(distanceM > 0)) return { lat: from.lat, lng: from.lng };
+  const delta = distanceM / EARTH_RADIUS_M; // distância angular
+  const theta = toRad(bearingDeg);
+  const phi1 = toRad(from.lat);
+  const lambda1 = toRad(from.lng);
+  const sinPhi2 =
+    Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta);
+  const phi2 = Math.asin(Math.min(1, Math.max(-1, sinPhi2)));
+  const lambda2 =
+    lambda1 +
+    Math.atan2(
+      Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
+      Math.cos(delta) - Math.sin(phi1) * sinPhi2,
+    );
+  return { lat: toDeg(phi2), lng: normalizeLng(toDeg(lambda2)) };
+}
+
+/** Normaliza longitude para (-180, 180]. */
+function normalizeLng(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
+}
+
 // ─── Interpolação de posição ─────────────────────────────────────────────────
 
 /**

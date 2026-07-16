@@ -147,3 +147,22 @@ export function sanitizeCoords<T extends GuardCoord>(coords: T[] | null | undefi
   if (!coords) return [];
   return coords.filter((c) => c && isFiniteCoord(c.lat, c.lng) && !isNullIsland(c.lat, c.lng));
 }
+
+/**
+ * Retorna a PRIMEIRA coordenada válida (finita, dentro dos limites, não-(0,0))
+ * de uma lista de candidatos em ordem de preferência — ou null se nenhuma servir.
+ *
+ * Usado para MONTAR o mapa numa posição segura: a tela de navegação escolhe, em
+ * ordem, [última câmera válida herdada → posição do aceite → ponto de embarque],
+ * garantindo que NUNCA abra numa região default ou em (0,0). Puro por design.
+ */
+export function firstValidCoord(
+  candidates: Array<GuardCoord | null | undefined>,
+): { lat: number; lng: number } | null {
+  for (const c of candidates) {
+    if (c && isFiniteCoord(c.lat, c.lng) && !isNullIsland(c.lat, c.lng)) {
+      return { lat: c.lat, lng: c.lng };
+    }
+  }
+  return null;
+}

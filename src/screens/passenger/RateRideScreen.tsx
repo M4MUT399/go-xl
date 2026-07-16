@@ -58,6 +58,13 @@ export function RateRideScreen({ navigation, route }: Props) {
   const [reportSubmitted, setReportSubmitted]   = useState(false);
 
   const farePrice = Number(ride.price) || 0;
+  // Detalhamento do recibo: pedágio e taxa de aeroporto/porto já ficam
+  // armazenados separadamente em `rides`; a tarifa base é o restante do total
+  // (mesma composição usada em requestRide/tipRide — ver useRide.ts).
+  const tollAmount = Number(ride.toll_amount) || 0;
+  const airportFee = Number(ride.airport_port_fee) || 0;
+  const baseFare = Math.max(farePrice - tollAmount - airportFee, 0);
+  const hasFeeBreakdown = tollAmount > 0 || airportFee > 0;
 
   function selectPreset(amount: number) {
     setTipDollars(amount);
@@ -347,6 +354,26 @@ export function RateRideScreen({ navigation, route }: Props) {
             <Text style={styles.summaryLabel}>{t('rate.summaryDistance')}</Text>
             <Text style={styles.summaryValue}>{formatDistance(ride.distance_km)}</Text>
           </View>
+          {hasFeeBreakdown && (
+            <>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>{t('rate.summaryFare')}</Text>
+                <Text style={styles.splitPlatform}>{formatCurrency(baseFare)}</Text>
+              </View>
+              {tollAmount > 0 && (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>{t('requestRide.tollIncluded')}</Text>
+                  <Text style={styles.splitPlatform}>{formatCurrency(tollAmount)}</Text>
+                </View>
+              )}
+              {airportFee > 0 && (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>{t('requestRide.airportPortFee')}</Text>
+                  <Text style={styles.splitPlatform}>{formatCurrency(airportFee)}</Text>
+                </View>
+              )}
+            </>
+          )}
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>{t('rate.summaryTotal')}</Text>
             <Text style={styles.summaryValue}>{formatCurrency(farePrice)}</Text>

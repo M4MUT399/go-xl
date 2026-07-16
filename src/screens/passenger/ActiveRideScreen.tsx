@@ -18,10 +18,15 @@ import { useChatAlert } from '../../hooks/useChatAlert';
 import { useTripShare } from '../../hooks/useTripShare';
 import { useDriverBoardingConfirmation } from '../../hooks/useDriverBoardingConfirmation';
 import { useCameraController } from '../../hooks/useCameraController';
-import { KM_TO_MILES } from '../../lib/format';
+import { KM_TO_MILES, formatCurrency } from '../../lib/format';
 import { CarMarker } from '../../components/common/CarMarker';
+import { SmoothMarker } from '../../components/common/SmoothMarker';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
+import type { MarkerFix } from '../../lib/nav/smoothMarker';
+import { parseSharedRoute } from '../../lib/nav/sharedRoute';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { useTranslation } from '../../i18n';
+import { notifyInApp } from '../../lib/inAppNotify';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'ActiveRide'>;
@@ -161,6 +166,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         text: t('activeRide.yesCancel'),
         style: 'destructive',
         onPress: async () => {
+          // Marca como auto-cancelamento ANTES do round-trip para que o efeito
+          // de status terminal (abaixo) não trate isso como cancelamento pelo
+          // motorista — mesmo que o realtime/polling atualize `ride.status`
+          // antes do `navigation.reset` desmontar a tela.
+          selfCancelledRef.current = true;
           await cancelRide(ride.id);
           navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
         },
@@ -205,7 +215,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     async function fetchTelemetry() {
       const { data } = await supabase
         .from('rides')
-        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,status,driver_id')
+        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,status,driver_id,route_polyline,route_version,route_eta_min,route_distance_km')
         .eq('id', ride.id)
         .maybeSingle();
       if (data) setRide((prev) => ({ ...prev, ...data }));
@@ -264,6 +274,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // uma única vez (via `cancelAlertShownRef`), mas o `navigation.reset` em si
   // pode ser reemitido com segurança a cada tentativa.
   const cancelAlertShownRef = useRef(false);
+  // Marcado em `handleCancel` (auto-cancelamento pelo próprio passageiro) para
+  // que o efeito abaixo não trate esse caso como "motorista cancelou" — o
+  // status muda para `cancelled` do mesmo jeito nos dois casos, então sem essa
+  // flag o passageiro veria a mensagem errada ao cancelar a própria corrida.
+  const selfCancelledRef = useRef(false);
   useEffect(() => {
     if (ride.status !== 'completed' && ride.status !== 'cancelled') return;
 
@@ -279,11 +294,16 @@ export function ActiveRideScreen({ navigation, route }: Props) {
       if (ride.status === 'completed') {
         navigation.replace('RateRide', { ride });
       } else {
-        if (!cancelAlertShownRef.current) {
+        // Cancelamento pelo motorista: a corrida já foi cobrada no aceite
+        // (ver charge-ride), então o valor é estornado automaticamente
+        // (ver refund-ride, chamado por DriverNavigateScreen.handleCancel).
+        // Avisamos o passageiro com um banner (não um Alert bloqueante) para
+        // que a mensagem apareça mesmo depois do `navigation.reset` abaixo.
+        if (!cancelAlertShownRef.current && !selfCancelledRef.current) {
           cancelAlertShownRef.current = true;
-          Alert.alert(
+          notifyInApp(
             t('activeRide.rideCancelledTitle'),
-            t('activeRide.rideCancelledByDriver'),
+            t('activeRide.rideCancelledByDriverRefunded').replace('{amount}', formatCurrency(ride.price)),
           );
         }
         navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
@@ -300,6 +320,27 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
   const origin = rideOrigin(ride);
   const dest = rideDestination(ride);
+
+  // ── Bloco 3 (paridade Uber): ROTA ÚNICA calculada no servidor ────────────────
+  // Sob a flag `shared_route_v1`, a corrida traz a rota já pronta em
+  // `route_polyline`/`route_eta_min`/`route_distance_km` (Edge Function
+  // compute-route → RPC commit_ride_route). É a MESMA linha que o motorista lê →
+  // passageiro e motorista veem EXATAMENTE a mesma rota/ETA. Sem a flag (ou antes
+  // do servidor gravar a primeira rota), `serverRoute` é null e a tela cai no
+  // comportamento legado (rotas calculadas no próprio cliente, abaixo).
+  const sharedRouteEnabled = useFeatureFlag('shared_route_v1');
+  const serverRoute = React.useMemo(
+    () => (sharedRouteEnabled ? parseSharedRoute(ride) : null),
+    [sharedRouteEnabled, ride.route_polyline, ride.route_version],
+  );
+  // Mesma geometria, no formato { latitude, longitude } que o <Polyline> espera.
+  const serverPath = React.useMemo(
+    () =>
+      serverRoute
+        ? { coordinates: serverRoute.coordinates.map((c) => ({ latitude: c.lat, longitude: c.lng })) }
+        : null,
+    [serverRoute],
+  );
 
   // Rota completa: origem → destino (polyline base no mapa)
   const { route: fullPath } = useRideRoute(
@@ -336,8 +377,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     (ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress') &&
     ride.driver_eta_min != null;
 
-  const etaMin = hasDriverEta ? ride.driver_eta_min! : localPath?.durationMin;
-  const etaKm = hasDriverEta ? ride.driver_eta_km : localPath?.distanceKm;
+  // Bloco 3: com rota do servidor, o ETA/distância vêm da MESMA fonte do
+  // motorista (route_eta_min/route_distance_km). Só então caímos na telemetria
+  // gravada pelo motorista e, por fim, na rota calculada localmente.
+  const etaMin = serverRoute ? serverRoute.etaMin : hasDriverEta ? ride.driver_eta_min! : localPath?.durationMin;
+  const etaKm = serverRoute ? serverRoute.distanceKm : hasDriverEta ? ride.driver_eta_km : localPath?.distanceKm;
   const hasEta = etaMin != null;
 
   // Horário estimado de chegada
@@ -348,10 +392,32 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // Polyline ativa: trecho que o motorista ainda vai percorrer
   //   • accepted / driver_en_route → motorista a caminho do embarque
   //   • in_progress               → percurso restante até o destino (IGUAL à tela do motorista)
+  // Bloco 3: a rota do servidor (quando existe) É a linha ativa — igual à do
+  // motorista. Sem ela, mantém o trecho calculado no cliente por fase.
   const activePolyline =
-    ride.status === 'in_progress' ? remainingPath :
+    serverPath ??
+    (ride.status === 'in_progress' ? remainingPath :
     (ride.status === 'accepted' || ride.status === 'driver_en_route') ? toPickupPath :
-    null;
+    null);
+
+  // ── Bloco 2 (paridade Uber): marcador do motorista com movimento fluido ──────
+  // Hoje o <Marker> "pula" a cada atualização de posição vinda do realtime. Sob a
+  // flag, trocamos por <SmoothMarker> (interpolação + snap-na-rota + rotação pelo
+  // arco mais curto). driverLoc não traz velocidade/timestamp, então carimbamos o
+  // tempo na atualização e deixamos a velocidade indefinida (o SmoothMarker então
+  // confia no heading e NÃO faz dead reckoning — seguro, sem inventar posição).
+  const smoothMarkerEnabled = useFeatureFlag('nav_smooth_marker');
+  const driverFix = React.useMemo<MarkerFix | null>(
+    () =>
+      driverLoc
+        ? { lat: driverLoc.lat, lng: driverLoc.lng, heading: driverLoc.heading ?? null, timestampMs: Date.now() }
+        : null,
+    [driverLoc?.lat, driverLoc?.lng, driverLoc?.heading],
+  );
+  const smoothRoute = React.useMemo(
+    () => (activePolyline ?? fullPath)?.coordinates.map((c) => ({ lat: c.latitude, lng: c.longitude })) ?? null,
+    [activePolyline, fullPath],
+  );
 
   // Recentraliza o mapa conforme fase da corrida:
   //   • a caminho do embarque → motorista + ponto de embarque
@@ -429,7 +495,12 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         <Marker coordinate={{ latitude: dest.lat, longitude: dest.lng }}>
           <View style={styles.markerDest} />
         </Marker>
-        {driverLoc && (
+        {driverLoc && smoothMarkerEnabled && driverFix && (
+          <SmoothMarker fix={driverFix} route={smoothRoute} anchor={{ x: 0.5, y: 0.5 }}>
+            {(heading) => <CarMarker scale={0.75} heading={heading} />}
+          </SmoothMarker>
+        )}
+        {driverLoc && !smoothMarkerEnabled && (
           <Marker
             coordinate={{ latitude: driverLoc.lat, longitude: driverLoc.lng }}
             anchor={{ x: 0.5, y: 0.5 }}

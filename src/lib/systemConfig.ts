@@ -59,6 +59,25 @@ export const CONFIG_DEFAULTS = {
   // Bloco 3: modo course-up (mapa gira conforme o deslocamento) na navegação do
   // motorista. Ligado por padrão (já é o comportamento atual da tela de navegação).
   nav_course_up_enabled: true,
+  // Paridade Uber Bloco 2: marcador de veículo com MOVIMENTO FLUIDO (componente
+  // SmoothMarker: interpolação ~1 s, snap-na-rota, dead reckoning ≤ 3 s, rotação
+  // pelo arco mais curto). LIGA no lado do PASSAGEIRO, onde hoje o marcador do
+  // motorista "pula" a cada atualização (o motorista já anima nativamente via
+  // AnimatedRegion). DESLIGADO por padrão → mantém o <Marker> cru até o rollout.
+  nav_smooth_marker: false,
+  // Bloco 4 (paridade Uber): card de corrida CLICÁVEL/EXPANSÍVEL na tela do
+  // motorista. Toque/arraste no cabeçalho compacto expande para revelar o
+  // endereço oposto completo, nome do passageiro e resumo (preço · distância),
+  // sem reenquadrar a câmera. DESLIGADO por padrão → mantém o painel compacto
+  // legado até o rollout por jurisdição após QA.
+  ride_card_expandable: false,
+  // Bloco 3 (paridade Uber): ROTA ÚNICA no servidor. Com a flag LIGADA, a rota
+  // é calculada pela Edge Function compute-route (proxy do OSRM) e gravada na
+  // corrida (route_polyline + route_version + route_eta_min). Motorista dispara
+  // o recálculo (aceite/mudança de fase/desvio) e ambos os lados LEEM a mesma
+  // rota/ETA do servidor. DESLIGADO por padrão → cada tela calcula a própria
+  // rota no cliente (comportamento legado). Habilitar por jurisdição após QA.
+  shared_route_v1: false,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
   // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).

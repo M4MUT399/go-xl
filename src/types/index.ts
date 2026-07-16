@@ -128,6 +128,15 @@ export interface Ride {
   driver_heading?: number;
   driver_eta_min?: number;
   driver_eta_km?: number;
+  // Bloco 3 (paridade Uber): ROTA ÚNICA calculada no servidor (Edge Function
+  // compute-route → RPC commit_ride_route). Motorista e passageiro leem estas
+  // colunas → veem exatamente a mesma rota/ETA. route_version incrementa a cada
+  // recálculo (reroute). Ver migration 0061 e src/lib/nav/sharedRoute.ts.
+  route_polyline?: string;
+  route_version?: number;
+  route_eta_min?: number;
+  route_distance_km?: number;
+  route_updated_at?: string;
   created_at: string;
   accepted_at?: string;
   /** Bloco 1 (compliance TNC): marco P2→P3, carimbado pelo servidor (ver migration 0056). */

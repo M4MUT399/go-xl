@@ -307,6 +307,26 @@ Deno.serve(async (req) => {
         break;
       }
 
+      // ── Passageiro → motorista: cancelou corrida já aceita ────────────────
+      // Complementa o broadcast em tempo real (`driver-notify-${driverId}`,
+      // ver useRide.ts/broadcastRideCancelledToDriver) que só chega se o app
+      // do motorista estiver aberto na tela de navegação com o WebSocket
+      // conectado. Este push garante a entrega mesmo em segundo plano/fechado.
+      case 'ride_cancelled_by_passenger': {
+        if (!isPassenger || !ride.driver_id) return json({ error: 'Não autorizado' }, 403);
+        const token = await tokenFor(admin, ride.driver_id);
+        if (token) {
+          await sendExpoPush([{
+            to: token,
+            title: '❌ Corrida cancelada',
+            body: 'O passageiro cancelou esta corrida.',
+            data: { type: 'ride_cancelled', rideId },
+            sound: 'default', channelId: 'rides', ttl: 30, priority: 'high', collapseId: rideId,
+          }]);
+        }
+        break;
+      }
+
       // ── Watchdog: agendamento venceu sem motorista ────────────────────────
       case 'schedule_expired': {
         // O watchdog (expireOldScheduledRides) já marcou a linha como

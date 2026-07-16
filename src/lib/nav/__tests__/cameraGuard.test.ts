@@ -1,6 +1,7 @@
 import {
   clampRegionDelta,
   clampZoom,
+  firstValidCoord,
   isFiniteCoord,
   isNullIsland,
   sanitizeCoords,
@@ -72,6 +73,31 @@ describe('validateTarget', () => {
 
   it('aceita um deslocamento plausível (poucos km)', () => {
     expect(validateTarget({ lat: 28.55, lng: -81.36 }, orlando).ok).toBe(true);
+  });
+});
+
+describe('firstValidCoord — centro de montagem seguro (Bloco 1)', () => {
+  const orlando = { lat: 28.5383, lng: -81.3792 };
+  const pickup = { lat: 28.42, lng: -81.31 };
+
+  it('escolhe o PRIMEIRO candidato válido (herança da última câmera)', () => {
+    expect(firstValidCoord([orlando, pickup])).toEqual(orlando);
+  });
+
+  it('pula (0,0) e escolhe o próximo válido (GPS do aceite sem fix)', () => {
+    expect(firstValidCoord([{ lat: 0, lng: 0 }, pickup])).toEqual(pickup);
+  });
+
+  it('pula null/undefined e escolhe o embarque', () => {
+    expect(firstValidCoord([null, undefined, pickup])).toEqual(pickup);
+  });
+
+  it('pula NaN/Infinity (fix atrasado corrompido)', () => {
+    expect(firstValidCoord([{ lat: NaN, lng: 10 }, { lat: Infinity, lng: 0 }, pickup])).toEqual(pickup);
+  });
+
+  it('retorna null quando TODOS os candidatos são lixo (não monta em região default)', () => {
+    expect(firstValidCoord([null, { lat: 0, lng: 0 }, { lat: NaN, lng: NaN }])).toBeNull();
   });
 });
 

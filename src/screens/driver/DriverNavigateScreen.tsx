@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Platform, Alert, Image, Dimensions,
+  Platform, Alert, Image, Dimensions, LayoutAnimation, UIManager,
 } from 'react-native';
 import MapView, { Marker, MarkerAnimated, AnimatedRegion, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,16 +28,22 @@ import {
   type HeadingState,
 } from '../../lib/nav/courseUp';
 import { useCameraController } from '../../hooks/useCameraController';
+import { firstValidCoord } from '../../lib/nav/cameraGuard';
+import { getLastValidCamera } from '../../lib/nav/lastCamera';
+import { reportWarning } from '../../lib/errorReporting';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { boardingWarning } from '../../lib/driverBoardingConfirmation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useChatAlert } from '../../hooks/useChatAlert';
-import { formatCurrency } from '../../lib/format';
+import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
+import { buildRideCardModel } from '../../lib/nav/rideCard';
+import { requestServerRoute } from '../../lib/nav/sharedRouteClient';
 import { RouteStep } from '../../lib/routing';
 import { CarMarker } from '../../components/common/CarMarker';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
+import { notifyInApp } from '../../lib/inAppNotify';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverNavigate'>;
@@ -45,6 +51,13 @@ type Props = {
 };
 
 type Phase = 'pickup' | 'dropoff';
+
+// LayoutAnimation no Android exige habilitar o flag experimental uma vez. A
+// expansão do card (Bloco 4) usa easeInEaseOut para animar altura sem reflow
+// abrupto. Só afeta a própria View animada; não toca no mapa/câmera.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // ─── Helpers de navegação ────────────────────────────────────────────────────
 
@@ -140,15 +153,38 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const boardingConfirmationRequired = useFeatureFlag('driver_confirmation_required', profile?.jurisdiction ?? 'global');
   const { height: screenH } = Dimensions.get('window');
 
+  // ── Bloco 1: centro de MONTAGEM sempre válido (anti zoom-out continental) ────
+  // A tela NUNCA deve montar numa região default ou em (0,0): escolhe, em ordem,
+  // a última câmera VÁLIDA herdada da tela anterior → posição do aceite → embarque
+  // → destino. firstValidCoord descarta null/NaN/(0,0). Se TUDO falhar (jamais em
+  // prática), cai no embarque cru (comportamento legado) e registra telemetria.
+  const seedCenter = useMemo(() => {
+    const picked = firstValidCoord([
+      getLastValidCamera(),
+      initialDriverLocation ? { lat: initialDriverLocation.lat, lng: initialDriverLocation.lng } : null,
+      rideOrigin(ride),
+      rideDestination(ride),
+    ]);
+    if (!picked) {
+      reportWarning('nav mount: nenhum centro válido — usando embarque cru', {
+        source: 'DriverNavigate',
+      });
+      return rideOrigin(ride);
+    }
+    return picked;
+    // Semente é fixa por montagem (não recalcula a cada fix) — de propósito.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Animação do marcador (posição suave, SEM teleporte) ─────────────────────
   // O marcador do carro é um MarkerAnimated preso a esta AnimatedRegion; cada
   // fix ANIMA a região da posição atual até a nova (a lib move o marcador
-  // nativamente, sem re-render do React). Semeia na posição já conhecida do
-  // aceite (ou no ponto de embarque) para não abrir no meio do oceano.
+  // nativamente, sem re-render do React). Semeia no centro validado acima para
+  // nunca abrir no meio do oceano.
   const carRegion = useRef(
     new AnimatedRegion({
-      latitude: (initialDriverLocation ?? rideOrigin(ride)).lat,
-      longitude: (initialDriverLocation ?? rideOrigin(ride)).lng,
+      latitude: seedCenter.lat,
+      longitude: seedCenter.lng,
       latitudeDelta: 0,
       longitudeDelta: 0,
     }),
@@ -169,6 +205,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const courseUpEnabled = useFeatureFlag('nav_course_up_enabled');
   const courseUpRef = useRef(courseUpEnabled);
   courseUpRef.current = courseUpEnabled;
+  // Bloco 3: rota única no servidor. Com a flag ON, o motorista dispara o
+  // recálculo da rota na Edge Function (aceite/mudança de fase/desvio); o
+  // resultado (polyline + version + ETA) é gravado na corrida e propagado às
+  // duas telas pelo realtime. Ref para uso dentro de efeitos sem re-assinar.
+  const sharedRouteEnabled = useFeatureFlag('shared_route_v1');
+  const sharedRouteRef = useRef(sharedRouteEnabled);
+  sharedRouteRef.current = sharedRouteEnabled;
   const headingStateRef = useRef<HeadingState>(initialHeadingState);
   // Câmera "drone" segue o carro; PAUSA quando o motorista arrasta o mapa e
   // volta ao tocar em "recentralizar".
@@ -217,6 +260,27 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const origin = rideOrigin(ride);
   const dest   = rideDestination(ride);
   const target = phase === 'pickup' ? origin : dest;
+
+  // ── Bloco 4: card de corrida clicável/expansível ──────────────────────────
+  const rideCardExpandable = useFeatureFlag('ride_card_expandable');
+  const [cardExpanded, setCardExpanded] = useState(false);
+  const rideCardModel = useMemo(
+    () =>
+      buildRideCardModel({
+        phase,
+        originAddress: ride.origin_address ?? '',
+        destinationAddress: ride.destination_address ?? '',
+        passengerName,
+        priceLabel: ride.price != null ? formatCurrency(ride.price) : null,
+        distanceLabel: ride.distance_km != null ? formatDistance(ride.distance_km) : null,
+      }),
+    [phase, ride.origin_address, ride.destination_address, passengerName, ride.price, ride.distance_km],
+  );
+  const toggleCard = () => {
+    // Anima só a altura do próprio card; NÃO reenquadra a câmera (Bloco 4).
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setCardExpanded((v) => !v);
+  };
 
   // Publica posição do motorista em driver_locations (passageiro vê em tempo real)
   useEffect(() => {
@@ -347,6 +411,16 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     { lat: target.lat, lng: target.lng }
   );
 
+  // ── Bloco 3: dispara a rota única do servidor no aceite e a cada mudança de
+  // fase (pickup → dropoff). O servidor recomputa do ponto do motorista até o
+  // alvo da fase e incrementa route_version; passageiro e motorista leem a mesma
+  // rota. Best-effort e sob flag — sem a flag, ninguém chama (rota legada). ──
+  useEffect(() => {
+    if (!sharedRouteEnabled) return;
+    if (ride.status !== 'accepted' && ride.status !== 'driver_en_route' && ride.status !== 'in_progress') return;
+    requestServerRoute(ride.id);
+  }, [ride.id, ride.status, phase, sharedRouteEnabled]);
+
   // ── Snap na rota: separa percorrido/restante + dispara re-rota por desvio ────
   // A cada fix, projeta o carro na polyline: o trecho antes do ponto vira
   // "percorrido" (cinza, some) e o depois "restante" (colorido). Se o desvio da
@@ -372,6 +446,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     if (r.reroute) {
       lastRouteCoord.current = { lat: location.lat, lng: location.lng };
       setRouteOrigin({ lat: location.lat, lng: location.lng });
+      // Bloco 3: o mesmo desvio que recalcula a rota local pede ao servidor uma
+      // nova rota única (throttle/histerese já vêm de updateOffRoute). Best-effort.
+      if (sharedRouteRef.current) requestServerRoute(ride.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.lat, location?.lng, path]);
@@ -428,7 +505,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     const handlePassengerCancellation = () => {
       if (cancelledHandledRef.current) return;
       cancelledHandledRef.current = true;
-      Alert.alert(t('driverNav.rideCancelledTitle'), t('driverNav.rideCancelledByPassenger'));
+      // Banner global (não bloqueante) em vez de Alert.alert — consistente com
+      // o aviso equivalente ao passageiro quando é o motorista quem cancela
+      // (ver ActiveRideScreen.tsx). Continua visível mesmo após o
+      // navigation.reset abaixo desmontar esta tela.
+      notifyInApp(t('driverNav.rideCancelledTitle'), t('driverNav.rideCancelledByPassenger'));
       navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
     };
 
@@ -742,8 +823,10 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         customMapStyle={Platform.OS === 'android' ? [] : undefined}
         userInterfaceStyle="light"
         initialRegion={{
-          latitude: target.lat,
-          longitude: target.lng,
+          // Bloco 1: monta no centro VALIDADO (herda a última câmera válida da
+          // tela anterior; nunca em (0,0)/região default). Span fixo de bairro.
+          latitude: seedCenter.lat,
+          longitude: seedCenter.lng,
           latitudeDelta: 0.02,
           longitudeDelta: 0.02,
         }}
@@ -914,8 +997,17 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       <View style={[styles.bottomSheetCompact, Platform.OS === 'android' && { paddingBottom: 20 + insets.bottom }]}>
         <View style={styles.handle} />
 
-        {/* Identidade do passageiro — foto + nome + avaliação média */}
-        <View style={styles.paxRow}>
+        {/* Identidade do passageiro — foto + nome + avaliação média. Sob a flag
+            ride_card_expandable, a linha inteira vira área de toque (≥44pt) que
+            expande/recolhe o card, revelando endereços e resumo da viagem. */}
+        <TouchableOpacity
+          style={styles.paxRow}
+          activeOpacity={rideCardExpandable ? 0.7 : 1}
+          disabled={!rideCardExpandable}
+          onPress={toggleCard}
+          accessibilityRole={rideCardExpandable ? 'button' : undefined}
+          accessibilityState={rideCardExpandable ? { expanded: cardExpanded } : undefined}
+        >
           {passengerAvatar ? (
             <Image source={{ uri: passengerAvatar }} style={styles.paxAvatar} />
           ) : (
@@ -933,7 +1025,37 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
               <Text style={styles.paxRating}>⭐ {passengerRating.toFixed(1)}</Text>
             )}
           </View>
-        </View>
+          {rideCardExpandable && (
+            <Text style={styles.cardChevron}>{cardExpanded ? '⌄' : '›'}</Text>
+          )}
+        </TouchableOpacity>
+
+        {/* Endereço em destaque + linhas reveladas ao expandir (Bloco 4). */}
+        {rideCardExpandable && (
+          <View style={styles.cardBody}>
+            <View style={styles.cardRow}>
+              <Text style={styles.cardRowLabel}>{t(rideCardModel.primaryLabelKey)}</Text>
+              <Text
+                style={styles.cardRowAddress}
+                numberOfLines={cardExpanded ? undefined : 1}
+              >
+                {rideCardModel.primaryAddress}
+              </Text>
+            </View>
+            {cardExpanded &&
+              rideCardModel.expandedRows.map((row, i) => (
+                <View style={styles.cardRow} key={`${row.labelKey}-${i}`}>
+                  <Text style={styles.cardRowLabel}>{t(row.labelKey)}</Text>
+                  <Text
+                    style={row.address ? styles.cardRowAddress : styles.cardRowValue}
+                    numberOfLines={row.address ? undefined : 1}
+                  >
+                    {row.value}
+                  </Text>
+                </View>
+              ))}
+          </View>
+        )}
 
         <View style={styles.compactStatsRow}>
           <View style={styles.compactStat}>
@@ -1123,6 +1245,7 @@ function makeStyles(colors: AppTheme) {
       alignItems: 'center',
       gap: 10,
       marginBottom: 12,
+      minHeight: 44, // área de toque mínima (Bloco 4) mesmo sem expansão
     },
     paxAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.gray[200] },
     paxAvatarFallback: {
@@ -1137,6 +1260,21 @@ function makeStyles(colors: AppTheme) {
     paxInfo: { flex: 1 },
     paxName: { fontSize: 16, fontWeight: '700', color: colors.text },
     paxRating: { fontSize: 13, color: colors.gray[500], marginTop: 2 },
+
+    // Card expansível (Bloco 4): chevron indicador + corpo com linhas de detalhe
+    cardChevron: { fontSize: 20, color: colors.gray[400], fontWeight: '700', paddingHorizontal: 4 },
+    cardBody: { marginBottom: 12, gap: 8 },
+    cardRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+    cardRowLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.gray[500],
+      textTransform: 'uppercase',
+      width: 78,
+      paddingTop: 1,
+    },
+    cardRowAddress: { flex: 1, fontSize: 14, color: colors.text, lineHeight: 19 },
+    cardRowValue: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
 
     // Barra compacta: tempo de corrida + velocidade atual
     compactStatsRow: {

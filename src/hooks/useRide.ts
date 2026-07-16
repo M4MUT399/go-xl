@@ -765,7 +765,13 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       broadcastRideRevoked(rideId, 'cancelled');
       // Se um motorista já havia ACEITO, avisa-o diretamente para interromper a
       // navegação e voltar ao início ("Corrida cancelada pelo passageiro").
-      if (assignedDriverId) broadcastRideCancelledToDriver(assignedDriverId, rideId);
+      if (assignedDriverId) {
+        broadcastRideCancelledToDriver(assignedDriverId, rideId);
+        // Push real (best-effort) — cobre o caso do app do motorista em
+        // segundo plano/fechado, quando o broadcast acima não chega porque
+        // não há WebSocket conectado na tela de navegação.
+        invokeRidePush({ kind: 'ride_cancelled_by_passenger', rideId });
+      }
       // PR-c: motor v2 — encerra o `trip_request` no servidor e revoga as ofertas
       // pendentes (para o tick não continuar a distribuir uma corrida cancelada).
       // Best-effort e no-op se a flag estiver OFF (o servidor responde { skipped }).
