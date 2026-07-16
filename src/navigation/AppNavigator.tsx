@@ -285,8 +285,23 @@ export function AppNavigator() {
     navigationRef.navigate('TrackTrip', { token: tk });
   }
 
-  /** Extrai o driver code do URL e armazena; navega imediatamente se já autenticado. */
-  function captureDeepLink(url: string) {
+  /**
+   * Extrai o driver code do URL e armazena; navega imediatamente SÓ no caso
+   * seguro (warm start com sessão já assentada há tempo). No cold start
+   * (`getInitialURL`), `isAuthedRef.current` ainda está no valor padrão
+   * `false` — o efeito que zera/atualiza esse ref (linhas abaixo) depende de
+   * `loading`/`session`, que só resolvem depois que a sessão persistida é
+   * restaurada, e isso corre em paralelo com `getInitialURL()`. Decidir aqui
+   * synchronamente causava um bug real: um passageiro JÁ logado que escaneava
+   * o QR code de um motorista tinha o código travado zerado e a navegação
+   * jogada fora (ExpressRegister some quando o RootStack troca pra árvore
+   * autenticada), e a corrida acabava indo pro fluxo genérico, sem trava
+   * nenhuma. Por isso: o código pendente é SEMPRE preservado aqui; quem
+   * decide entre `RequestRide` (travado) e `ExpressRegister` é o efeito
+   * `[loading, session]` abaixo, que só age depois que o estado de auth está
+   * definitivamente resolvido.
+   */
+  function captureDeepLink(url: string, isColdStart = false) {
     const parsed = ExpoLinking.parse(url);
 
     // Link de recuperação de senha: goxl://reset-password#access_token=...
@@ -318,19 +333,20 @@ export function AppNavigator() {
     const driverCode = parsed.queryParams?.driver as string | undefined;
     if (!driverCode) return;
 
-    if (isAuthedRef.current) {
-      // Usuário já logado → fluxo normal (trava na corrida)
-      pendingDriverCode.current = driverCode;
+    // Guarda SEMPRE — o despacho definitivo (RequestRide travado x
+    // ExpressRegister) é decidido pelo efeito `[loading, session]`, nunca
+    // aqui dentro (ver comentário do JSDoc acima).
+    pendingDriverCode.current = driverCode;
+
+    // Só despacha na hora se isto for um warm start (app já rodando, ouvinte
+    // via `addEventListener`) E a sessão já estiver de fato assentada — nesse
+    // caso `isAuthedRef.current` é confiável, pois o efeito que o mantém
+    // atualizado já rodou muito antes deste evento chegar.
+    if (!isColdStart && isAuthedRef.current) {
       setTimeout(dispatchPendingDeepLink, 300);
-    } else {
-      // Usuário NÃO logado → Modo Expresso (cadastro rápido)
-      pendingDriverCode.current = null; // não despacha depois do login normal
-      setTimeout(() => {
-        if (navigationRef.isReady()) {
-          navigationRef.navigate('ExpressRegister', { driverCode });
-        }
-      }, 500);
     }
+    // Cold start (ou warm start sem sessão ainda) fica pendente: o efeito
+    // `[loading, session]` cuida de despachar assim que o auth resolver.
   }
 
   /** Faz o lookup no DB e navega para RequestRide com o motorista travado. */
@@ -364,9 +380,15 @@ export function AppNavigator() {
     isAuthedRef.current = !loading && !!session;
   }, [loading, session]);
 
-  // Dispara o deep link pendente quando o usuário termina de autenticar (cold start)
+  // Dispara o deep link pendente quando o estado de auth termina de resolver
+  // (cold start) — cobre os DOIS desfechos possíveis, autenticado ou não.
+  // Antes, o ramo "não autenticado" era decidido de forma síncrona e não
+  // confiável dentro de `captureDeepLink` (ver JSDoc lá); agora ambos os
+  // ramos só agem aqui, depois que `loading`/`session` já são definitivos.
   useEffect(() => {
-    if (!loading && session) {
+    if (loading) return;
+
+    if (session) {
       // Prioridade 1: corrida expressa (cadastro via QR de novo passageiro)
       const express = consumePendingExpressRide();
       if (express) {
@@ -381,10 +403,25 @@ export function AppNavigator() {
         }, 700);
         return;
       }
-      // Prioridade 2: deep link de usuário já cadastrado
+      // Prioridade 2: deep link de usuário já cadastrado — trava a corrida
+      // no motorista dono do QR.
       if (pendingDriverCode.current) {
         setTimeout(dispatchPendingDeepLink, 600);
       }
+      return;
+    }
+
+    // Sessão resolvida e SEM login: se havia um driver code pendente (QR lido
+    // antes ou durante a checagem de auth), manda para o cadastro expresso
+    // levando o código junto, em vez de deixá-lo se perder.
+    if (pendingDriverCode.current) {
+      const driverCode = pendingDriverCode.current;
+      pendingDriverCode.current = null;
+      setTimeout(() => {
+        if (navigationRef.isReady()) {
+          navigationRef.navigate('ExpressRegister', { driverCode });
+        }
+      }, 500);
     }
   }, [loading, session]);
 
@@ -397,10 +434,12 @@ export function AppNavigator() {
     }
   }, [loading]);
 
-  // Escuta deep links (cold start + warm start)
+  // Escuta deep links (cold start + warm start). `getInitialURL` é sempre
+  // cold start (app acabou de abrir via link — auth ainda não resolveu);
+  // `addEventListener('url', ...)` é sempre warm start (app já rodando).
   useEffect(() => {
-    ExpoLinking.getInitialURL().then((url: string | null) => { if (url) captureDeepLink(url); });
-    const sub = ExpoLinking.addEventListener('url', ({ url }: { url: string }) => captureDeepLink(url));
+    ExpoLinking.getInitialURL().then((url: string | null) => { if (url) captureDeepLink(url, true); });
+    const sub = ExpoLinking.addEventListener('url', ({ url }: { url: string }) => captureDeepLink(url, false));
     return () => sub.remove();
   }, []);
 

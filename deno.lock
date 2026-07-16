@@ -22,6 +22,7 @@
     "npm:expo-audio@~1.1.1": "1.1.1_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_expo-asset@12.0.13__expo@54.0.35___react@19.1.0___react-native@0.81.5____@types+react@19.1.17____react@19.1.0____@babel+core@7.29.7___@babel+core@7.29.7___@types+react@19.1.17___typescript@5.9.3__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_react@19.1.0_react-native@0.81.5__@types+react@19.1.17__react@19.1.0__@babel+core@7.29.7_@types+react@19.1.17_typescript@5.9.3",
     "npm:expo-build-properties@~1.0.10": "1.0.10_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_@types+react@19.1.17_typescript@5.9.3",
     "npm:expo-constants@~18.0.13": "18.0.13_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_react-native@0.81.5__@types+react@19.1.17__react@19.1.0__@babel+core@7.29.7_@babel+core@7.29.7_@types+react@19.1.17_react@19.1.0",
+    "npm:expo-dev-client@~6.0.21": "6.0.21_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3",
     "npm:expo-device@~8.0.10": "8.0.10_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_@types+react@19.1.17_typescript@5.9.3",
     "npm:expo-haptics@~15.0.8": "15.0.8_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_@types+react@19.1.17_typescript@5.9.3",
     "npm:expo-image-manipulator@~14.0.8": "14.0.8_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_@types+react@19.1.17_typescript@5.9.3",
@@ -2800,6 +2801,39 @@
         "react-native"
       ]
     },
+    "expo-dev-client@6.0.21_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3": {
+      "integrity": "sha512-SWI6HD0pa4eJujkYFkvvpezUE1zmJXGLu+34azpu7+QJgO+FLutDYDj8BSTdeH/NYDEClDFjCGqVMcWETvmsCQ==",
+      "dependencies": [
+        "expo",
+        "expo-dev-launcher",
+        "expo-dev-menu",
+        "expo-dev-menu-interface",
+        "expo-manifests",
+        "expo-updates-interface"
+      ]
+    },
+    "expo-dev-launcher@6.0.21_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3": {
+      "integrity": "sha512-QZ9gcKMZbp6EsIhzS0QoGB8Cf4xeVJhjbNgWUwcoBIk8gshoFz8CkCQOnX+HNv2sSY3rdCaNpx3Xo0Rflyq7rA==",
+      "dependencies": [
+        "ajv",
+        "expo",
+        "expo-dev-menu",
+        "expo-manifests"
+      ]
+    },
+    "expo-dev-menu-interface@2.0.0_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3": {
+      "integrity": "sha512-BvAMPt6x+vyXpThsyjjOYyjwfjREV4OOpQkZ0tNl+nGpsPfcY9mc6DRACoWnH9KpLzyIt3BOgh3cuy/h/OxQjw==",
+      "dependencies": [
+        "expo"
+      ]
+    },
+    "expo-dev-menu@7.0.19_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3": {
+      "integrity": "sha512-ju5MZiBCPhUKKvHy0ElZdnlhq01mkEEiR8jfrgQVvW26aWjzjLiOhppNAyXtvGbhk7WxJim3wYMiqFFrjGdfKA==",
+      "dependencies": [
+        "expo",
+        "expo-dev-menu-interface"
+      ]
+    },
     "expo-device@8.0.10_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_@types+react@19.1.17_typescript@5.9.3": {
       "integrity": "sha512-jd5BxjaF7382JkDMaC+P04aXXknB2UhWaVx5WiQKA05ugm/8GH5uaz9P9ckWdMKZGQVVEOC8MHaUADoT26KmFA==",
       "dependencies": [
@@ -2849,6 +2883,9 @@
         "expo-image-loader"
       ]
     },
+    "expo-json-utils@0.15.0": {
+      "integrity": "sha512-duRT6oGl80IDzH2LD2yEFWNwGIC2WkozsB6HF3cDYNoNNdUvFk6uN3YiwsTsqVM/D0z6LEAQ01/SlYvN+Fw0JQ=="
+    },
     "expo-keep-awake@15.0.8_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_react@19.1.0_react-native@0.81.5__@types+react@19.1.17__react@19.1.0__@babel+core@7.29.7": {
       "integrity": "sha512-YK9M1VrnoH1vLJiQzChZgzDvVimVoriibiDIFLbQMpjYBnvyfUeHJcin/Gx1a+XgupNXy92EQJLgI/9ZuXajYQ==",
       "dependencies": [
@@ -2877,6 +2914,14 @@
       "integrity": "sha512-H/FI75VuJ1coodJbbMu82pf+Zjess8X8Xkiv9Bv58ZgPKS/2ztjC1YO1/XMcGz7+s9DrbLuMIw22dFuP4HqneA==",
       "dependencies": [
         "expo"
+      ]
+    },
+    "expo-manifests@1.0.11_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3": {
+      "integrity": "sha512-6zItytTewN37Cjhp3glUg0ozrgW2GwB8x9wtfzUNoJIMmxO38nnGdTLMaotYhRqdf5PP2Dzdmej1HDHXVNUpRw==",
+      "dependencies": [
+        "@expo/config",
+        "expo",
+        "expo-json-utils"
       ]
     },
     "expo-modules-autolinking@3.0.26": {
@@ -2950,6 +2995,12 @@
         "expo",
         "react-native",
         "unimodules-app-loader"
+      ]
+    },
+    "expo-updates-interface@2.0.0_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3": {
+      "integrity": "sha512-pTzAIufEZdVPKql6iMi5ylVSPqV1qbEopz9G6TSECQmnNde2nwq42PxdFBaUEd8IZJ/fdJLQnOT3m6+XJ5s7jg==",
+      "dependencies": [
+        "expo"
       ]
     },
     "expo-web-browser@15.0.11_expo@54.0.35__react@19.1.0__react-native@0.81.5___@types+react@19.1.17___react@19.1.0___@babel+core@7.29.7__@babel+core@7.29.7__@types+react@19.1.17__typescript@5.9.3_react-native@0.81.5__@types+react@19.1.17__react@19.1.0__@babel+core@7.29.7_@types+react@19.1.17_typescript@5.9.3": {
@@ -5790,6 +5841,7 @@
         "npm:expo-audio@~1.1.1",
         "npm:expo-build-properties@~1.0.10",
         "npm:expo-constants@~18.0.13",
+        "npm:expo-dev-client@~6.0.21",
         "npm:expo-device@~8.0.10",
         "npm:expo-haptics@~15.0.8",
         "npm:expo-image-manipulator@~14.0.8",
