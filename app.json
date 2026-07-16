@@ -126,8 +126,7 @@
       "@react-native-community/datetimepicker",
       "expo-audio",
       "expo-asset",
-      "expo-localization",
-      "./plugins/withAndroidAuto.js"
+      "expo-localization"
     ],
     "extra": {
       "eas": {
