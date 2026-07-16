@@ -121,6 +121,14 @@ export function computeDutyStatus(
   // das sessões para ancorar o restUntil e o rótulo online.
   if (movementMinutes != null && Number.isFinite(movementMinutes)) {
     accMin = Math.max(0, movementMinutes);
+    // Segurança (evita "amanhecer bloqueado"): um descanso offline já
+    // qualificado — offline há >= restMin desde a última atividade — ZERA o
+    // acúmulo imediatamente, mesmo que a máquina por movimento ainda não tenha
+    // reciclado (ex.: no cold-start, antes do 1º sample rodar). O lado seguro é
+    // liberar quem já descansou o suficiente.
+    if (!online && lastDutyEnd != null && (nowMs - lastDutyEnd) / 60_000 >= restMin) {
+      accMin = 0;
+    }
   }
 
   const mustRest = accMin >= limitMin;

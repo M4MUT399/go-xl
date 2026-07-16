@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { useFeatureFlag } from './useFeatureFlag';
+import { getConfig } from '../lib/systemConfig';
 import { reportWarning } from '../lib/errorReporting';
 import {
   DEFAULT_DUTY_MOVEMENT,
@@ -51,7 +52,15 @@ export function useDutyMovementTracker(
 
   // Estado vivo (ref) — o efeito de sample lê/escreve sem se recriar.
   const machineRef = useRef<DutyMachine | null>(null);
-  const cfgRef = useRef<DutyMovementConfig>(DEFAULT_DUTY_MOVEMENT);
+  // Política do APP: TOLERÂNCIA ZERO. A hora trabalhada só conta com o veículo
+  // EM MOVIMENTO; assim que o GPS para, a contagem é suspensa (sem os 10 min de
+  // tolerância da lib). A máquina pura continua parametrizável (o default de 10
+  // min segue existindo p/ outras jurisdições), mas aqui forçamos toleranceMs=0.
+  const cfgRef = useRef<DutyMovementConfig>({
+    ...DEFAULT_DUTY_MOVEMENT,
+    toleranceMs: 0,
+    toleranceCountsAsWork: false,
+  });
   const loadedRef = useRef(false);
   // Espelhos dos inputs para o tick de 60s reavaliar sem depender deles.
   const activeRef = useRef(active);
@@ -60,6 +69,13 @@ export function useDutyMovementTracker(
   speedRef.current = speed;
 
   const storageKey = driverId ? `duty_movement_v2:${driverId}` : null;
+  // Guarda o "token de reset" já aplicado neste aparelho. Quando o token vigente
+  // (config `duty_movement_reset_token`) difere, ZERAMOS a jornada persistida —
+  // é a alavanca para LIMPAR bloqueios de descanso presos em campo (bumpar o
+  // valor no system_config limpa todos os aparelhos no próximo boot). O próprio
+  // valor default já muda com este build, então instalações antigas (sem token
+  // gravado) são limpas na primeira abertura.
+  const tokenKey = driverId ? `duty_movement_v2_reset:${driverId}` : null;
 
   // Nota: a máquina usa DEFAULT_DUTY_MOVEMENT (100% parametrizável via
   // DutyMovementConfig). Quando quisermos ajustar limiar/histerese por
@@ -68,7 +84,7 @@ export function useDutyMovementTracker(
 
   // Reconstrói o estado persistido ao (re)habilitar/trocar de motorista.
   useEffect(() => {
-    if (!enabled || !storageKey) {
+    if (!enabled || !storageKey || !tokenKey) {
       machineRef.current = null;
       loadedRef.current = false;
       setMinutes(0);
@@ -76,22 +92,36 @@ export function useDutyMovementTracker(
     }
     let alive = true;
     loadedRef.current = false;
-    AsyncStorage.getItem(storageKey)
-      .then((raw) => {
-        if (!alive) return;
-        machineRef.current = deserializeDuty(raw) ?? initialDutyMachine(Date.now());
-        loadedRef.current = true;
-        setMinutes(computeWorkedMinutes(machineRef.current, Date.now(), cfgRef.current));
-      })
-      .catch(() => {
-        if (!alive) return;
+    (async () => {
+      // Gatilho de reset (versão/remoto): se o token vigente difere do já
+      // aplicado neste aparelho, começa uma jornada NOVA (zera o acumulador) e
+      // grava o token — limpa qualquer bloqueio de descanso preso.
+      const currentToken = String(await getConfig('duty_movement_reset_token'));
+      const [raw, storedToken] = await Promise.all([
+        AsyncStorage.getItem(storageKey),
+        AsyncStorage.getItem(tokenKey),
+      ]);
+      if (!alive) return;
+      if (storedToken !== currentToken) {
         machineRef.current = initialDutyMachine(Date.now());
-        loadedRef.current = true;
-      });
+        await AsyncStorage.multiSet([
+          [storageKey, serializeDuty(machineRef.current)],
+          [tokenKey, currentToken],
+        ]);
+      } else {
+        machineRef.current = deserializeDuty(raw) ?? initialDutyMachine(Date.now());
+      }
+      loadedRef.current = true;
+      setMinutes(computeWorkedMinutes(machineRef.current, Date.now(), cfgRef.current));
+    })().catch(() => {
+      if (!alive) return;
+      machineRef.current = initialDutyMachine(Date.now());
+      loadedRef.current = true;
+    });
     return () => {
       alive = false;
     };
-  }, [enabled, storageKey]);
+  }, [enabled, storageKey, tokenKey]);
 
   // Aplica um sample à máquina: avança estado, persiste e emite a transição.
   const applySample = useRef<(atMs: number) => void>(() => {});

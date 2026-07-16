@@ -10,6 +10,9 @@
 //   • Se o movimento retornar antes de `resetMs` (padrão 6 h) parado, RETOMA do
 //     valor pausado.
 //   • Parado por mais de `resetMs` ZERA o acumulador (novo ciclo).
+//   • OFFLINE conta como DESCANSO: o acumulador também ZERA após `resetMs`
+//     contínuo offline (evita o motorista amanhecer preso após a noite toda
+//     offline). A política de app usa toleranceMs=0 (só conta em movimento).
 //
 // Máquina (exata): MOVING →(parou)→ STOPPED_TOLERANCE(0–10min, conta) →(>10min)→
 // PAUSED(não conta); STOPPED_TOLERANCE →(movimento)→ MOVING; PAUSED →(mov <6h)→
@@ -230,19 +233,35 @@ export function stepDuty(
 ): DutyStepResult {
   const { atMs, online } = sample;
 
-  // 1) Offline domina: não conta, encerra episódio de parada.
+  // 1) Offline domina: não conta jornada — e conta como DESCANSO. Marcamos o
+  // início do episódio de descanso (stopEpisodeStart) ao entrar offline; depois
+  // de `resetMs` contínuo offline o acumulador ZERA (novo turno). Sem isso,
+  // ficar offline a noite toda não zerava as horas e o motorista amanhecia
+  // preso em "descanso obrigatório".
   if (!online) {
     if (prev.state === 'OFFLINE') {
+      const restStart = prev.stopEpisodeStart ?? prev.since;
+      if (atMs - restStart >= cfg.resetMs && prev.workedMs !== 0) {
+        // Descanso offline suficiente → zera uma única vez (guard workedMs!==0).
+        return transitionTo(prev, 'OFFLINE', atMs, 'reset_offline', cfg, {
+          workedMs: 0,
+          stopEpisodeStart: restStart,
+          moving: null,
+          fastSince: null,
+          slowSince: null,
+          frozenState: null,
+        });
+      }
       return { machine: { ...prev, moving: null, fastSince: null, slowSince: null }, transition: null };
     }
-    const res = transitionTo(prev, 'OFFLINE', atMs, 'offline', cfg, {
-      stopEpisodeStart: null,
+    // Vindo de um estado online → entra OFFLINE e inicia o episódio de descanso.
+    return transitionTo(prev, 'OFFLINE', atMs, 'offline', cfg, {
+      stopEpisodeStart: atMs,
       moving: null,
       fastSince: null,
       slowSince: null,
       frozenState: null,
     });
-    return res;
   }
 
   // 2) Classifica movimento (histerese). Atualiza candidatos mesmo sem transição.

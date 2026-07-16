@@ -102,6 +102,54 @@ describe('dutyMovement — cenários de compliance', () => {
   });
 });
 
+describe('dutyMovement — descanso offline zera o acúmulo', () => {
+  const NOHYST: DutyMovementConfig = { ...CFG }; // resetMs padrão = 6h
+
+  it('offline por >= 6h ZERA o acumulador (não amanhece bloqueado)', () => {
+    let m = initialDutyMachine(0);
+    // Acumula ~10h dirigindo online.
+    m = stepDuty(m, { atMs: 0, speedMps: MOVE, online: true }, NOHYST).machine;
+    m = stepDuty(m, { atMs: 10 * HOUR, speedMps: MOVE, online: true }, NOHYST).machine;
+    expect(workedMinutes(m, 10 * HOUR, NOHYST)).toBeCloseTo(600, 5);
+    // Fica OFFLINE (fim do turno).
+    m = stepDuty(m, { atMs: 10 * HOUR, speedMps: STOP, online: false }, NOHYST).machine;
+    expect(m.state).toBe('OFFLINE');
+    // 6h01 offline → zera.
+    const r = stepDuty(m, { atMs: 16 * HOUR + 1 * MIN, speedMps: STOP, online: false }, NOHYST);
+    expect(r.transition?.reason).toBe('reset_offline');
+    expect(workedMinutes(r.machine, 16 * HOUR + 1 * MIN, NOHYST)).toBeCloseTo(0, 5);
+  });
+
+  it('offline por < 6h NÃO zera (mantém o acúmulo)', () => {
+    let m = initialDutyMachine(0);
+    m = stepDuty(m, { atMs: 0, speedMps: MOVE, online: true }, NOHYST).machine;
+    m = stepDuty(m, { atMs: 5 * HOUR, speedMps: MOVE, online: true }, NOHYST).machine;
+    m = stepDuty(m, { atMs: 5 * HOUR, speedMps: STOP, online: false }, NOHYST).machine;
+    // só 2h offline
+    const m2 = stepDuty(m, { atMs: 7 * HOUR, speedMps: STOP, online: false }, NOHYST).machine;
+    expect(workedMinutes(m2, 7 * HOUR, NOHYST)).toBeCloseTo(300, 5);
+  });
+});
+
+describe('dutyMovement — política tolerância ZERO (app)', () => {
+  // Espelha o cfgRef do useDutyMovementTracker: só conta em movimento.
+  const ZERO: DutyMovementConfig = { ...CFG, toleranceMs: 0, toleranceCountsAsWork: false };
+
+  it('parada não conta NADA (sem tolerância)', () => {
+    const m = run(
+      [
+        [0, MOVE],
+        [1 * HOUR, MOVE],
+        [1 * HOUR, STOP], // para
+        [1 * HOUR + 25 * MIN, STOP],
+      ],
+      ZERO,
+    );
+    // Contou só a 1h em movimento; os 25min parado não entram.
+    expect(workedMinutes(m, 1 * HOUR + 25 * MIN, ZERO)).toBeCloseTo(60, 5);
+  });
+});
+
 describe('dutyMovement — transições e telemetria', () => {
   it('emite transição MOVING→STOPPED_TOLERANCE ao parar', () => {
     let m = initialDutyMachine(0);

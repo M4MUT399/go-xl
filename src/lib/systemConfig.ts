@@ -61,10 +61,17 @@ export const CONFIG_DEFAULTS = {
   nav_course_up_enabled: true,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
-  // trabalhadas passam a contar SÓ com o veículo em movimento (limiar 8 km/h +
-  // histerese); parado além da tolerância (10 min) PAUSA a contagem, forçando o
-  // descanso obrigatório. Off → volta ao tracker de ociosidade v1 (em memória).
+  // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).
+  // TOLERÂNCIA ZERO: assim que o GPS para, a contagem é SUSPENSA (sem os 10 min
+  // de tolerância). Offline conta como descanso e zera o acúmulo após 6h — a
+  // noite offline não deixa mais o motorista preso em descanso pela manhã.
+  // Off → volta ao tracker de ociosidade v1 (em memória).
   duty_movement_v2_enabled: true,
+  // Bloco 2: "token de reset" da jornada por movimento. Ao mudar este valor, todo
+  // aparelho ZERA o acumulador persistido no próximo boot (limpa bloqueios de
+  // descanso presos em campo, sem esperar as 6h). Também serve de versão: este
+  // build já sobe o valor, então instalações existentes são limpas na 1ª abertura.
+  duty_movement_reset_token: '2026-07-16-zero-tolerance',
   // Dispatch PR-a: fila FIFO de ofertas no app do motorista. Corrige o bug em que
   // uma 2ª solicitação (P2) SOBRESCREVIA/lapidava a 1ª (P1) no slot único —
   // matando as duas corridas. Com a flag LIGADA o motorista mantém várias ofertas
