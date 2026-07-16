@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../hooks/useAuth';
@@ -68,8 +68,16 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem('driver_is_online', val ? 'true' : 'false');
   }, []);
 
-  // watch: true → posição contínua enquanto online (banco atualiza a cada ≥15 m).
-  const { location } = useLocation({ watch: isOnline });
+  // GPS SEMPRE monitorado (watch: true), inclusive OFFLINE — o mapa do motorista
+  // continua acompanhando o deslocamento mesmo com o status offline (o motorista
+  // pediu esse comportamento). O que muda com online/offline não é a leitura do
+  // GPS, e sim se a posição é PUBLICADA no servidor (ver os dois efeitos abaixo)
+  // e se a jornada acumula (a máquina por movimento só conta online).
+  const { location } = useLocation({ watch: true });
+  // Espelho da última posição — usado pelo efeito de status (que não deve
+  // re-disparar a cada fix de GPS, só quando o online/offline muda).
+  const locationRef = useRef<Coordinates | null>(location);
+  locationRef.current = location;
 
   // Item 1: acompanha a ociosidade (veículo parado) do turno atual a partir da
   // velocidade do GPS. Vive aqui — global — para captar também o movimento
@@ -97,21 +105,38 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     location,
   );
 
-  // Sincroniza localização + status online no banco (só após carregar o valor
-  // persistido). Vive aqui — e não em DriverHomeScreen — para continuar
-  // atualizando mesmo enquanto o motorista está em outra tela (Navegação,
-  // Agenda, etc.), já que este Provider nunca é desmontado.
+  // Publica a POSIÇÃO ao vivo no banco APENAS quando ONLINE — é o que o
+  // passageiro vê em tempo real. Offline, o GPS continua rodando localmente
+  // (mapa/jornada), mas a posição NÃO é rastreada no servidor (privacidade do
+  // motorista fora de serviço). Vive aqui — e não em DriverHomeScreen — para
+  // continuar publicando mesmo em outra tela (Navegação, Agenda, etc.), já que
+  // este Provider nunca é desmontado.
   useEffect(() => {
-    if (!location || !profile?.id || !onlineLoaded) return;
+    if (!location || !profile?.id || !onlineLoaded || !isOnline) return;
     supabase.from('driver_locations').upsert({
       driver_id: profile.id,
       lat: location.lat,
       lng: location.lng,
       heading: location.heading ?? null,
-      is_online: isOnline,
+      is_online: true,
       updated_at: new Date().toISOString(),
     });
   }, [location, isOnline, profile?.id, onlineLoaded]);
+
+  // Escreve a TRANSIÇÃO de status (online↔offline) no servidor sempre que ela
+  // muda — inclusive ao ficar OFFLINE (para o passageiro deixar de ver o
+  // motorista e o tracker de período registrar WENT_OFFLINE). Dispara só na
+  // mudança de `isOnline` (usa `locationRef` para não re-rodar a cada fix).
+  useEffect(() => {
+    if (!profile?.id || !onlineLoaded) return;
+    const loc = locationRef.current;
+    supabase.from('driver_locations').upsert({
+      driver_id: profile.id,
+      is_online: isOnline,
+      updated_at: new Date().toISOString(),
+      ...(loc ? { lat: loc.lat, lng: loc.lng, heading: loc.heading ?? null } : {}),
+    });
+  }, [isOnline, profile?.id, onlineLoaded]);
 
   const ride = useDriverRide(profile?.id, profile?.jurisdiction);
 

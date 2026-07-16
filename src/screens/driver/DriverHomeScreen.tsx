@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Switch, Platform, Alert, Dimensions } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -24,6 +24,15 @@ import { useDrivingLimit } from '../../hooks/useDrivingLimit';
 import { useBackgroundCheck } from '../../hooks/useBackgroundCheck';
 import { useDriverOnboardingGate } from '../../hooks/useDriverOnboardingGate';
 import { useCameraController } from '../../hooks/useCameraController';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
+import {
+  advanceHeading,
+  initialHeadingState,
+  topPaddingForAnchor,
+  DEFAULT_COURSE_UP,
+  type HeadingState,
+} from '../../lib/nav/courseUp';
+import { zoomForSpeed } from '../../lib/nav/follow';
 import { supabase } from '../../lib/supabase';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
@@ -81,6 +90,50 @@ export function DriverHomeScreen({ navigation }: Props) {
   const mapRef = useRef<MapView>(null);
   // Bloco 1: toda câmera passa pelo CameraController (valida coord + clampa zoom).
   const cam = useCameraController(mapRef, 'DriverHome');
+  // Course-up estilo Waze também no mapa OCIOSO da home: a câmera gira conforme
+  // o deslocamento (mapa "desce" sob o carro, seta sempre apontando pra frente),
+  // não só na tela de navegação durante a corrida. Guardado pela mesma flag
+  // `nav_course_up_enabled` (ligada por padrão) para rollback imediato: off →
+  // volta ao mapa north-up com a setinha girando.
+  const courseUpEnabled = useFeatureFlag('nav_course_up_enabled');
+  const courseUpRef = useRef(courseUpEnabled);
+  courseUpRef.current = courseUpEnabled;
+  const { height: screenH } = Dimensions.get('window');
+  // Rumo suavizado (passa-baixa + congela parado), reaproveitado da lib de nav.
+  const headingStateRef = useRef<HeadingState>(initialHeadingState);
+  // Câmera "drone" segue o carro; PAUSA quando o motorista arrasta o mapa e
+  // volta ao tocar em "recentralizar".
+  const followingRef = useRef(true);
+  const [following, setFollowing] = useState(true);
+  // O MKMapView (iOS) só aceita comandos de câmera após onMapReady — antes disso
+  // animateCamera estoura o zoom pro mundo (mesmo bug já tratado na navegação).
+  const [mapReady, setMapReady] = useState(false);
+
+  // Pose da câmera para a posição atual: course-up (heading + pitch + zoom por
+  // velocidade) quando a flag está ligada; senão, north-up com zoom fixo.
+  const cameraPose = () =>
+    courseUpRef.current
+      ? { heading: headingStateRef.current.smoothed, pitch: DEFAULT_COURSE_UP.pitch, zoom: zoomForSpeed(location?.speed) }
+      : { zoom: 16 };
+
+  // Câmera drone course-up: a cada fix, avança o rumo suavizado e (se estiver
+  // "seguindo") reposiciona a câmera girando o mapa para o sentido do movimento.
+  useEffect(() => {
+    if (!location || !mapReady) return;
+    headingStateRef.current = advanceHeading(headingStateRef.current, location.speed, location.heading);
+    if (followingRef.current) {
+      cam.follow({ lat: location.lat, lng: location.lng }, cameraPose(), 700);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.lat, location?.lng, location?.speed, location?.heading, mapReady, courseUpEnabled]);
+
+  // Motorista arrastou/deu pinch no mapa → pausa o follow (deixa explorar sem a
+  // câmera "brigar"); o botão de recentralizar reata.
+  function pauseFollow() {
+    if (!followingRef.current) return;
+    followingRef.current = false;
+    setFollowing(false);
+  }
 
   // Nome do passageiro do agendamento pendente — mesmo padrão já usado em
   // IncomingRideCall.tsx para a chamada imediata (fetch pontual em profiles,
@@ -119,7 +172,9 @@ export function DriverHomeScreen({ navigation }: Props) {
 
   function recenter() {
     if (!location) return;
-    cam.follow({ lat: location.lat, lng: location.lng }, { zoom: 16 }, 300);
+    followingRef.current = true;
+    setFollowing(true);
+    cam.follow({ lat: location.lat, lng: location.lng }, cameraPose(), 300);
   }
 
   // P3: se o limite de direção estourar enquanto online, força offline e avisa
@@ -304,7 +359,25 @@ export function DriverHomeScreen({ navigation }: Props) {
         // escuro renderiza como "modo noturno" no Google Maps (Android); usamos o
         // estilo padrão (claro) nessa plataforma.
         customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
-        onMapReady={() => cam.setReady(true)}
+        onMapReady={() => {
+          cam.setReady(true);
+          setMapReady(true);
+        }}
+        // Course-up (Waze): o próprio mapa gira para a direção do movimento, então
+        // desabilitamos os gestos de rotação/pitch do usuário e ancoramos o carro no
+        // terço inferior da tela via mapPadding (o mapa "desce" sob o carro).
+        rotateEnabled={false}
+        pitchEnabled={false}
+        onPanDrag={pauseFollow}
+        onRegionChangeComplete={(_r, d) => {
+          if (d?.isGesture) pauseFollow();
+        }}
+        mapPadding={{
+          top: courseUpEnabled ? topPaddingForAnchor(screenH) : 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+        }}
       >
         {location && (
           <Marker
@@ -312,7 +385,10 @@ export function DriverHomeScreen({ navigation }: Props) {
             anchor={{ x: 0.5, y: 0.5 }}
             tracksViewChanges={tracksCar}
           >
-            <CarMarker scale={0.85} heading={location.heading ?? 0} />
+            {/* Em course-up o mapa já está girado para a direção, então a seta fica
+                fixa apontando "pra frente do celular" (heading=0). Sem course-up, a
+                seta gira conforme o rumo do GPS. */}
+            <CarMarker scale={0.85} heading={courseUpEnabled ? 0 : (location.heading ?? 0)} />
           </Marker>
         )}
       </MapView>

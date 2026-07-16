@@ -60,10 +60,11 @@ export const CONFIG_DEFAULTS = {
   // motorista. Ligado por padrão (já é o comportamento atual da tela de navegação).
   nav_course_up_enabled: true,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
-  // (persistida por timestamps, sobrevive a kill/reboot). DESLIGADO por padrão:
-  // muda regra de compliance (limiar 8 km/h + histerese) — habilitar por
-  // jurisdição só após validação. Off → mantém o tracker de ociosidade atual.
-  duty_movement_v2_enabled: false,
+  // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
+  // trabalhadas passam a contar SÓ com o veículo em movimento (limiar 8 km/h +
+  // histerese); parado além da tolerância (10 min) PAUSA a contagem, forçando o
+  // descanso obrigatório. Off → volta ao tracker de ociosidade v1 (em memória).
+  duty_movement_v2_enabled: true,
   // Dispatch PR-a: fila FIFO de ofertas no app do motorista. Corrige o bug em que
   // uma 2ª solicitação (P2) SOBRESCREVIA/lapidava a 1ª (P1) no slot único —
   // matando as duas corridas. Com a flag LIGADA o motorista mantém várias ofertas
