@@ -26,6 +26,7 @@ interface DriverInfo {
   name: string;
   vehicle?: string;
   plate?: string;
+  rating?: number | null;
 }
 
 export function ScheduledRidesScreen({ navigation }: Props) {
@@ -42,25 +43,56 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     React.useCallback(() => { refresh(); }, [refresh])
   );
 
-  // Busca informações do motorista para corridas já confirmadas
+  // Busca nome (+nota) e veículo dos motoristas já confirmados. Espelha o padrão
+  // COMPROVADO do lado do motorista (useDriverScheduledRides): uma busca EM LOTE
+  // via `.in(...)` na view profiles_public — nunca `.single()` por card, que
+  // falhava silenciosamente e deixava o card exibindo o fallback "Driver".
+  //
+  // Regra anti-cache-de-falha: só gravamos no mapa o motorista cujo NOME
+  // resolveu. Se uma busca falhar (race de sessão, rede), o id fica de fora e é
+  // tentado de novo no próximo refresh — em vez de grudar "Driver" pra sempre.
   useEffect(() => {
-    const withDriver = rides.filter((r) => r.driver_id);
-    if (withDriver.length === 0) return;
+    const driverIds = Array.from(
+      new Set(rides.map((r) => r.driver_id).filter((id): id is string => !!id))
+    );
+    if (driverIds.length === 0) return;
 
-    withDriver.forEach(async (ride) => {
-      if (!ride.driver_id || driverInfoMap[ride.driver_id]) return;
-      const [{ data: p }, { data: v }] = await Promise.all([
-        supabase.from('profiles_public').select('full_name').eq('id', ride.driver_id).single(),
-        supabase.from('vehicles').select('model,plate,color').eq('driver_id', ride.driver_id).single(),
+    let cancelled = false;
+    (async () => {
+      const [{ data: profs }, { data: vehs }] = await Promise.all([
+        supabase.from('profiles_public').select('id, full_name, rating').in('id', driverIds),
+        supabase.from('vehicles').select('driver_id, model, plate, color').in('driver_id', driverIds),
       ]);
-      const info: DriverInfo = {
-        name: (p as { full_name: string } | null)?.full_name ?? t('scheduled.driverFallback'),
-        vehicle: v ? `${(v as { model: string; color: string }).model} · ${(v as { color: string }).color}` : undefined,
-        plate: (v as { plate: string } | null)?.plate,
-      };
-      setDriverInfoMap((prev) => ({ ...prev, [ride.driver_id!]: info }));
-    });
-  }, [rides, t]);
+      if (cancelled) return;
+
+      const profById = new Map(
+        ((profs as { id: string; full_name: string | null; rating: number | null }[]) ?? [])
+          .map((p) => [p.id, p])
+      );
+      const vehByDriver = new Map(
+        ((vehs as { driver_id: string; model: string | null; plate: string | null; color: string | null }[]) ?? [])
+          .map((v) => [v.driver_id, v])
+      );
+
+      const next: Record<string, DriverInfo> = {};
+      for (const id of driverIds) {
+        const p = profById.get(id);
+        if (!p || !p.full_name) continue; // sem nome → não cacheia; tenta de novo depois
+        const v = vehByDriver.get(id);
+        next[id] = {
+          name: p.full_name,
+          rating: p.rating,
+          vehicle: v?.model ? `${v.model}${v.color ? ` · ${v.color}` : ''}` : undefined,
+          plate: v?.plate ?? undefined,
+        };
+      }
+      if (Object.keys(next).length > 0) {
+        setDriverInfoMap((prev) => ({ ...prev, ...next }));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [rides]);
 
   // Realtime: detecta quando um motorista confirma uma corrida agendada.
   // Apenas atualiza a lista (para exibir o motorista confirmado) — o POPUP de
@@ -271,7 +303,12 @@ function ScheduledCard({
             <Text style={styles.driverAvatarText}>{(driverInfo?.name ?? 'M')[0]}</Text>
           </View>
           <View style={styles.driverInfo}>
-            <Text style={styles.driverName}>{driverInfo?.name ?? t('scheduled.loading')}</Text>
+            <View style={styles.driverNameRow}>
+              <Text style={styles.driverName} numberOfLines={1}>{driverInfo?.name ?? t('scheduled.loading')}</Text>
+              {driverInfo?.rating != null && (
+                <Text style={styles.driverRating}>★ {driverInfo.rating.toFixed(1)}</Text>
+              )}
+            </View>
             {driverInfo?.vehicle && (
               <Text style={styles.driverVehicle}>{driverInfo.vehicle}</Text>
             )}
@@ -362,7 +399,9 @@ function makeStyles(colors: AppTheme) {
     },
     driverAvatarText: { color: colors.accent, fontSize: 18, fontWeight: '800' },
     driverInfo: { flex: 1 },
-    driverName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    driverNameRow: { flexDirection: 'row', alignItems: 'center' },
+    driverName: { fontSize: 15, fontWeight: '700', color: colors.text, flexShrink: 1 },
+    driverRating: { fontSize: 12, fontWeight: '700', color: colors.accent, marginLeft: 8 },
     driverVehicle: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
     plateBox: {
       backgroundColor: colors.primary, borderRadius: 8,
