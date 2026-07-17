@@ -20,6 +20,7 @@ import {
   nearestPointOnPath, splitPathAtSnap, shortestAngleDelta, haversineMeters,
 } from '../../lib/nav/geo';
 import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
+import { matchToRoute, initialMatchState, type MatchState } from '../../lib/nav/mapMatch';
 import {
   advanceHeading,
   initialHeadingState,
@@ -222,6 +223,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // a cada fix pelo ponto mais próximo na polyline.
   const [routeSplit, setRouteSplit] = useState<{ traveled: LatLng[]; remaining: LatLng[] } | null>(null);
   const offRouteRef = useRef<OffRouteState>(initialOffRouteState);
+  // Fase 4 (F3): map-matching robusto. Com a flag ON, o snap deixa de usar o
+  // ponto global mais próximo (que salta para trás em alças de retorno / erra em
+  // vias paralelas) e passa a usar a janela monotônica + score composto
+  // (distância + rumo) com histerese de off-route por contagem. Estado do
+  // matcher em ref (índice avança monotonicamente ao longo da rota).
+  const mapMatchV2Enabled = useFeatureFlag('nav_map_match_v2');
+  const matchStateRef = useRef<MatchState>(initialMatchState);
 
   const styles = makeStyles(colors);
 
@@ -447,7 +455,40 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       return;
     }
     const lite = coords.map(fromMapCoord);
-    const snap = nearestPointOnPath({ lat: location.lat, lng: location.lng }, lite);
+    const here = { lat: location.lat, lng: location.lng };
+
+    // Fase 4 (F3): com a flag ON, usa o map-matcher robusto (janela monotônica +
+    // score composto distância/rumo + histerese de off-route por CONTAGEM). O
+    // índice casado nunca regride na mesma rota, evitando o salto para trás em
+    // alças de retorno; o rumo desempata vias paralelas. Sem a flag, cai no snap
+    // global ingênuo + histerese temporal (comportamento legado).
+    if (mapMatchV2Enabled) {
+      const m = matchToRoute(here, location.heading ?? null, lite, matchStateRef.current);
+      if (!m) {
+        setRouteSplit(null);
+        return;
+      }
+      matchStateRef.current = m.state;
+      // splitPathAtSnap só usa index + snapped; distanceM/t são irrelevantes aqui.
+      const { traveled, remaining } = splitPathAtSnap(lite, {
+        index: m.index,
+        distanceM: m.distanceM,
+        snapped: m.snapped,
+        t: 0,
+      });
+      setRouteSplit({ traveled: traveled.map(toMapCoord), remaining: remaining.map(toMapCoord) });
+
+      // Off-route CONFIRMADO pela histerese de contagem (≥ N fixes fora) dispara
+      // o reroute — mesma ação do caminho legado, gatilho diferente.
+      if (m.offRoute) {
+        lastRouteCoord.current = here;
+        setRouteOrigin(here);
+        if (sharedRouteRef.current) requestServerRoute(ride.id);
+      }
+      return;
+    }
+
+    const snap = nearestPointOnPath(here, lite);
     if (!snap) {
       setRouteSplit(null);
       return;
@@ -458,14 +499,22 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     const r = updateOffRoute(offRouteRef.current, snap.distanceM, Date.now());
     offRouteRef.current = r.state;
     if (r.reroute) {
-      lastRouteCoord.current = { lat: location.lat, lng: location.lng };
-      setRouteOrigin({ lat: location.lat, lng: location.lng });
+      lastRouteCoord.current = here;
+      setRouteOrigin(here);
       // Bloco 3: o mesmo desvio que recalcula a rota local pede ao servidor uma
       // nova rota única (throttle/histerese já vêm de updateOffRoute). Best-effort.
       if (sharedRouteRef.current) requestServerRoute(ride.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location?.lat, location?.lng, path]);
+  }, [location?.lat, location?.lng, path, mapMatchV2Enabled]);
+
+  // Fase 4 (F3): reseta o índice monotônico quando a polyline ativa muda (nova
+  // fase / reroute), senão o índice antigo apontaria para um vértice que já não
+  // existe na nova rota, travando o casamento no fim da lista.
+  const matchRouteLen = path?.coordinates?.length ?? 0;
+  useEffect(() => {
+    matchStateRef.current = initialMatchState;
+  }, [matchRouteLen, phase]);
 
   // Passos da rota (turn-by-turn)
   const steps: RouteStep[] = path?.steps ?? [];

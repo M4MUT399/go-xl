@@ -184,7 +184,7 @@ export interface SnapResult {
  * Projeta `p` sobre o segmento a→b usando um plano local em METROS
  * (equiretangular ao redor de `a`) — preciso o suficiente na escala de uma rua.
  */
-function projectOnSegment(
+export function projectOnSegment(
   p: LatLngLite,
   a: LatLngLite,
   b: LatLngLite,

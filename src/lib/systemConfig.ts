@@ -96,6 +96,13 @@ export const CONFIG_DEFAULTS = {
   // DESLIGADO por padrão → desenha a rota ativa inteira (legado). Habilitar por
   // jurisdição após QA.
   nav_consume_polyline: false,
+  // Fase 4 (navegação, F3): MAP-MATCHING ROBUSTO no motorista. Substitui o snap
+  // global ingênuo (nearestPointOnPath) + histerese temporal por um casador com
+  // JANELA MONOTÔNICA à frente (não salta para trás em alças de retorno), SCORE
+  // COMPOSTO distância+rumo (desambigua vias paralelas) e histerese de off-route
+  // POR CONTAGEM (N fixes consecutivos). DESLIGADO por padrão → mantém o snap
+  // legado (nearestPointOnPath + updateOffRoute por tempo). Habilitar após QA.
+  nav_map_match_v2: false,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
   // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).
