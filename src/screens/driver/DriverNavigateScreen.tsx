@@ -22,6 +22,7 @@ import {
 import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
 import { matchToRoute, initialMatchState, type MatchState } from '../../lib/nav/mapMatch';
 import { shouldPublishFix, type PublishMark } from '../../lib/nav/publishGate';
+import { updateArrivalAt, initialArrivalState, type ArrivalState } from '../../lib/nav/arrival';
 import {
   advanceHeading,
   initialHeadingState,
@@ -244,6 +245,15 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     const id = setInterval(() => setPublishTick((k) => k + 1), 1000);
     return () => clearInterval(id);
   }, [publishCadenceEnabled]);
+
+  // Fase 8 (F5): GEOFENCE de chegada (~50 m, histerese 50/80 m). Com a flag ON,
+  // ao aproximar-se do alvo da fase (embarque no pickup, destino no dropoff) a UI
+  // DESTACA a ação principal ("Cheguei" / "Finalizar") — sinalização visual, NÃO
+  // bloqueia nem dispara nada sozinho (a confirmação manual/dupla segue igual).
+  // Estado do geofence em ref (sobrevive entre fixes) + espelho em state p/ render.
+  const arrivalGeofenceEnabled = useFeatureFlag('nav_arrival_geofence');
+  const arrivalStateRef = useRef<ArrivalState>(initialArrivalState);
+  const [arrivedHint, setArrivedHint] = useState(false);
 
   const styles = makeStyles(colors);
 
@@ -539,7 +549,27 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const matchRouteLen = path?.coordinates?.length ?? 0;
   useEffect(() => {
     matchStateRef.current = initialMatchState;
+    // Fase 8 (F5): ao trocar de fase (pickup → dropoff) o alvo muda; zera o
+    // geofence de chegada para não herdar um "chegou" da fase anterior.
+    arrivalStateRef.current = initialArrivalState;
+    setArrivedHint(false);
   }, [matchRouteLen, phase]);
+
+  // ── Fase 8 (F5): geofence de chegada (~50 m) — SÓ sinaliza, não bloqueia ─────
+  // A cada fix, mede a distância ao alvo da fase e aplica histerese (entra a
+  // 50 m, sai a 80 m) para não piscar com o jitter do GPS parado. O resultado
+  // apenas DESTACA a ação principal na UI; a confirmação segue 100% manual.
+  useEffect(() => {
+    if (!arrivalGeofenceEnabled) {
+      if (arrivedHint) setArrivedHint(false);
+      return;
+    }
+    const here = location ? { lat: location.lat, lng: location.lng } : null;
+    const r = updateArrivalAt(arrivalStateRef.current, here, { lat: target.lat, lng: target.lng });
+    arrivalStateRef.current = r.state;
+    if (r.arrived !== arrivedHint) setArrivedHint(r.arrived);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.lat, location?.lng, target.lat, target.lng, arrivalGeofenceEnabled]);
 
   // Passos da rota (turn-by-turn)
   const steps: RouteStep[] = path?.steps ?? [];
@@ -1185,11 +1215,21 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           </View>
         </View>
 
+        {/* Fase 8 (F5): dica NÃO bloqueante de chegada (~50 m). Só aparece com a
+            flag ON e ao entrar no geofence; realça a ação, sem alterar o fluxo. */}
+        {arrivalGeofenceEnabled && arrivedHint && (
+          <View style={styles.arrivedHint} accessibilityRole="text">
+            <Text style={styles.arrivedHintText}>
+              📍 {phase === 'pickup' ? t('driverNav.arrivedPickupHint') : t('driverNav.arrivedDropoffHint')}
+            </Text>
+          </View>
+        )}
+
         <Button
           title={buttonLabel}
           onPress={handleNextPhasePress}
           loading={loading}
-          style={styles.btn}
+          style={arrivalGeofenceEnabled && arrivedHint ? styles.btnArrived : styles.btn}
         />
         {phase === 'pickup' && (
           <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
@@ -1428,6 +1468,30 @@ function makeStyles(colors: AppTheme) {
       backgroundColor: colors.gray[300],
     },
     btn: {},
+    // Fase 8 (F5): realce sutil da ação quando o geofence de chegada dispara.
+    btnArrived: {
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.6,
+      shadowRadius: 10,
+      elevation: 8,
+    },
+    arrivedHint: {
+      alignSelf: 'center',
+      backgroundColor: colors.primary + '22',
+      borderColor: colors.primary,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+      marginBottom: 10,
+    },
+    arrivedHintText: {
+      color: colors.primary,
+      fontSize: 13,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
     cancelBtn: {
       marginTop: 12,
       alignItems: 'center',

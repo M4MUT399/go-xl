@@ -111,6 +111,13 @@ export const CONFIG_DEFAULTS = {
   // movimento lento/parado, alimentando o SmoothMarker (interpolação + dead
   // reckoning). DESLIGADO por padrão → mantém o throttle só-distância legado.
   nav_publish_cadence: false,
+  // Fase 8 (navegação, F5): GEOFENCE DE CHEGADA (~50 m). Quando o motorista chega
+  // ao alvo da fase (embarque na fase pickup, destino na dropoff), a UI destaca a
+  // ação ("Cheguei" / "Finalizar") com um aviso de chegada — sem BLOQUEAR a ação
+  // manual. Histerese (entra a 50 m, sai a 80 m) evita piscar com o jitter do GPS
+  // parado. DESLIGADO por padrão → nenhum aviso, fluxo manual legado. Habilitar
+  // por jurisdição após QA.
+  nav_arrival_geofence: false,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
   // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).
