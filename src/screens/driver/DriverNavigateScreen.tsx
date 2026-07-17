@@ -34,6 +34,7 @@ import { reportWarning } from '../../lib/errorReporting';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { boardingWarning } from '../../lib/driverBoardingConfirmation';
 import { useRoute as useRideRoute } from '../../hooks/useRoute';
+import { useDynamicEta } from '../../hooks/useDynamicEta';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { rideOrigin, rideDestination } from '../../lib/ride';
@@ -406,9 +407,22 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.timestampMs, mapReady]);
 
+  // ── Fase 2 (B3): cadência de recálculo da rota a cada 45 s ──────────────────
+  // O ETA "de verdade" (com trânsito) vem da Google Directions, que só é
+  // consultada quando a rota é recomputada. Sem uma cadência periódica, o
+  // motorista parado no trânsito veria o mesmo ETA por minutos. Este contador
+  // avança a cada 45 s e é passado como `refreshKey` ao useRoute → nova rota,
+  // novo ETA, sem depender de o carro andar > 150 m.
+  const [routeRefreshKey, setRouteRefreshKey] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setRouteRefreshKey((k) => k + 1), 45_000);
+    return () => clearInterval(id);
+  }, []);
+
   const { route: path } = useRideRoute(
     routeOrigin,
-    { lat: target.lat, lng: target.lng }
+    { lat: target.lat, lng: target.lng },
+    routeRefreshKey
   );
 
   // ── Bloco 3: dispara a rota única do servidor no aceite e a cada mudança de
@@ -463,7 +477,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // calculado no momento do aceite (acceptRide) — assim o motorista vê o tempo
   // estimado imediatamente ao abrir a tela, em vez de esperar o GPS+rota.
   const fallbackEtaMin = phase === 'pickup' ? (ride.driver_eta_min ?? null) : null;
-  const etaMinDisplay = path?.durationMin ?? fallbackEtaMin;
+  const routeEtaMin = path?.durationMin ?? fallbackEtaMin;
+
+  // Fase 2 (B3): ETA DINÂMICO. `routeEtaMin` é recalculado a cada 45 s (cadência
+  // acima) e a cada reroute; entre esses instantes, o hook faz o número
+  // DECRESCER com o tempo real e CONGELA quando o carro está parado (speed<1m/s),
+  // como Uber/Waze. Antes o número ficava estático até o próximo recálculo.
+  const stopped = (location?.speed ?? 0) < 1;
+  const { etaMin: etaMinDisplay, arrival: etaArrival } = useDynamicEta(routeEtaMin, { stopped });
 
   // ── Grava posição + ETA na própria corrida ────────────────────────────────
   const lastTelemetry = useRef<{ lat: number; lng: number; etaMin?: number } | null>(null);
@@ -472,7 +493,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       console.log('[GOXL tel] skip — location?', !!location, 'rideId?', ride.id);
       return;
     }
-    const etaMin = path?.durationMin ?? null;
+    // Fase 2 (B3): grava o ETA DINÂMICO (projetado), não o cru da rota — assim o
+    // passageiro, que lê driver_eta_min, vê o MESMO número que decresce/congela
+    // na tela do motorista. `etaChanged` (≈1×/min) mantém a cadência de escrita
+    // baixa mesmo com o valor decrescendo continuamente.
+    const etaMin = etaMinDisplay ?? null;
     const etaKm = path?.distanceKm ?? null;
     const prev = lastTelemetry.current;
     const moved = !prev || haversineMeters(prev, location) >= 30;
@@ -489,7 +514,7 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }).eq('id', ride.id).then(({ error }) => {
       console.log(error ? '[GOXL tel] write ERROR: ' + error.message : '[GOXL tel] write OK');
     });
-  }, [location?.lat, location?.lng, path?.durationMin, path?.distanceKm, ride.id]);
+  }, [location?.lat, location?.lng, etaMinDisplay, path?.distanceKm, ride.id]);
 
   // Detecta cancelamento pelo passageiro por TRÊS caminhos redundantes — o que
   // chegar primeiro vence, e o guard `cancelledHandledRef` garante que o aviso
@@ -988,6 +1013,13 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             <View style={styles.etaBadge}>
               <Text style={styles.etaBadgeMin}>{etaMinDisplay}</Text>
               <Text style={styles.etaBadgeUnit}>{t('driverNav.minUnit')}</Text>
+              {/* Fase 2 (B3): horário de chegada previsto (agora + ETA restante),
+                  atualizado junto com o número dinâmico. */}
+              {etaArrival && (
+                <Text style={styles.etaBadgeTime}>
+                  {etaArrival.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              )}
             </View>
           )}
         </View>
@@ -1213,6 +1245,12 @@ function makeStyles(colors: AppTheme) {
       color: colors.gray[400],
       fontSize: 10,
       fontWeight: '700',
+    },
+    etaBadgeTime: {
+      color: colors.gray[300],
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 1,
     },
 
     // Bottom sheet reduzido (pós-aceite) — só cronômetro/velocidade + ação.

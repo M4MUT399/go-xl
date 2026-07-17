@@ -4,7 +4,12 @@ import { useFeatureFlag } from './useFeatureFlag';
 
 export function useRoute(
   origin: { lat: number; lng: number } | null | undefined,
-  dest: { lat: number; lng: number } | null | undefined
+  dest: { lat: number; lng: number } | null | undefined,
+  // Fase 2 (B3): mudar este valor força um RECÁLCULO da rota mesmo sem mudança
+  // de origem/destino — usado para a cadência periódica (~45 s) que renova o
+  // ETA com trânsito. `undefined` = comportamento legado (só recalcula quando
+  // origin/dest mudam).
+  refreshKey?: number
 ) {
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -39,7 +44,7 @@ export function useRoute(
     return () => {
       cancelled = true;
     };
-  }, [origin?.lat, origin?.lng, dest?.lat, dest?.lng, directionsV2]);
+  }, [origin?.lat, origin?.lng, dest?.lat, dest?.lng, directionsV2, refreshKey]);
 
   return { route, loading };
 }
