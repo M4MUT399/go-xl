@@ -78,6 +78,15 @@ export const CONFIG_DEFAULTS = {
   // rota/ETA do servidor. DESLIGADO por padrão → cada tela calcula a própria
   // rota no cliente (comportamento legado). Habilitar por jurisdição após QA.
   shared_route_v1: false,
+  // Fase 1 (navegação): PROVIDER de rotas via Google Directions (proxy na Edge
+  // Function `directions`, chave secreta no servidor) no lugar do OSRM demo
+  // público. Traz ETA COM TRÂNSITO (departure_time=now) e geometria POR STEP de
+  // alta resolução (essencial ao map-matching robusto). DESLIGADO por padrão →
+  // continua no OSRM (cliente e servidor). Se a Google falhar em runtime, o
+  // useRoute cai automaticamente no OSRM (fallback seguro). Requer, no servidor:
+  // habilitar a Directions API no projeto Google + secret GOOGLE_DIRECTIONS_API_KEY
+  // + deploy da função `directions`. Habilitar por jurisdição só após QA.
+  directions_v2: false,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
   // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).

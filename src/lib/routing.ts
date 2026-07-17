@@ -1,12 +1,15 @@
-// Roteamento via OSRM público (OpenStreetMap) — sem API key, ideal para MVP.
+// Roteamento via OSRM público (OpenStreetMap) — sem API key, fallback do MVP.
 const OSRM = 'https://router.project-osrm.org';
+
+import { callEdgeFunction } from './edgeFunction';
+import { normalizeGoogleDirections, type GoogleDirectionsResponse } from './nav/directions';
 
 export interface LatLng {
   latitude: number;
   longitude: number;
 }
 
-/** Um passo da rota (manobra) retornado pelo OSRM */
+/** Um passo da rota (manobra) retornado pelo provider de rotas */
 export interface RouteStep {
   /** Distância em metros até executar esta manobra */
   distance: number;
@@ -20,6 +23,14 @@ export interface RouteStep {
     /** Direção: 'left' | 'right' | 'slight left' | 'slight right' | 'sharp left' | 'sharp right' | 'straight' | 'uturn' */
     modifier?: string;
   };
+  /**
+   * Geometria DETALHADA deste passo (alta resolução), quando o provider a
+   * fornece por step (Google Directions). O OSRM em modo overview não popula
+   * isto — fica indefinido e o map-matching cai na geometria de overview.
+   * Alimenta o map-matching robusto da Fase 4 (viadutos, rampas, pistas
+   * separadas).
+   */
+  coordinates?: LatLng[];
 }
 
 export interface RouteResult {
@@ -75,6 +86,30 @@ export async function getRoute(
       durationMin: Math.max(1, Math.ceil(route.duration / 60)),
       steps,
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fase 1 (provider) — rota via Google Directions, proxiada pela Edge Function
+ * `directions` (a CHAVE fica secreta no servidor). Traz ETA com trânsito e
+ * geometria por-step de alta resolução. O parsing acontece no cliente, num
+ * módulo puro e testável (src/lib/nav/directions.ts).
+ *
+ * Retorna null em QUALQUER falha (rede, função não deployada, sem cobertura) —
+ * o chamador então cai no OSRM. É gated pela flag `directions_v2` no useRoute.
+ */
+export async function getRouteViaDirections(
+  origin: { lat: number; lng: number },
+  dest: { lat: number; lng: number },
+): Promise<RouteResult | null> {
+  try {
+    const resp = await callEdgeFunction<GoogleDirectionsResponse>('directions', {
+      origin,
+      dest,
+    });
+    return normalizeGoogleDirections(resp);
   } catch {
     return null;
   }

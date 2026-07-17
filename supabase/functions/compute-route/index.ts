@@ -1,14 +1,15 @@
 // Supabase Edge Function — ROTA ÚNICA no servidor (Bloco 3, paridade Uber).
 //
-// É a ÚNICA fonte da rota: proxia o OSRM (mesma engine usada hoje no cliente),
-// calcula a geometria do ponto de partida (posição atual do motorista) até o
-// alvo da FASE (embarque na fase pickup, destino na fase dropoff) e grava na
-// corrida a polyline codificada + ETA + distância, INCREMENTANDO route_version.
-// Motorista e passageiro leem essas colunas → veem exatamente a mesma rota/ETA.
+// É a ÚNICA fonte da rota: calcula a geometria do ponto de partida (posição
+// atual do motorista) até o alvo da FASE (embarque na fase pickup, destino na
+// fase dropoff) e grava na corrida a polyline codificada + ETA + distância,
+// INCREMENTANDO route_version. Motorista e passageiro leem essas colunas → veem
+// exatamente a mesma rota/ETA.
 //
-// O OSRM devolve a geometria já como ENCODED POLYLINE (precisão 5) via
-// `geometries=polyline`; guardamos a string como veio e o cliente decodifica
-// com o mesmo codec (src/lib/nav/sharedRoute.ts → decodePolyline).
+// Fase 1 (navegação): o provider é a Google Directions (ETA COM TRÂNSITO) quando
+// há GOOGLE_DIRECTIONS_API_KEY; sem a chave, cai no OSRM (comportamento legado).
+// Ambos devolvem ENCODED POLYLINE (precisão 5), que o cliente decodifica com o
+// mesmo codec (src/lib/nav/sharedRoute.ts → decodePolyline).
 //
 //   POST { rideId: string } + JWT(motorista) no header Authorization
 //   → { version, etaMin, distanceKm }
@@ -22,6 +23,85 @@ const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const SUPABASE_ANON_KEY    = Deno.env.get('SUPABASE_ANON_KEY')         ?? '';
 // Mesma engine do cliente; configurável por env para autohospedar depois.
 const OSRM_BASE = Deno.env.get('OSRM_BASE_URL') ?? 'https://router.project-osrm.org';
+// Fase 1 (navegação): se presente, a rota compartilhada passa a ser calculada
+// pela Google Directions (ETA COM TRÂNSITO), a MESMA engine do cliente sob a
+// flag directions_v2 → rota/ETA idênticos. Sem a chave, cai no OSRM (legado).
+const GOOGLE_KEY = Deno.env.get('GOOGLE_DIRECTIONS_API_KEY') ?? '';
+
+interface ComputedRoute { polyline: string; etaMin: number; distanceKm: number }
+
+/**
+ * Google Directions → encoded polyline (precisão 5, igual ao OSRM), ETA
+ * preferindo duration_in_traffic. Retorna null em qualquer falha (o chamador
+ * cai no OSRM).
+ */
+async function computeViaGoogle(
+  start: { lat: number; lng: number },
+  target: { lat: number; lng: number },
+): Promise<ComputedRoute | null> {
+  try {
+    const url =
+      'https://maps.googleapis.com/maps/api/directions/json' +
+      `?origin=${start.lat},${start.lng}` +
+      `&destination=${target.lat},${target.lng}` +
+      '&mode=driving&departure_time=now&traffic_model=best_guess&units=metric' +
+      `&key=${GOOGLE_KEY}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status !== 'OK') return null;
+    const route = data.routes?.[0];
+    const leg = route?.legs?.[0];
+    const polyline: string | undefined = route?.overview_polyline?.points;
+    if (!polyline || !leg) return null;
+    const seconds = leg.duration_in_traffic?.value ?? leg.duration?.value ?? 0;
+    const meters = leg.distance?.value ?? 0;
+    return {
+      polyline,
+      etaMin: Math.max(1, Math.ceil(seconds / 60)),
+      distanceKm: Math.round((meters / 1000) * 100) / 100,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** OSRM → encoded polyline (precisão 5). Fallback quando não há chave Google. */
+async function computeViaOsrm(
+  start: { lat: number; lng: number },
+  target: { lat: number; lng: number },
+): Promise<ComputedRoute | null> {
+  try {
+    const url =
+      `${OSRM_BASE}/route/v1/driving/` +
+      `${start.lng},${start.lat};${target.lng},${target.lat}` +
+      `?overview=full&geometries=polyline`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const osrm = await res.json();
+    const route = osrm?.routes?.[0];
+    if (!route?.geometry) return null;
+    return {
+      polyline: route.geometry,
+      etaMin: Math.max(1, Math.ceil((route.duration ?? 0) / 60)),
+      distanceKm: Math.round(((route.distance ?? 0) / 1000) * 100) / 100,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Google (se houver chave) com fallback automático para OSRM. */
+async function computeRoute(
+  start: { lat: number; lng: number },
+  target: { lat: number; lng: number },
+): Promise<ComputedRoute | null> {
+  if (GOOGLE_KEY) {
+    const g = await computeViaGoogle(start, target);
+    if (g) return g;
+  }
+  return computeViaOsrm(start, target);
+}
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -90,20 +170,11 @@ Deno.serve(async (req) => {
       ? { lat: r.destination_lat, lng: r.destination_lng }
       : { lat: r.origin_lat, lng: r.origin_lng };
 
-    // OSRM: geometria como encoded polyline (precisão 5) — mesma que o cliente decodifica.
-    const url =
-      `${OSRM_BASE}/route/v1/driving/` +
-      `${start.lng},${start.lat};${target.lng},${target.lat}` +
-      `?overview=full&geometries=polyline`;
-    const osrmRes = await fetch(url);
-    if (!osrmRes.ok) return json({ error: 'Falha no roteador' }, 502);
-    const osrm = await osrmRes.json();
-    const route = osrm?.routes?.[0];
-    if (!route?.geometry) return json({ error: 'Rota não encontrada' }, 502);
-
-    const polyline: string = route.geometry;
-    const etaMin = Math.max(1, Math.ceil((route.duration ?? 0) / 60));
-    const distanceKm = Math.round(((route.distance ?? 0) / 1000) * 100) / 100;
+    // Google (ETA com trânsito) com fallback automático para OSRM — geometria
+    // como encoded polyline precisão 5, que o cliente decodifica com o mesmo codec.
+    const route = await computeRoute(start, target);
+    if (!route) return json({ error: 'Rota não encontrada' }, 502);
+    const { polyline, etaMin, distanceKm } = route;
 
     // Grava atômico + incrementa route_version; o realtime de `rides` propaga
     // para as duas telas (nenhum canal novo).
