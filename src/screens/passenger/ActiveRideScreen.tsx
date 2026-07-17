@@ -23,6 +23,7 @@ import { CarMarker } from '../../components/common/CarMarker';
 import { SmoothMarker } from '../../components/common/SmoothMarker';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import type { MarkerFix } from '../../lib/nav/smoothMarker';
+import { nearestPointOnPath, splitPathAtSnap, fromMapCoord, toMapCoord } from '../../lib/nav/geo';
 import { parseSharedRoute } from '../../lib/nav/sharedRoute';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { useTranslation } from '../../i18n';
@@ -419,6 +420,24 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     [activePolyline, fullPath],
   );
 
+  // ── Fase 3 (Bug B2): POLYLINE CONSUMÍVEL ────────────────────────────────────
+  // Projeta o carro do motorista na rota ativa e divide em [percorrido] /
+  // [restante], igual à tela do motorista — o traçado atrás do carro esmaece e o
+  // da frente segue colorido. A troca embarque→destino após o boarding já vem de
+  // `activePolyline` (muda com ride.status). Sob flag; sem ela, desenha inteiro.
+  const consumePolyline = useFeatureFlag('nav_consume_polyline');
+  const routeSplit = React.useMemo(() => {
+    if (!consumePolyline) return null;
+    const active = activePolyline ?? fullPath;
+    const coords = active?.coordinates;
+    if (!driverLoc || !coords || coords.length < 2) return null;
+    const lite = coords.map(fromMapCoord);
+    const snap = nearestPointOnPath({ lat: driverLoc.lat, lng: driverLoc.lng }, lite);
+    if (!snap) return null;
+    const { traveled, remaining } = splitPathAtSnap(lite, snap);
+    return { traveled: traveled.map(toMapCoord), remaining: remaining.map(toMapCoord) };
+  }, [consumePolyline, activePolyline, fullPath, driverLoc?.lat, driverLoc?.lng]);
+
   // Recentraliza o mapa conforme fase da corrida:
   //   • a caminho do embarque → motorista + ponto de embarque
   //   • in_progress (corrida em andamento) → motorista + destino final
@@ -481,8 +500,23 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             lineDashPattern={[5, 4]}
           />
         )}
-        {/* Rota ativa: motorista a caminho do embarque ou do destino */}
-        {(activePolyline ?? fullPath) && (
+        {/* Rota ativa: motorista a caminho do embarque ou do destino.
+            Fase 3 (B2): com a flag, o trecho já percorrido pelo motorista
+            esmaece e só o restante segue colorido (consumo da polyline). */}
+        {routeSplit ? (
+          <>
+            <Polyline
+              coordinates={routeSplit.traveled}
+              strokeColor="rgba(120,140,200,0.35)"
+              strokeWidth={4}
+            />
+            <Polyline
+              coordinates={routeSplit.remaining}
+              strokeColor={colors.accent}
+              strokeWidth={5}
+            />
+          </>
+        ) : (activePolyline ?? fullPath) && (
           <Polyline
             coordinates={(activePolyline ?? fullPath)!.coordinates}
             strokeColor={colors.accent}

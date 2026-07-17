@@ -87,6 +87,15 @@ export const CONFIG_DEFAULTS = {
   // habilitar a Directions API no projeto Google + secret GOOGLE_DIRECTIONS_API_KEY
   // + deploy da função `directions`. Habilitar por jurisdição só após QA.
   directions_v2: false,
+  // Fase 3 (navegação, Bug B2): POLYLINE CONSUMÍVEL na tela do PASSAGEIRO. Hoje o
+  // passageiro desenha a rota ativa inteira como uma linha só; conforme o
+  // motorista avança, o traçado atrás dele NÃO some. Com a flag LIGADA, o
+  // passageiro projeta o carro na polyline (nearestPointOnPath) e divide em
+  // [percorrido] (esmaecido) e [restante] (colorido), igual à tela do motorista.
+  // A troca embarque→destino após o boarding já ocorre por status (activePolyline).
+  // DESLIGADO por padrão → desenha a rota ativa inteira (legado). Habilitar por
+  // jurisdição após QA.
+  nav_consume_polyline: false,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
   // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).
