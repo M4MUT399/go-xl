@@ -103,6 +103,14 @@ export const CONFIG_DEFAULTS = {
   // POR CONTAGEM (N fixes consecutivos). DESLIGADO por padrão → mantém o snap
   // legado (nearestPointOnPath + updateOffRoute por tempo). Habilitar após QA.
   nav_map_match_v2: false,
+  // Fase 5 (navegação, F4): CADÊNCIA DE PUBLICAÇÃO da posição do motorista. Hoje o
+  // motorista só publica ao andar > 30 m; parado no trânsito ou no embarque, o
+  // marcador do PASSAGEIRO congela e o dado "envelhece". Com a flag LIGADA, a
+  // publicação passa a combinar TEMPO + DISTÂNCIA (piso 1 s, distância 25 m,
+  // heartbeat 4 s), estilo Uber — o passageiro recebe fixes frescos mesmo em
+  // movimento lento/parado, alimentando o SmoothMarker (interpolação + dead
+  // reckoning). DESLIGADO por padrão → mantém o throttle só-distância legado.
+  nav_publish_cadence: false,
   // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
   // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
   // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).

@@ -21,6 +21,7 @@ import {
 } from '../../lib/nav/geo';
 import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
 import { matchToRoute, initialMatchState, type MatchState } from '../../lib/nav/mapMatch';
+import { shouldPublishFix, type PublishMark } from '../../lib/nav/publishGate';
 import {
   advanceHeading,
   initialHeadingState,
@@ -230,6 +231,19 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // matcher em ref (índice avança monotonicamente ao longo da rota).
   const mapMatchV2Enabled = useFeatureFlag('nav_map_match_v2');
   const matchStateRef = useRef<MatchState>(initialMatchState);
+  // Fase 5 (F4): cadência de publicação da posição (tempo + distância). Com a
+  // flag ON, o motorista publica em driver_locations/rides não só ao andar 30 m,
+  // mas também por heartbeat (a cada ~4 s) mesmo parado — para o marcador do
+  // passageiro não congelar no trânsito/embarque. Marca do último publish (com
+  // timestamp) e um tick que força a reavaliação do efeito mesmo sem novo fix.
+  const publishCadenceEnabled = useFeatureFlag('nav_publish_cadence');
+  const lastPublishMark = useRef<PublishMark | null>(null);
+  const [publishTick, setPublishTick] = useState(0);
+  useEffect(() => {
+    if (!publishCadenceEnabled) return;
+    const id = setInterval(() => setPublishTick((k) => k + 1), 1000);
+    return () => clearInterval(id);
+  }, [publishCadenceEnabled]);
 
   const styles = makeStyles(colors);
 
@@ -297,10 +311,19 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       console.log('[GOXL loc] skip — location?', !!location, 'profile?', !!profile?.id);
       return;
     }
-    const prev = lastUploadedCoord.current;
-    // Só grava se mover > 30 m (evita flood de writes)
-    if (prev && haversineMeters(prev, location) < 30) return;
-    lastUploadedCoord.current = { lat: location.lat, lng: location.lng };
+    // Fase 5 (F4): com a flag ON, a cadência combina tempo + distância (piso 1 s,
+    // 25 m, heartbeat 4 s) → publica também parado, sem floodar. Sem a flag,
+    // mantém o throttle só-distância legado (> 30 m).
+    if (publishCadenceEnabled) {
+      const now = Date.now();
+      if (!shouldPublishFix(lastPublishMark.current, location, now)) return;
+      lastPublishMark.current = { lat: location.lat, lng: location.lng, atMs: now };
+    } else {
+      const prev = lastUploadedCoord.current;
+      // Só grava se mover > 30 m (evita flood de writes)
+      if (prev && haversineMeters(prev, location) < 30) return;
+      lastUploadedCoord.current = { lat: location.lat, lng: location.lng };
+    }
     supabase.from('driver_locations').upsert({
       driver_id: profile.id,
       lat: location.lat,
@@ -311,7 +334,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }).then(({ error }) => {
       console.log(error ? '[GOXL loc] upsert ERROR: ' + error.message : '[GOXL loc] upsert OK');
     });
-  }, [location?.lat, location?.lng, profile?.id]);
+    // publishTick força a reavaliação por heartbeat mesmo quando a posição não muda.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.lat, location?.lng, profile?.id, publishCadenceEnabled, publishTick]);
 
   // Throttle: recalcula rota só se mover > 150 m
   const lastRouteCoord = useRef<{ lat: number; lng: number } | null>(null);
@@ -536,7 +561,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const { etaMin: etaMinDisplay, arrival: etaArrival } = useDynamicEta(routeEtaMin, { stopped });
 
   // ── Grava posição + ETA na própria corrida ────────────────────────────────
-  const lastTelemetry = useRef<{ lat: number; lng: number; etaMin?: number } | null>(null);
+  // O PASSAGEIRO lê a posição do motorista daqui (rides.driver_lat/lng), não de
+  // driver_locations — então é ESTA cadência que alimenta o marcador do passageiro.
+  const lastTelemetry = useRef<{ lat: number; lng: number; etaMin?: number; atMs: number } | null>(null);
   useEffect(() => {
     if (!location || !ride.id) {
       console.log('[GOXL tel] skip — location?', !!location, 'rideId?', ride.id);
@@ -549,10 +576,16 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     const etaMin = etaMinDisplay ?? null;
     const etaKm = path?.distanceKm ?? null;
     const prev = lastTelemetry.current;
-    const moved = !prev || haversineMeters(prev, location) >= 30;
+    const now = Date.now();
+    // Fase 5 (F4): com a flag ON, o gatilho de posição vira tempo + distância
+    // (heartbeat 4 s mesmo parado) → o marcador do passageiro não congela no
+    // trânsito/embarque. Sem a flag, mantém o gatilho só-distância (≥ 30 m).
+    const moved = publishCadenceEnabled
+      ? shouldPublishFix(prev, location, now)
+      : (!prev || haversineMeters(prev, location) >= 30);
     const etaChanged = prev?.etaMin !== (etaMin ?? undefined);
     if (!moved && !etaChanged) return;
-    lastTelemetry.current = { lat: location.lat, lng: location.lng, etaMin: etaMin ?? undefined };
+    lastTelemetry.current = { lat: location.lat, lng: location.lng, etaMin: etaMin ?? undefined, atMs: now };
     console.log('[GOXL tel] writing', { lat: location.lat, lng: location.lng, etaMin, etaKm, rideId: ride.id });
     supabase.from('rides').update({
       driver_lat: location.lat,
@@ -563,7 +596,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     }).eq('id', ride.id).then(({ error }) => {
       console.log(error ? '[GOXL tel] write ERROR: ' + error.message : '[GOXL tel] write OK');
     });
-  }, [location?.lat, location?.lng, etaMinDisplay, path?.distanceKm, ride.id]);
+    // publishTick alimenta o heartbeat (F4): reavalia mesmo com a posição parada.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.lat, location?.lng, etaMinDisplay, path?.distanceKm, ride.id, publishCadenceEnabled, publishTick]);
 
   // Detecta cancelamento pelo passageiro por TRÊS caminhos redundantes — o que
   // chegar primeiro vence, e o guard `cancelledHandledRef` garante que o aviso
