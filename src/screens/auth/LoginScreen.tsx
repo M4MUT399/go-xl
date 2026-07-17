@@ -8,6 +8,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { LanguageSelector } from '../../components/common/LanguageSelector';
 import { useTheme } from '../../hooks/useTheme';
 import { useAuth } from '../../hooks/useAuth';
 import { useTranslation } from '../../i18n';
@@ -59,11 +60,12 @@ export function LoginScreen({ navigation }: Props) {
           </View>
 
           <View style={styles.form}>
+            <LanguageSelector />
             <Input
               label={t('login.email')}
               value={email}
               onChangeText={setEmail}
-              placeholder="seu@email.com"
+              placeholder={t('common.emailPh')}
               keyboardType="email-address"
               autoCapitalize="none"
             />

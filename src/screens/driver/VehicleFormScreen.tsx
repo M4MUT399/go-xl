@@ -108,7 +108,7 @@ export function VehicleFormScreen({ navigation }: Props) {
               label={t('vehicle.plate')}
               value={plate}
               onChangeText={(tx) => setPlate(tx.toUpperCase())}
-              placeholder="ABC1D23"
+              placeholder={t('vehicle.platePh')}
               autoCapitalize="characters"
               maxLength={8}
             />

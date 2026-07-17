@@ -113,14 +113,14 @@ export function RegisterScreen({ navigation, route }: Props) {
               label={t('register.phone')}
               value={phone}
               onChangeText={setPhone}
-              placeholder="(11) 99999-9999"
+              placeholder={t('register.phonePh')}
               keyboardType="phone-pad"
             />
             <Input
               label={t('register.email')}
               value={email}
               onChangeText={setEmail}
-              placeholder="seu@email.com"
+              placeholder={t('common.emailPh')}
               keyboardType="email-address"
               autoCapitalize="none"
             />

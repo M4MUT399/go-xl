@@ -26,6 +26,7 @@ import { AppTheme } from '../../constants/theme';
 import { supabase } from '../../lib/supabase';
 import { setPendingExpressRide } from '../../lib/expressRide';
 import { EXPRESS_PLACEHOLDER_NAME } from '../../lib/onboarding';
+import { LanguageSelector } from '../../components/common/LanguageSelector';
 import { useTranslation } from '../../i18n';
 
 const SUPABASE_URL    = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
@@ -144,6 +145,11 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
           <Text style={styles.title}>{t('express.title')}</Text>
           <Text style={styles.subtitle}>{t('express.subtitle')}</Text>
 
+          {/* Seletor de idioma — passageiro novo (ex.: americano) troca antes de tudo */}
+          <View style={styles.langWrap}>
+            <LanguageSelector />
+          </View>
+
           {/* Steps indicator (2 passos) */}
           <View style={styles.steps}>
             <View style={[styles.step, styles.stepActive]}>
@@ -199,7 +205,9 @@ function makeStyles(colors: AppTheme) {
 
     logo:     { fontSize: 36, fontWeight: '900', color: colors.text, marginBottom: 8 },
     title:    { fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 8 },
-    subtitle: { fontSize: 14, color: colors.gray[500], textAlign: 'center', lineHeight: 20, marginBottom: 28 },
+    subtitle: { fontSize: 14, color: colors.gray[500], textAlign: 'center', lineHeight: 20, marginBottom: 20 },
+
+    langWrap: { width: '100%', marginBottom: 8 },
 
     // Steps
     steps: {

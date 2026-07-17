@@ -73,7 +73,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
             label={t('forgotPassword.email')}
             value={email}
             onChangeText={setEmail}
-            placeholder="seu@email.com"
+            placeholder={t('common.emailPh')}
             keyboardType="email-address"
             autoCapitalize="none"
           />
