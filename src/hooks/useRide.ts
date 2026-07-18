@@ -3,7 +3,7 @@ import { AppState, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { dismissRideNotifications } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
-import { getSurgeInfo, applyMultiplier } from '../lib/surge';
+import { getSurgeInfo } from '../lib/surge';
 import { calculateSplit } from '../lib/split';
 import { estimateTollAmount } from '../lib/tolls';
 import { estimateAirportFees } from '../lib/airportFees';
@@ -460,15 +460,29 @@ export async function notifyPassengerRideCompleted(passengerId: string, rideId: 
   await invokeRidePush({ kind: 'ride_completed', rideId });
 }
 
-const PRICE_PER_MILE = 2.5;
-const BASE_PRICE = 8.0;
-const MIN_PRICE = 15.0;
-const AVG_SPEED_MPH = 30;
+// ── Tarifa GoXL — espelha a Uber XL (Orlando, FL) + 10% ─────────────────────
+// Referência Uber XL Orlando: base $3,00 · $1,21/milha · $0,20/min · mínimo
+// $8,90 · booking fee $3,00. Decisão de produto: GoXL cobra exatamente 10%
+// acima da tarifa Uber equivalente. O surge (pico) incide sobre a parte
+// metrada (base + distância + tempo). A quantidade de motoristas GoXL online
+// NÃO entra no preço — só horário (pico) e local (taxas de aeroporto/porto, P6).
+const UBER_XL_BASE_FARE   = 3.0;   // USD
+const UBER_XL_PER_MILE    = 1.21;  // USD por milha
+const UBER_XL_PER_MINUTE  = 0.2;   // USD por minuto
+const UBER_XL_BOOKING_FEE = 3.0;   // USD (taxa de serviço/booking)
+const UBER_XL_MIN_FARE    = 8.9;   // USD (piso da parte metrada)
+const GOXL_MARKUP         = 1.1;   // +10% sobre a Uber
+const AVG_SPEED_MPH       = 30;    // p/ estimar tempo quando não há rota
 
-export function estimatePrice(distanceKm: number, surgeMultiplier = 1.0) {
+export function estimatePrice(distanceKm: number, durationMin = 0, surgeMultiplier = 1.0) {
   const miles = distanceKm * KM_TO_MILES;
-  const base = Math.max(BASE_PRICE + miles * PRICE_PER_MILE, MIN_PRICE);
-  return applyMultiplier(base, surgeMultiplier);
+  const minutes = Math.max(0, durationMin);
+  // Parte metrada, com surge de pico e piso do mínimo da Uber.
+  const metered = UBER_XL_BASE_FARE + miles * UBER_XL_PER_MILE + minutes * UBER_XL_PER_MINUTE;
+  const surged = Math.max(metered * surgeMultiplier, UBER_XL_MIN_FARE);
+  const uberEquivalent = surged + UBER_XL_BOOKING_FEE;
+  // GoXL = tarifa Uber equivalente + 10%.
+  return Math.round(uberEquivalent * GOXL_MARKUP * 100) / 100;
 }
 
 export function estimateDuration(distanceKm: number) {
@@ -558,8 +572,8 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       { lat: destination.lat, lng: destination.lng }
     );
     const { multiplier } = await getSurgeInfo();
-    const fare = estimatePrice(distanceKm, multiplier);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
+    const fare = estimatePrice(distanceKm, duration, multiplier);
     // Pedágio (P5): 0 por padrão. Repassado integralmente ao motorista — o split
     // 80/20 incide só sobre a tarifa, então toll=0 mantém o comportamento atual.
     const { amount: toll } = await estimateTollAmount({
@@ -657,8 +671,8 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       { lat: origin.lat, lng: origin.lng },
       { lat: destination.lat, lng: destination.lng }
     );
-    const fare = estimatePrice(distanceKm);
     const duration = routeInfo?.durationMin ?? estimateDuration(distanceKm);
+    const fare = estimatePrice(distanceKm, duration);
     // Pedágio (P5): mesma regra do requestRide — pass-through ao motorista, 0 por padrão.
     const { amount: toll } = await estimateTollAmount({
       origin: { lat: origin.lat, lng: origin.lng },

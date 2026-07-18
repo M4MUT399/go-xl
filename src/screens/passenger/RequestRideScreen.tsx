@@ -128,11 +128,12 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const distanceKm = route?.distanceKm
     ?? (selectedDest && effectiveOrigin ? haversine(effectiveOrigin, { lat: selectedDest.lat, lng: selectedDest.lng }) : null);
 
-  const estimatedPrice = distanceKm ? estimatePrice(distanceKm, surgeInfo.multiplier) : null;
   const estimatedMin = route?.durationMin ?? (distanceKm ? estimateDuration(distanceKm) : null);
+  const estimatedPrice = distanceKm ? estimatePrice(distanceKm, estimatedMin ?? 0, surgeInfo.multiplier) : null;
 
-  // Preço exibível: usa o calculado ou o mínimo como fallback (evita botão preso)
-  const MIN_PRICE_FALLBACK = 15.0;
+  // Preço exibível: usa o calculado ou o mínimo como fallback (evita botão preso).
+  // Mínimo efetivo GoXL = (mín. metrado $8,90 + booking $3,00) × 1,10 ≈ $13,09.
+  const MIN_PRICE_FALLBACK = 13.09;
   const displayPrice = estimatedPrice ?? (selectedDest ? MIN_PRICE_FALLBACK : null);
   // Total mostrado ao passageiro inclui pedágio (P5) e taxa de aeroporto/porto
   // (P6). Sem taxas → total = tarifa (comportamento atual).
