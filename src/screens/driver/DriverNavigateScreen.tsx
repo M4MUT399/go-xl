@@ -22,6 +22,8 @@ import {
 import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
 import { matchToRoute, initialMatchState, type MatchState } from '../../lib/nav/mapMatch';
 import { shouldPublishFix, type PublishMark } from '../../lib/nav/publishGate';
+import { startDriverBackgroundLocation, stopDriverBackgroundLocation } from '../../lib/nav/backgroundLocationTask';
+import * as Location from 'expo-location';
 import { updateArrivalAt, initialArrivalState, type ArrivalState } from '../../lib/nav/arrival';
 import {
   advanceHeading,
@@ -254,6 +256,54 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const arrivalGeofenceEnabled = useFeatureFlag('nav_arrival_geofence');
   const arrivalStateRef = useRef<ArrivalState>(initialArrivalState);
   const [arrivedHint, setArrivedHint] = useState(false);
+
+  // Fase 5b: LOCALIZAÇÃO EM BACKGROUND. Com a flag ON, ao montar esta tela (a
+  // corrida já foi aceita) mostra UMA VEZ o aviso de consentimento; se o
+  // motorista autorizar, inicia a task nativa que publica a posição mesmo com
+  // o app minimizado/tela bloqueada (ver backgroundLocationTask.ts). Some ao
+  // sair da tela (cancelamento, finalização ou apenas navegar para trás) — o
+  // cleanup PRECISA rodar em todo desmonte, nunca deve seguir rastreando fora
+  // de uma corrida ativa.
+  const backgroundLocationEnabled = useFeatureFlag(
+    'nav_background_location_v1',
+    profile?.jurisdiction ?? 'global',
+  );
+  const bgConsentAskedRef = useRef(false);
+  useEffect(() => {
+    if (!backgroundLocationEnabled || !profile?.id || !ride.id) return;
+    if (bgConsentAskedRef.current) return;
+    bgConsentAskedRef.current = true;
+
+    Alert.alert(
+      t('driverNav.bgLocationTitle'),
+      t('driverNav.bgLocationMessage'),
+      [
+        { text: t('driverNav.bgLocationDeny'), style: 'cancel' },
+        {
+          text: t('driverNav.bgLocationAllow'),
+          onPress: async () => {
+            try {
+              const { status } = await Location.requestBackgroundPermissionsAsync();
+              if (status !== 'granted') return;
+              await startDriverBackgroundLocation({
+                rideId: ride.id,
+                driverId: profile.id,
+                notifTitle: t('driverNav.bgLocationNotifTitle'),
+                notifBody: t('driverNav.bgLocationNotifBody'),
+              });
+            } catch {
+              // best-effort — sem background, a publicação de foreground segue normal
+            }
+          },
+        },
+      ],
+    );
+
+    return () => {
+      stopDriverBackgroundLocation().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backgroundLocationEnabled, profile?.id, ride.id]);
 
   const styles = makeStyles(colors);
 

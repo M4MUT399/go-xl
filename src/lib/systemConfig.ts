@@ -111,6 +111,18 @@ export const CONFIG_DEFAULTS = {
   // movimento lento/parado, alimentando o SmoothMarker (interpolação + dead
   // reckoning). DESLIGADO por padrão → mantém o throttle só-distância legado.
   nav_publish_cadence: false,
+  // Fase 5b (navegação): LOCALIZAÇÃO EM BACKGROUND. Hoje a publicação da posição
+  // do motorista (driver_locations + rides.driver_lat/lng) só roda com a tela
+  // DriverNavigateScreen aberta em primeiro plano — se o motorista minimiza o
+  // app ou bloqueia a tela durante a corrida, o passageiro para de ver o
+  // movimento. Com a flag LIGADA, uma TASK nativa (expo-task-manager +
+  // expo-location) publica com a cadência mais folgada de
+  // DEFAULT_BACKGROUND_PUBLISH_GATE (piso 5 s, 50 m, heartbeat 15 s) enquanto o
+  // app está minimizado, durante uma corrida ativa. EXIGE build nativo (rebuild
+  // EAS) + permissão "sempre" de localização + notificação persistente no
+  // Android (foreground service) — por isso DESLIGADO por padrão. Habilitar por
+  // jurisdição só após o rebuild estar publicado nas lojas e QA em campo.
+  nav_background_location_v1: false,
   // Fase 8 (navegação, F5): GEOFENCE DE CHEGADA (~50 m). Quando o motorista chega
   // ao alvo da fase (embarque na fase pickup, destino na dropoff), a UI destaca a
   // ação ("Cheguei" / "Finalizar") com um aviso de chegada — sem BLOQUEAR a ação

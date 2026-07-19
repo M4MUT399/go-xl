@@ -65,15 +65,41 @@ npx tsc --noEmit -p .
 npx jest --config package.json src/lib/nav
 ```
 
-## Pendente — 5b: background location (EXIGE REBUILD NATIVO)
+## 5b: background location (entregue — EXIGE REBUILD NATIVO)
 
-Transmitir a posição do motorista com o app em **segundo plano** exige:
+Transmite a posição do motorista com o app em **segundo plano** (minimizado ou
+tela bloqueada) durante uma corrida ativa, para o passageiro não perder o
+motorista de vista. Atrás da flag `nav_background_location_v1` (default
+**OFF**) — precisa do rebuild nativo publicado nas lojas antes de ligar por
+jurisdição.
 
-- `expo-location` background task (`startLocationUpdatesAsync` + `TaskManager`);
-- iOS: `UIBackgroundModes: [location]` + `NSLocationAlwaysAndWhenInUseUsageDescription`;
-- Android: foreground service (`FOREGROUND_SERVICE_LOCATION`) + notificação persistente;
-- um novo build EAS (não valida no Expo Go nem em OTA).
+Peças:
 
-**Não incluído nesta fase por decisão do usuário** ("só a parte JS agora"). O
-background location fica como decisão/entrega separada, a ser confirmada antes de
-qualquer alteração de config nativa e disparo de build.
+- `src/lib/nav/backgroundLocationTask.ts` — `TaskManager.defineTask` no escopo
+  do módulo (mesmo padrão de `backgroundNotifications.ts`, Camada 2). Contexto
+  da corrida ativa (`rideId`/`driverId`) e o último fix publicado ficam em
+  AsyncStorage (não memória) — a task roda fora do ciclo de vida do React e o
+  iOS pode suspender/relançar o processo entre fixes. Cadência mais folgada
+  (`DEFAULT_BACKGROUND_PUBLISH_GATE`: piso 5 s, heartbeat 15 s, 50 m) que a de
+  primeiro plano — sem tela para mostrar "ao vivo" e cada write custa
+  bateria/rádio com o processo suspenso.
+- `index.ts` — importa `backgroundLocationTask` como efeito colateral, junto
+  com `backgroundNotifications`, ANTES do import de `App` (registro precisa
+  acontecer antes de o SO poder invocar a task).
+- `src/screens/driver/DriverNavigateScreen.tsx` — ao montar (corrida já
+  aceita) com a flag ON, mostra uma vez o aviso de consentimento
+  (`driverNav.bgLocation*` em en/es/pt); se autorizado, pede a permissão
+  "always" (`Location.requestBackgroundPermissionsAsync`) e inicia a task.
+  Para no desmonte (cancelamento, finalização ou navegar para trás) — nunca
+  segue rastreando fora de uma corrida ativa.
+- `src/lib/systemConfig.ts` — flag `nav_background_location_v1` (default OFF).
+- app.json — iOS: `UIBackgroundModes: [remote-notification, location]` +
+  `NSLocationAlwaysAndWhenInUseUsageDescription`. Android: permissions
+  `ACCESS_BACKGROUND_LOCATION` + `FOREGROUND_SERVICE_LOCATION` (removido de
+  `blockedPermissions`); plugin `expo-location` com
+  `isAndroidBackgroundLocationEnabled: true` +
+  `isAndroidForegroundServiceEnabled: true` (notificação persistente
+  obrigatória no Android com localização em background).
+
+Não valida no Expo Go nem em OTA — exige rebuild EAS nativo (iOS + Android)
+antes de qualquer QA de campo.

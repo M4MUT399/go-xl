@@ -1,6 +1,7 @@
 import {
   shouldPublishFix,
   DEFAULT_PUBLISH_GATE,
+  DEFAULT_BACKGROUND_PUBLISH_GATE,
   type PublishMark,
 } from '../publishGate';
 import type { LatLngLite } from '../geo';
@@ -46,5 +47,30 @@ describe('shouldPublishFix — cadência tempo + distância', () => {
     expect(shouldPublishFix(last, far, 3000, cfg)).toBe(false);
     // O default publicaria (≥ 25 m, > 1 s).
     expect(shouldPublishFix(last, far, 3000, DEFAULT_PUBLISH_GATE)).toBe(true);
+  });
+});
+
+describe('DEFAULT_BACKGROUND_PUBLISH_GATE — cadência de segundo plano (Fase 5b)', () => {
+  it('é mais folgada que a de primeiro plano (piso, heartbeat e distância maiores)', () => {
+    expect(DEFAULT_BACKGROUND_PUBLISH_GATE.minIntervalMs).toBeGreaterThan(
+      DEFAULT_PUBLISH_GATE.minIntervalMs,
+    );
+    expect(DEFAULT_BACKGROUND_PUBLISH_GATE.maxIntervalMs).toBeGreaterThan(
+      DEFAULT_PUBLISH_GATE.maxIntervalMs,
+    );
+    expect(DEFAULT_BACKGROUND_PUBLISH_GATE.minDistanceM).toBeGreaterThan(
+      DEFAULT_PUBLISH_GATE.minDistanceM,
+    );
+  });
+
+  it('NÃO publica antes do piso de 5 s, mesmo tendo andado 50 m', () => {
+    const last: PublishMark = { lat: A.lat, lng: A.lng, atMs: 0 };
+    const far50m: LatLngLite = { lat: A.lat, lng: -81.4311 }; // ~100 m a leste
+    expect(shouldPublishFix(last, far50m, 4000, DEFAULT_BACKGROUND_PUBLISH_GATE)).toBe(false);
+  });
+
+  it('publica por HEARTBEAT quando parado além de 15 s', () => {
+    const last: PublishMark = { lat: A.lat, lng: A.lng, atMs: 0 };
+    expect(shouldPublishFix(last, A, 15000, DEFAULT_BACKGROUND_PUBLISH_GATE)).toBe(true);
   });
 });

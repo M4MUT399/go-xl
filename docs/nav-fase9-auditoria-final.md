@@ -31,7 +31,7 @@ Princípios que guiaram toda a missão:
 | F2 | └ Lane guidance | — | — | — | ❌ **indisponível** no provider atual — aceito sem, documentado |
 | **F3** | Map-matching robusto (janela monotônica + score) | Fase 4 | `mapMatch.ts` | `nav_map_match_v2` | ✅ entregue (OFF) |
 | **F4** | Movimento fluido — cadência de publicação | Fase 5a | `publishGate.ts` | `nav_publish_cadence` | ✅ entregue (OFF) |
-| F4 | └ Background location | — | — | — | ⏸ **adiada** — exige task nativa + rebuild EAS |
+| F4 | └ Background location | Fase 5b | `backgroundLocationTask.ts` | `nav_background_location_v1` | ✅ entregue (OFF) — exige rebuild EAS nativo antes de ligar |
 | **F5** | Fluxo completo + geofence de chegada (~50 m) | Fase 8 | `arrival.ts` | `nav_arrival_geofence` | ✅ entregue (OFF) |
 | — | Provider Google Directions (fundação de F2/F3) | Fase 1 | `directions.ts` + Edge Function | `directions_v2` | ✅ entregue (OFF, fallback OSRM) |
 
@@ -42,7 +42,8 @@ Princípios que guiaram toda a missão:
 
 ### Cobertura de testes (núcleo puro)
 
-`npx jest --config package.json src/lib/nav` → **14 suítes, 174 testes** passando.
+`npx jest --config package.json src/lib/nav` → **14 suítes, 177 testes** passando
+(inclui 3 casos novos para `DEFAULT_BACKGROUND_PUBLISH_GATE`, Fase 5b).
 Suítes por peça: `geo`, `follow`, `courseUp`, `cameraGuard`, `filter`,
 `smoothMarker`, `simulator`, `directions`, `etaTracker`, `sharedRoute`,
 `rideCard`, `mapMatch`, `publishGate`, `arrival`.
@@ -60,6 +61,7 @@ Suítes por peça: `geo`, `follow`, `courseUp`, `cameraGuard`, `filter`,
 | `nav_publish_cadence` | OFF | Cadência de publicação tempo+distância+heartbeat (F4) | por jurisdição, pós-QA |
 | `nav_arrival_geofence` | OFF | Geofence de chegada ~50 m — só sinaliza a ação (F5) | por jurisdição, pós-QA (validar 50/80 m em campo) |
 | `ride_card_expandable` | OFF | Card de corrida clicável/expansível (F1) | por jurisdição, pós-QA |
+| `nav_background_location_v1` | OFF | Publica posição em background durante corrida ativa (F4, Fase 5b) | só após rebuild EAS publicado nas lojas + QA de campo |
 
 **Ordem sugerida de ativação por jurisdição**: `directions_v2` →
 `shared_route_v1` → `nav_map_match_v2` → `nav_publish_cadence` →

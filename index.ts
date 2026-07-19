@@ -5,6 +5,11 @@ import { registerRootComponent } from 'expo';
 // vir antes do import de App para o TaskManager.defineTask já estar registrado.
 import './src/lib/backgroundNotifications';
 
+// Efeito colateral: define a TASK de localização em background (Nav Fase 5b) no
+// escopo do módulo, pelo mesmo motivo acima — precisa estar registrada antes de
+// o SO poder relançar o app e invocar a task.
+import './src/lib/nav/backgroundLocationTask';
+
 import App from './App';
 
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);

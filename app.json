@@ -18,10 +18,12 @@
       "buildNumber": "1",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "O Go XL usa sua localização para encontrar motoristas próximos e definir o ponto de partida da corrida.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "O Go XL usa sua localização em segundo plano, só durante uma corrida ativa e com sua autorização explícita, para o passageiro continuar vendo sua posição mesmo com o app minimizado.",
         "NSCameraUsageDescription": "O Go XL usa a câmera para escanear QR Codes e tirar fotos de perfil e do veículo.",
         "NSPhotoLibraryUsageDescription": "O Go XL acessa suas fotos para você anexar a foto de perfil e as fotos do veículo.",
         "UIBackgroundModes": [
-          "remote-notification"
+          "remote-notification",
+          "location"
         ],
         "ITSAppUsesNonExemptEncryption": false
       },
@@ -67,10 +69,11 @@
         "RECEIVE_BOOT_COMPLETED",
         "POST_NOTIFICATIONS",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
       "blockedPermissions": [
-        "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.RECORD_AUDIO"
       ],
@@ -105,7 +108,8 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "O Go XL usa sua localização para encontrar motoristas próximos.",
-          "isAndroidBackgroundLocationEnabled": false
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

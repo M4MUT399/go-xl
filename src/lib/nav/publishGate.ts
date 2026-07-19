@@ -37,6 +37,18 @@ export const DEFAULT_PUBLISH_GATE: PublishGateConfig = {
   minDistanceM: 25,
 };
 
+// Fase 5b: cadência de publicação com o app em SEGUNDO PLANO. Mais folgada que
+// a de primeiro plano (acima) de propósito — em background não há tela para
+// mostrar "ao vivo" quadro a quadro, e cada write custa bateria + rádio com o
+// processo suspenso/relançado pelo SO. Ainda assim publica com regularidade
+// suficiente para o passageiro não perder o motorista de vista por mais de
+// ~15 s parado, ou toda vez que ele andar 50 m.
+export const DEFAULT_BACKGROUND_PUBLISH_GATE: PublishGateConfig = {
+  minIntervalMs: 5000,
+  maxIntervalMs: 15000,
+  minDistanceM: 50,
+};
+
 /** Último ponto publicado + quando. `null` = nada publicado ainda. */
 export interface PublishMark {
   lat: number;
