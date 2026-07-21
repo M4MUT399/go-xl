@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Go XL — Peça sua corrida</title>
+
+  <!--
+    Smart App Banner (iOS):
+    - Se o app já estiver instalado, abre direto pelo app-argument.
+    - O script abaixo atualiza o content para incluir o driver code ANTES de
+      o Safari criar o banner, então o toque no banner já abre no contexto certo.
+    - Para novos usuários: o banner mostra "Obter" → loja, mas o code se perde
+      (iOS não suporta deferred deep link via app-argument). Por isso o botão
+      "Baixar" do card abaixo é o caminho principal — ele grava o code na área
+      de transferência antes de ir para a loja.
+  -->
+  <meta id="iosAppMeta" name="apple-itunes-app"
+        content="app-id=6781716394, app-argument=https://goxl.app/qr" />
+
+  <!-- Atualiza o app-argument com o driver code o mais cedo possível (head inline),
+       para que o Safari leia o meta tag correto ao criar o Smart App Banner. -->
+  <script>
+    (function () {
+      var p = new URLSearchParams(location.search);
+      var raw = (p.get('driver') || '').trim().toUpperCase();
+      if (/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(raw)) {
+        var m = document.getElementById('iosAppMeta');
+        if (m) m.setAttribute('content',
+          'app-id=6781716394, app-argument=goxl://ride?driver=' + raw);
+      }
+    })();
+  </script>
+
+  <style>
+    * { box-sizing: border-box; }
+    :root { --accent: #C9A84C; --navy: #0A0D1C; }
+    html, body {
+      height: 100%; margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--navy); color: #fff;
+    }
+    .wrap {
+      min-height: 100%; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 32px 24px;
+    }
+    .logo { color: var(--accent); font-weight: 900; letter-spacing: 6px; font-size: 26px; margin-bottom: 6px; }
+    .sub { color: #9CA3AF; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 28px; }
+    .card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 20px; padding: 28px 22px; width: 100%; max-width: 380px;
+    }
+    h1 { font-size: 21px; margin: 0 0 8px; }
+    p { color: #9CA3AF; font-size: 15px; line-height: 1.5; margin: 0 0 22px; }
+    .code {
+      display: inline-block; background: rgba(201,168,76,0.12); color: var(--accent);
+      font-weight: 800; letter-spacing: 4px; font-size: 18px;
+      padding: 8px 16px; border-radius: 10px; margin-bottom: 22px;
+    }
+    .btn {
+      display: block; text-decoration: none; font-weight: 800; font-size: 16px;
+      padding: 16px 20px; border-radius: 14px; width: 100%;
+      border: none; cursor: pointer; font-family: inherit;
+    }
+    .btn-primary { background: var(--accent); color: var(--navy); margin-bottom: 12px; }
+    .btn-ghost   { background: rgba(255,255,255,0.08); color: #fff; }
+    .tip {
+      color: #6B7280; font-size: 12px; margin-top: 18px; line-height: 1.5;
+      text-align: left; background: rgba(255,255,255,0.03);
+      border-radius: 10px; padding: 12px 14px;
+    }
+    .tip strong { color: #9CA3AF; }
+    .note { color: #6B7280; font-size: 12px; margin-top: 18px; line-height: 1.5; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+      background: rgba(255,255,255,0.95); color: var(--navy);
+      font-weight: 700; font-size: 13px;
+      padding: 10px 16px; border-radius: 12px;
+      opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">GO XL</div>
+    <div class="sub">Executive XL</div>
+
+    <div class="card">
+      <h1>Peça sua corrida</h1>
+      <p>Você escaneou o QR de um motorista Go XL. Baixe o app e sua primeira
+        corrida já vem vinculada a ele — sem digitar código.</p>
+
+      <div id="codeBox" class="code" style="display:none"></div>
+
+      <button id="downloadBtn" class="btn btn-primary">⬇️&nbsp; Baixar o Go XL</button>
+      <button id="openBtn"     class="btn btn-ghost"   >Já tenho o app</button>
+
+      <div class="tip" id="iosTip" style="display:none">
+        <strong>📋 Dica iOS:</strong> Após instalar, o app vai pedir permissão para
+        colar da área de transferência. Toque em <strong>"Permitir"</strong> para
+        vincular a corrida ao motorista automaticamente.
+      </div>
+
+      <div class="note">Ao instalar, o app reconhece o motorista automaticamente.
+        Sua corrida fica vinculada só a ele nesta viagem.</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">Motorista vinculado ✓</div>
+
+  <script>
+    var PLAY_URL     = 'https://play.google.com/store/apps/details?id=com.goxl.app';
+    var APPSTORE_URL = 'https://apps.apple.com/app/go-xl/id6781716394';
+
+    /* Charset/validação idênticos ao codeFromId do app (sem I/O/0/1). */
+    var CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
+    var params  = new URLSearchParams(window.location.search);
+    var raw     = (params.get('driver') || '').trim().toUpperCase();
+    var CODE    = CODE_RE.test(raw) ? raw : '';
+
+    var ua    = navigator.userAgent || '';
+    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+
+    /* URL da loja: Android inclui referrer com o driver code para o futuro
+       uso via react-native-play-install-referrer (já tem o parser no app).
+       iOS: App Store não suporta referrer UTM — depende do clipboard. */
+    var storeUrl = isIOS
+      ? APPSTORE_URL
+      : PLAY_URL + (CODE
+          ? '&referrer=' + encodeURIComponent('utm_source=goxl_qr&goxl_driver=' + CODE)
+          : '');
+
+    /* Exibe o código legível se houver */
+    if (CODE) {
+      var cb = document.getElementById('codeBox');
+      cb.textContent = CODE;
+      cb.style.display = 'inline-block';
+    }
+
+    /* Mostra dica de paste permission só no iOS */
+    if (isIOS && CODE) {
+      document.getElementById('iosTip').style.display = 'block';
+    }
+
+    function showToast(msg) {
+      var el = document.getElementById('toast');
+      el.textContent = msg || 'Motorista vinculado ✓';
+      el.classList.add('show');
+      setTimeout(function () { el.classList.remove('show'); }, 1800);
+    }
+
+    /**
+     * Deferred deep link: grava goxl-ride:CODE na área de transferência ANTES de
+     * ir para a loja. No 1º open do app, ele lê o clipboard uma vez e trava a
+     * corrida no motorista dono do QR (src/lib/deferredDeepLink.ts).
+     *
+     * Regras do browser:
+     *  - Clipboard API moderna (navigator.clipboard): requer user gesture no iOS.
+     *    No Android não requer gesture em HTTPS — tentamos logo no carregamento.
+     *  - Fallback execCommand('copy'): funciona em alguns browsers antigos.
+     */
+    function writeClipboard() {
+      if (!CODE) return Promise.resolve(false);
+      var payload = 'goxl-ride:' + CODE;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(payload)
+            .then(function () { return true; })
+            .catch(function () { return legacyCopy(payload); });
+        }
+      } catch (e) { /* cai no fallback */ }
+      return Promise.resolve(legacyCopy(payload));
+    }
+
+    function legacyCopy(text) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0;top:-999px';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+      } catch (e) { return false; }
+    }
+
+    /* Tentativa silenciosa sem gesto (funciona no Android Chrome/WebView). */
+    writeClipboard();
+
+    /* ─── Botão "Baixar o Go XL" ─────────────────────────────────────── */
+    document.getElementById('downloadBtn').addEventListener('click', function () {
+      /* Tenta novamente com gesto do usuário (necessário no iOS Safari). */
+      writeClipboard().then(function (ok) {
+        if (ok && CODE) showToast('Motorista salvo ✓  Pode instalar!');
+        setTimeout(function () { window.location.href = storeUrl; }, ok ? 900 : 200);
+      });
+    });
+
+    /* ─── Botão "Já tenho o app" ─────────────────────────────────────── */
+    document.getElementById('openBtn').addEventListener('click', function () {
+      if (!CODE) { window.location.href = storeUrl; return; }
+
+      /* Tenta abrir via custom scheme; se o app não abrir em 1,2 s → loja. */
+      var deep = 'goxl://ride?driver=' + encodeURIComponent(CODE);
+      var t = Date.now();
+      window.location.href = deep;
+      setTimeout(function () {
+        if (Date.now() - t < 1600) window.location.href = storeUrl;
+      }, 1200);
+    });
+  </script>
+</body>
+</html>

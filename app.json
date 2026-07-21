@@ -16,6 +16,9 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.goxl.app",
       "buildNumber": "1",
+      "associatedDomains": [
+        "applinks:goxl.app"
+      ],
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "O Go XL usa sua localização para encontrar motoristas próximos e definir o ponto de partida da corrida.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "O Go XL usa sua localização em segundo plano, só durante uma corrida ativa e com sua autorização explícita, para o passageiro continuar vendo sua posição mesmo com o app minimizado.",
@@ -53,6 +56,21 @@
               "scheme": "https",
               "host": "goxl.app",
               "pathPrefix": "/track"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "goxl.app",
+              "pathPrefix": "/qr"
             }
           ],
           "category": [

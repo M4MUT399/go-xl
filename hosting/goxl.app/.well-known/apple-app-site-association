@@ -7,7 +7,11 @@
         "paths": [
           "/track",
           "/track/*",
-          "/track?*"
+          "/track?*",
+          "/qr",
+          "/qr/",
+          "/qr/*",
+          "/qr?*"
         ]
       }
     ]
