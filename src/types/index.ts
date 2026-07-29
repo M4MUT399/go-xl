@@ -225,6 +225,9 @@ export type RootStackParamList = {
   // motorista — aceite gravado em driver_disclosure_acceptances (migration
   // 0059). Mesmos moldes de navegação da tela "Insurance" (Bloco 1).
   Disclosure: undefined;
+  // Telemetria de direção estilo Uber/CMT: nota 0-100, categorias, desafios e
+  // histórico das últimas viagens do próprio motorista (migration 0063).
+  DrivingInsights: undefined;
   EditProfile: undefined;
   NotificationSettings: undefined;
   Support: undefined;

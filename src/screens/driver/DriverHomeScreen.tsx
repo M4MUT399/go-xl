@@ -372,8 +372,10 @@ export function DriverHomeScreen({ navigation }: Props) {
         onRegionChangeComplete={(_r, d) => {
           if (d?.isGesture) pauseFollow();
         }}
+        // Âncora do carro no TERÇO INFERIOR — SEMPRE, independente das flags de
+        // rollout. Mantém o cursor fixo embaixo com o mapa descendo sob ele.
         mapPadding={{
-          top: courseUpEnabled ? topPaddingForAnchor(screenH) : 0,
+          top: topPaddingForAnchor(screenH),
           right: 0,
           bottom: 0,
           left: 0,

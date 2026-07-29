@@ -7,6 +7,7 @@ import { useDriverRide } from '../hooks/useRide';
 import { useDutyIdleTracker } from '../hooks/useDutyIdleTracker';
 import { useDutyMovementTracker } from '../hooks/useDutyMovementTracker';
 import { useDriverPeriodTracker } from '../hooks/useDriverPeriodTracker';
+import { useTelematicsSession } from '../hooks/useTelematicsSession';
 import type { DriverPeriod } from '../lib/driverPeriodMachine';
 import { supabase } from '../lib/supabase';
 import type { Coordinates } from '../types';
@@ -139,6 +140,12 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   }, [isOnline, profile?.id, onlineLoaded]);
 
   const ride = useDriverRide(profile?.id, profile?.jurisdiction);
+
+  // Telemetria de direção (estilo Uber/CMT): grava uma sessão pontuada por
+  // corrida, do ACEITE ao ENCERRAMENTO. Automático e só no histórico do próprio
+  // motorista (ver useTelematicsSession.ts + migration 0063). Roda aqui — global
+  // — para capturar a corrida inteira independentemente da tela ativa.
+  useTelematicsSession(profile?.id, ride.activeRide?.id ?? null);
 
   // ── Ponte com Android Auto (ver src/native/carRideBridge.ts) ────────────────
   // Empurra a chamada pendente e a corrida ativa para a tela do carro sempre

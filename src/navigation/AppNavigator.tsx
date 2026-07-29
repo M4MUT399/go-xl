@@ -122,6 +122,7 @@ function NotificationBanner({
 function PassengerTabs() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   return (
     <Tab.Navigator
       screenOptions={{
@@ -140,17 +141,17 @@ function PassengerTabs() {
       <Tab.Screen
         name="Início"
         component={HomeScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🗺</Text> }}
+        options={{ tabBarLabel: t('nav.home'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🗺</Text> }}
       />
       <Tab.Screen
         name="Viagens"
         component={TripHistoryScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📋</Text> }}
+        options={{ tabBarLabel: t('nav.trips'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📋</Text> }}
       />
       <Tab.Screen
         name="Perfil"
         component={ProfileScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
+        options={{ tabBarLabel: t('nav.profile'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
       />
     </Tab.Navigator>
   );
@@ -159,6 +160,7 @@ function PassengerTabs() {
 function DriverTabs() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   return (
     <Tab.Navigator
       screenOptions={{
@@ -177,27 +179,27 @@ function DriverTabs() {
       <Tab.Screen
         name="Mapa"
         component={DriverHomeScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🗺</Text> }}
+        options={{ tabBarLabel: t('nav.map'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🗺</Text> }}
       />
       <Tab.Screen
         name="Agenda"
         component={DriverScheduledRidesScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🗓️</Text> }}
+        options={{ tabBarLabel: t('nav.schedule'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🗓️</Text> }}
       />
       <Tab.Screen
         name="Ganhos"
         component={EarningsScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>💰</Text> }}
+        options={{ tabBarLabel: t('nav.earnings'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>💰</Text> }}
       />
       <Tab.Screen
         name="Alertas"
         component={DriverReminderSettingsScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🔔</Text> }}
+        options={{ tabBarLabel: t('nav.alerts'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🔔</Text> }}
       />
       <Tab.Screen
         name="Perfil"
         component={ProfileScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
+        options={{ tabBarLabel: t('nav.profile'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text> }}
       />
     </Tab.Navigator>
   );
@@ -542,6 +544,8 @@ export function AppNavigator() {
               <Stack.Screen name="Insurance" getComponent={() => require('../screens/driver/DriverInsuranceScreen').DriverInsuranceScreen} />
               {/* Compliance TNC (F.S. 627.748, Bloco 3) — termo de divulgação legal. */}
               <Stack.Screen name="Disclosure" getComponent={() => require('../screens/driver/DriverDisclosureScreen').DriverDisclosureScreen} />
+              {/* Telemetria de direção (estilo Uber/CMT) — nota, desafios e histórico. */}
+              <Stack.Screen name="DrivingInsights" getComponent={() => require('../screens/driver/DrivingInsightsScreen').DrivingInsightsScreen} />
               <Stack.Screen name="Chat" getComponent={() => require('../screens/ChatScreen').ChatScreen} />
               <Stack.Screen name="EditProfile" getComponent={() => require('../screens/profile/EditProfileScreen').EditProfileScreen} />
               <Stack.Screen name="NotificationSettings" getComponent={() => require('../screens/profile/NotificationSettingsScreen').NotificationSettingsScreen} />

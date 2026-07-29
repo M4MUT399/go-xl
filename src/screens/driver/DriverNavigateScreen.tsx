@@ -1041,10 +1041,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         onRegionChangeComplete={(_region, details) => {
           if (details?.isGesture) pauseFollow();
         }}
-        // Course-up (Bloco 3): ancora o carro a ~1/3 do rodapé (mais via à
-        // frente). Legado (flag OFF): mantém o padding suave de 16%.
+        // Âncora do carro no TERÇO INFERIOR da tela — SEMPRE, independente das
+        // flags de rollout (course-up/câmera). O padding-top empurra o centro da
+        // câmera pra baixo: o cursor fica fixo a ~1/3 do rodapé e o mapa "desce"
+        // sob ele, deixando a via à frente ocupar a tela. Como o follow usa zoom
+        // fechado ancorado aqui, a câmera nunca abre em "visão geral" nem estoura
+        // pro continente ao aceitar/trocar de fase.
         mapPadding={{
-          top: courseUpEnabled ? topPaddingForAnchor(screenH) : Math.round(screenH * 0.16),
+          top: topPaddingForAnchor(screenH),
           right: 0,
           bottom: 0,
           left: 0,

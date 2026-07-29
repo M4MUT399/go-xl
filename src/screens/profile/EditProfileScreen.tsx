@@ -64,10 +64,10 @@ export function EditProfileScreen({ navigation }: Props) {
       const { data: { session } } = await withTimeout(
         supabase.auth.getSession(),
         10000,
-        'Não foi possível validar sua sessão. Tente novamente.'
+        t('edit.errSession')
       );
       const token = session?.access_token;
-      if (!token) throw new Error('Sessão expirada. Faça login novamente.');
+      if (!token) throw new Error(t('edit.errSessionExpired'));
 
       const res = await withTimeout(
         fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${profile.id}`, {
@@ -81,12 +81,12 @@ export function EditProfileScreen({ navigation }: Props) {
           body: JSON.stringify(patch),
         }),
         15000,
-        'Não foi possível salvar. Verifique sua conexão e tente novamente.'
+        t('edit.errSaveNetwork')
       );
 
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
-        throw new Error(detail || `Falha ao salvar (${res.status}).`);
+        throw new Error(detail || t('edit.errSaveStatus').replace('{status}', String(res.status)));
       }
 
       // Atualiza o estado local imediatamente (sem nova query, que também
@@ -103,7 +103,7 @@ export function EditProfileScreen({ navigation }: Props) {
         { text: t('common.ok'), onPress: () => navigation.goBack() },
       ]);
     } catch (e: any) {
-      Alert.alert('Erro', e?.message ?? 'Não foi possível salvar as alterações.');
+      Alert.alert(t('common.error'), e?.message ?? t('edit.errSaveGeneric'));
     } finally {
       setSaving(false);
     }
@@ -138,7 +138,7 @@ export function EditProfileScreen({ navigation }: Props) {
       const { data: { session } } = await withTimeout(
         supabase.auth.getSession(),
         10000,
-        'Não foi possível confirmar sua sessão. Tente novamente.'
+        t('edit.errSession')
       );
       const res = await withTimeout(
         fetch(DELETE_ACCOUNT_URL, {
@@ -150,10 +150,10 @@ export function EditProfileScreen({ navigation }: Props) {
           body: JSON.stringify({}),
         }),
         15000,
-        'Não foi possível excluir a conta. Verifique sua conexão e tente novamente.'
+        t('edit.errDeleteNetwork')
       );
       const json = await res.json() as { ok?: boolean; error?: string };
-      if (!json.ok) throw new Error(json.error ?? 'Falha ao excluir conta.');
+      if (!json.ok) throw new Error(json.error ?? t('edit.errDeleteFailed'));
       await signOut();
       // Após o signOut, o AppNavigator detecta a ausência de sessão e volta
       // para a tela de Welcome automaticamente — nenhuma navegação manual necessária.
