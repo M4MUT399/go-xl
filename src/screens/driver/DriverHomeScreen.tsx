@@ -79,6 +79,11 @@ export function DriverHomeScreen({ navigation }: Props) {
     profile?.id,
     dutyIdleSegments,
     dutyMovementEnabled ? dutyMovementMinutes : null,
+    // Reconciliação: quando a tela já mostra "Offline" mas uma sessão ficou
+    // presa aberta no banco (falha de rede em endSession(), app morto etc.),
+    // o hook fecha essa sessão órfã sozinho — sem isso, o descanso obrigatório
+    // nunca "andava" com o tempo realmente offline (ver useDrivingLimit.ts).
+    isOnline,
   );
   const bgCheck = useBackgroundCheck(profile?.id);
   // Bloco 3 (compliance TNC F.S. 627.748): gates NOVOS deste bloco — desqualificação

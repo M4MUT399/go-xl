@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { getConfig, getConfigDefault } from '../lib/systemConfig';
+import { reportWarning } from '../lib/errorReporting';
 import { computeDutyStatus, type DutySession, type DutyStatus, type IdleSegment } from '../lib/drivingLimits';
 
 // Carrega sessões das últimas 48h — suficiente para cobrir 12h de direção +
@@ -34,7 +35,17 @@ export function useDrivingLimit(
    * (flag `duty_movement_v2_enabled` ligada), vira a fonte autoritativa do
    * acúmulo; `null`/ausente → mantém o cálculo v1 (sessão − ociosidade).
    */
-  movementMinutes: number | null = null
+  movementMinutes: number | null = null,
+  /**
+   * Estado local (fonte da verdade da UI) do toggle online/offline. Usado só
+   * para AUTO-RECONCILIAR uma `driver_duty_sessions` presa aberta (ex.:
+   * `endSession()` falhou por rede e o app já mostra "Offline" na tela) — sem
+   * isso, `computeDutyStatus` continua vendo `online: true` e recalculando
+   * `lastDutyEnd`/`restUntil` como "agora" a cada tick, então o tempo OFFLINE
+   * nunca chega a contar como descanso. `undefined` → reconciliação desligada
+   * (comportamento antigo), para não quebrar quem ainda não passa esse arg.
+   */
+  isOnline?: boolean
 ): DrivingLimit {
   const [sessions, setSessions] = useState<DutySession[]>([]);
   const [cfg, setCfg] = useState({
@@ -100,27 +111,62 @@ export function useDrivingLimit(
   const startSession = useCallback(async () => {
     if (!driverId) return;
     // Não duplica: se já houver sessão aberta, apenas garante o estado atualizado.
-    const { data: open } = await supabase
+    const { data: open, error: selectError } = await supabase
       .from('driver_duty_sessions')
       .select('id')
       .eq('driver_id', driverId)
       .is('ended_at', null)
       .limit(1);
+    if (selectError) reportWarning(selectError, { scope: 'useDrivingLimit.startSession.select', driverId });
     if (!open || open.length === 0) {
-      await supabase.from('driver_duty_sessions').insert({ driver_id: driverId });
+      const { error: insertError } = await supabase.from('driver_duty_sessions').insert({ driver_id: driverId });
+      if (insertError) reportWarning(insertError, { scope: 'useDrivingLimit.startSession.insert', driverId });
     }
     await refresh();
   }, [driverId, refresh]);
 
+  // Fecha a sessão aberta. Não pode falhar em silêncio: uma sessão que fica
+  // presa aberta (ex.: hiccup de rede) faz `computeDutyStatus` continuar
+  // achando o motorista "online" mesmo com a tela mostrando "Offline" — o
+  // tempo realmente offline nunca conta como descanso e o banner de descanso
+  // obrigatório não se resolve. Por isso: loga a falha e tenta 1x de novo
+  // antes de desistir (a reconciliação abaixo cobre o resto).
   const endSession = useCallback(async () => {
     if (!driverId) return;
-    await supabase
-      .from('driver_duty_sessions')
-      .update({ ended_at: new Date().toISOString() })
-      .eq('driver_id', driverId)
-      .is('ended_at', null);
+    const attempt = () =>
+      supabase
+        .from('driver_duty_sessions')
+        .update({ ended_at: new Date().toISOString() })
+        .eq('driver_id', driverId)
+        .is('ended_at', null);
+    const { error } = await attempt();
+    if (error) {
+      reportWarning(error, { scope: 'useDrivingLimit.endSession', driverId });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const retry = await attempt();
+      if (retry.error) reportWarning(retry.error, { scope: 'useDrivingLimit.endSession.retry', driverId });
+    }
     await refresh();
   }, [driverId, refresh]);
+
+  // Auto-reconciliação: se a UI já sabe que o motorista está OFFLINE
+  // (`isOnline === false`, passado pelo chamador) mas ainda existe uma sessão
+  // aberta em `sessions` (ex.: `endSession()` falhou antes, ou o app foi morto
+  // com a sessão aberta), fecha essa sessão órfã. Sem isso, `online` nunca
+  // volta a `false` em `computeDutyStatus` e o offline real não é contado como
+  // descanso. `isOnline === undefined` → chamador não optou por essa checagem,
+  // não reconcilia (evita comportamento surpresa para quem ainda não passa o arg).
+  const lastReconcileAttemptRef = useRef(0);
+  useEffect(() => {
+    if (isOnline !== false) return;
+    const hasOpenSession = sessions.some((s) => !s.ended_at);
+    if (!hasOpenSession) return;
+    const now = Date.now();
+    // Não repete a cada re-render/tick — só re-tenta após 30s se ainda presa.
+    if (now - lastReconcileAttemptRef.current < 30_000) return;
+    lastReconcileAttemptRef.current = now;
+    endSession();
+  }, [isOnline, sessions, endSession]);
 
   const status = computeDutyStatus(sessions, cfg, new Date(), idleSegments, movementMinutes);
   const warn = status.online && !status.mustRest && status.remainingMinutes <= warnMinutes;
