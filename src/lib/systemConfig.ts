@@ -1,0 +1,324 @@
+// systemConfig — leitura de configuração dinâmica do backend (tabela
+// public.system_config), com resolução por jurisdição, cache curto e fallback
+// local seguro.
+//
+// Por que o fallback importa:
+//   As migrations 0022/0023 podem ainda não ter sido aplicadas em produção
+//   quando este código chegar via build. Se a tabela não existir ou a query
+//   falhar, NUNCA deixamos o app sem valor — caímos nos DEFAULTS abaixo. Assim
+//   a feature funciona com o padrão seguro mesmo antes de o admin configurar.
+import { supabase } from './supabase';
+
+// Padrões locais — espelham os seeds da migration 0022. São a última linha de
+// defesa: usados quando a tabela não existe ainda ou a leitura falha.
+export const CONFIG_DEFAULTS = {
+  // P1: por quantos segundos a tela de chamada de corrida toca antes de expirar.
+  ride_offer_timeout_seconds: 30,
+  // P2: antecedência (min) com que uma corrida agendada SEM motorista aparece
+  // na lista de disponíveis para os motoristas. "Antecedência dinâmica".
+  scheduled_ride_lead_minutes: 60,
+  // P2: antecedência (min) com que o banner fixo da corrida agendada JÁ
+  // confirmada por mim começa a aparecer no mapa do motorista.
+  scheduled_ride_banner_minutes: 120,
+  // P2: antecedência (min) em que a agendada confirmada vira "iminente" —
+  // dispara o alerta sonoro e o destaque de urgência no banner.
+  scheduled_ride_reminder_minutes: 15,
+  // P3: horas de direção acumuladas que exigem descanso obrigatório.
+  driving_limit_hours: 12,
+  // P3: horas de descanso contínuo que zeram o acúmulo de direção.
+  rest_required_hours: 6,
+  // P3: antecedência (min) do limite em que o motorista começa a ser avisado.
+  driving_warn_minutes: 30,
+  // Item 1: tolerância (min) de veículo PARADO antes de a contagem de direção
+  // pausar. Paradas até este limite contam normalmente; o excedente de cada
+  // parada longa não conta e volta a contar assim que o veículo se move.
+  duty_idle_pause_minutes: 10,
+  // P5: liga/desliga a cobrança de pedágio no preço. Desligado por padrão →
+  // preserva o comportamento atual (pedágio = 0) até o admin habilitar.
+  tolls_enabled: false,
+  // P5: qual provider de pedágio usar ('mock' | 'google'). O mock calcula um
+  // valor determinístico a partir dos parâmetros abaixo; 'google' fica como
+  // stub até integrarmos a Routes API com toll info.
+  toll_provider: 'mock',
+  // P5: taxa fixa (USD) somada quando o pedágio está habilitado (provider mock).
+  mock_toll_flat: 0,
+  // P5: taxa por km (USD) somada quando o pedágio está habilitado (provider mock).
+  mock_toll_per_km: 0,
+  // P7: exige background check aprovado para o motorista ficar online. Desligado
+  // por padrão → não muda o gate de disponibilidade atual.
+  background_check_required: false,
+  // P7: qual provider de background check usar ('mock' | 'stripe_identity').
+  background_check_provider: 'mock',
+  // P7: validade (dias) de um background check aprovado antes de exigir renovação.
+  background_check_valid_days: 365,
+  // ── Feature flags de rollout gradual (câmera / navegação / jornada) ──────────
+  // Bloco 1: roteia TODA atualização de câmera pelo CameraController (validação
+  // de coordenada + clamp de zoom + fallback). Ligado por padrão — é correção do
+  // bug crítico de zoom-out no iOS; desligar volta ao comportamento legado.
+  camera_controller_enabled: true,
+  // Bloco 3: modo course-up (mapa gira conforme o deslocamento) na navegação do
+  // motorista. Ligado por padrão (já é o comportamento atual da tela de navegação).
+  nav_course_up_enabled: true,
+  // Paridade Uber Bloco 2: marcador de veículo com MOVIMENTO FLUIDO (componente
+  // SmoothMarker: interpolação ~1 s, snap-na-rota, dead reckoning ≤ 3 s, rotação
+  // pelo arco mais curto). LIGA no lado do PASSAGEIRO, onde hoje o marcador do
+  // motorista "pula" a cada atualização (o motorista já anima nativamente via
+  // AnimatedRegion). DESLIGADO por padrão → mantém o <Marker> cru até o rollout.
+  nav_smooth_marker: false,
+  // Bloco 4 (paridade Uber): card de corrida CLICÁVEL/EXPANSÍVEL na tela do
+  // motorista. Toque/arraste no cabeçalho compacto expande para revelar o
+  // endereço oposto completo, nome do passageiro e resumo (preço · distância),
+  // sem reenquadrar a câmera. DESLIGADO por padrão → mantém o painel compacto
+  // legado até o rollout por jurisdição após QA.
+  ride_card_expandable: false,
+  // Bloco 3 (paridade Uber): ROTA ÚNICA no servidor. Com a flag LIGADA, a rota
+  // é calculada pela Edge Function compute-route (proxy do OSRM) e gravada na
+  // corrida (route_polyline + route_version + route_eta_min). Motorista dispara
+  // o recálculo (aceite/mudança de fase/desvio) e ambos os lados LEEM a mesma
+  // rota/ETA do servidor. DESLIGADO por padrão → cada tela calcula a própria
+  // rota no cliente (comportamento legado). Habilitar por jurisdição após QA.
+  shared_route_v1: false,
+  // Fase 1 (navegação): PROVIDER de rotas via Google Directions (proxy na Edge
+  // Function `directions`, chave secreta no servidor) no lugar do OSRM demo
+  // público. Traz ETA COM TRÂNSITO (departure_time=now) e geometria POR STEP de
+  // alta resolução (essencial ao map-matching robusto). DESLIGADO por padrão →
+  // continua no OSRM (cliente e servidor). Se a Google falhar em runtime, o
+  // useRoute cai automaticamente no OSRM (fallback seguro). Requer, no servidor:
+  // habilitar a Directions API no projeto Google + secret GOOGLE_DIRECTIONS_API_KEY
+  // + deploy da função `directions`. Habilitar por jurisdição só após QA.
+  directions_v2: false,
+  // Fase 3 (navegação, Bug B2): POLYLINE CONSUMÍVEL na tela do PASSAGEIRO. Hoje o
+  // passageiro desenha a rota ativa inteira como uma linha só; conforme o
+  // motorista avança, o traçado atrás dele NÃO some. Com a flag LIGADA, o
+  // passageiro projeta o carro na polyline (nearestPointOnPath) e divide em
+  // [percorrido] (esmaecido) e [restante] (colorido), igual à tela do motorista.
+  // A troca embarque→destino após o boarding já ocorre por status (activePolyline).
+  // DESLIGADO por padrão → desenha a rota ativa inteira (legado). Habilitar por
+  // jurisdição após QA.
+  nav_consume_polyline: false,
+  // Fase 4 (navegação, F3): MAP-MATCHING ROBUSTO no motorista. Substitui o snap
+  // global ingênuo (nearestPointOnPath) + histerese temporal por um casador com
+  // JANELA MONOTÔNICA à frente (não salta para trás em alças de retorno), SCORE
+  // COMPOSTO distância+rumo (desambigua vias paralelas) e histerese de off-route
+  // POR CONTAGEM (N fixes consecutivos). DESLIGADO por padrão → mantém o snap
+  // legado (nearestPointOnPath + updateOffRoute por tempo). Habilitar após QA.
+  nav_map_match_v2: false,
+  // Fase 5 (navegação, F4): CADÊNCIA DE PUBLICAÇÃO da posição do motorista. Hoje o
+  // motorista só publica ao andar > 30 m; parado no trânsito ou no embarque, o
+  // marcador do PASSAGEIRO congela e o dado "envelhece". Com a flag LIGADA, a
+  // publicação passa a combinar TEMPO + DISTÂNCIA (piso 1 s, distância 25 m,
+  // heartbeat 4 s), estilo Uber — o passageiro recebe fixes frescos mesmo em
+  // movimento lento/parado, alimentando o SmoothMarker (interpolação + dead
+  // reckoning). DESLIGADO por padrão → mantém o throttle só-distância legado.
+  nav_publish_cadence: false,
+  // Fase 5b (navegação): LOCALIZAÇÃO EM BACKGROUND. Hoje a publicação da posição
+  // do motorista (driver_locations + rides.driver_lat/lng) só roda com a tela
+  // DriverNavigateScreen aberta em primeiro plano — se o motorista minimiza o
+  // app ou bloqueia a tela durante a corrida, o passageiro para de ver o
+  // movimento. Com a flag LIGADA, uma TASK nativa (expo-task-manager +
+  // expo-location) publica com a cadência mais folgada de
+  // DEFAULT_BACKGROUND_PUBLISH_GATE (piso 5 s, 50 m, heartbeat 15 s) enquanto o
+  // app está minimizado, durante uma corrida ativa. EXIGE build nativo (rebuild
+  // EAS) + permissão "sempre" de localização + notificação persistente no
+  // Android (foreground service) — por isso DESLIGADO por padrão. Habilitar por
+  // jurisdição só após o rebuild estar publicado nas lojas e QA em campo.
+  nav_background_location_v1: false,
+  // Fase 8 (navegação, F5): GEOFENCE DE CHEGADA (~50 m). Quando o motorista chega
+  // ao alvo da fase (embarque na fase pickup, destino na dropoff), a UI destaca a
+  // ação ("Cheguei" / "Finalizar") com um aviso de chegada — sem BLOQUEAR a ação
+  // manual. Histerese (entra a 50 m, sai a 80 m) evita piscar com o jitter do GPS
+  // parado. DESLIGADO por padrão → nenhum aviso, fluxo manual legado. Habilitar
+  // por jurisdição após QA.
+  nav_arrival_geofence: false,
+  // Bloco 2: contagem de jornada pela máquina de estados baseada em MOVIMENTO
+  // (persistida por timestamps, sobrevive a kill/reboot). LIGADO: as horas
+  // trabalhadas contam SÓ com o veículo em movimento (limiar 8 km/h + histerese).
+  // TOLERÂNCIA ZERO: assim que o GPS para, a contagem é SUSPENSA (sem os 10 min
+  // de tolerância). Offline conta como descanso e zera o acúmulo após 6h — a
+  // noite offline não deixa mais o motorista preso em descanso pela manhã.
+  // Off → volta ao tracker de ociosidade v1 (em memória).
+  duty_movement_v2_enabled: true,
+  // Bloco 2: "token de reset" da jornada por movimento. Ao mudar este valor, todo
+  // aparelho ZERA o acumulador persistido no próximo boot (limpa bloqueios de
+  // descanso presos em campo, sem esperar as 6h). Também serve de versão: este
+  // build já sobe o valor, então instalações existentes são limpas na 1ª abertura.
+  duty_movement_reset_token: '2026-07-16-zero-tolerance',
+  // Dispatch PR-a: fila FIFO de ofertas no app do motorista. Corrige o bug em que
+  // uma 2ª solicitação (P2) SOBRESCREVIA/lapidava a 1ª (P1) no slot único —
+  // matando as duas corridas. Com a flag LIGADA o motorista mantém várias ofertas
+  // válidas ao mesmo tempo e atende uma por vez (FIFO). DESLIGADO por padrão →
+  // mantém o comportamento de slot único legado até o rollout gradual.
+  dispatch_multi_offer_fix: false,
+  // Dispatch PR-b: motor estilo Uber no SERVIDOR (Edge Function `dispatch-engine`
+  // + tabelas trip_requests/ride_offers como fonte da verdade). Máquina de estados
+  // por pedido, oferta sequencial por ETA, aceite atômico, re-dispatch e expansão
+  // de raio. DESLIGADO por padrão → o fluxo legado (leque via send-ride-push)
+  // segue intacto; ligar por jurisdição só após validação.
+  dispatch_engine_v2: false,
+  // PR-b: timer (s) de cada oferta antes de expirar e passar ao próximo motorista.
+  dispatch_offer_ttl_seconds: 15,
+  // PR-b: 'sequential' (uma oferta por vez, padrão) ou 'broadcast' (leque a todos).
+  dispatch_mode: 'sequential',
+  // PR-b: raio inicial de busca de motoristas (km).
+  dispatch_radius_initial_km: 3,
+  // PR-b: incremento de raio a cada expansão quando ninguém aceita (km).
+  dispatch_radius_step_km: 2,
+  // PR-b: raio máximo (km) antes de desistir → NO_DRIVERS.
+  dispatch_radius_max_km: 15,
+  // PR-b: tempo global (s) do pedido antes de desistir → NO_DRIVERS.
+  dispatch_global_timeout_seconds: 300,
+  // Bloco 1 (compliance TNC F.S. 627.748): liga a máquina de estados P0-P3
+  // (src/lib/driverPeriodMachine.ts) + acumulador de milhagem por período
+  // (src/lib/driverPeriodMileage.ts) via a camada de wiring impura. DESLIGADO
+  // por padrão — enquanto off, nada é escrito em driver_period_transitions/
+  // driver_period_daily_mileage; habilitar por jurisdição só após validação.
+  period_tracking_v1_enabled: false,
+  // Bloco 2 (compliance TNC F.S. 627.748): anos de retenção de
+  // driver_period_transitions antes de a partição mensal correspondente ser
+  // purgada (DROP TABLE da partição — ver migration 0057). Piso técnico de 1
+  // ano é sempre aplicado na própria função de purge, mesmo que este valor
+  // seja configurado abaixo disso por engano.
+  period_retention_years: 5,
+  // Bloco 2 (compliance TNC F.S. 627.748): liga as Edge Functions
+  // administrativas admin-telematics-claims (claims lookup para a
+  // seguradora) e admin-telematics-export (export mensal de milhagem por
+  // período). DESLIGADO por padrão — habilitar por jurisdição só após
+  // validação. NÃO afeta a manutenção de partição/retenção em si, que roda
+  // sempre independente desta flag (é infraestrutura invisível ao usuário).
+  period_audit_v1_enabled: false,
+  // Bloco 3 (compliance TNC F.S. 627.748): liga os gates de onboarding no
+  // SERVIDOR (função driver_can_go_online() + trigger em driver_locations —
+  // ver migration 0059): desqualificação, recheck trienal e disclosure legal.
+  // DESLIGADO por padrão — enquanto off, driver_can_go_online() sempre
+  // devolve true e o gate de disponibilidade fica como estava antes do
+  // Bloco 3 (só verification_status + Stripe Connect, migration 0038).
+  onboarding_gates_v1_enabled: false,
+  // Bloco 3: TETO de anos entre reapurações de background check, independente
+  // da validade operacional (`background_check_valid_days`, P7). Ver
+  // ambiguidade documentada em src/lib/driverOnboardingGate.ts — as duas
+  // regras são independentes; a mais restritiva prevalece.
+  background_check_recheck_years: 3,
+  // Bloco 3: exige aceite do disclosure legal (driver_disclosure_acceptances)
+  // para o motorista ficar online. DESLIGADO por padrão.
+  driver_disclosure_required: false,
+  // Bloco 3: versão vigente do texto do disclosure legal. Trocar este valor
+  // (por jurisdição) faz o motorista precisar aceitar de novo — aceites de
+  // versões antigas continuam no histórico (tabela é append-only).
+  driver_disclosure_version: '1',
+  // Bloco 4 (compliance TNC F.S. 627.748): liga a ENFORCEMENT de suspensão de
+  // tolerância zero em driver_can_go_online() (migration 0060). O registro em
+  // driver_suspensions acontece sempre, independente desta flag — só o
+  // BLOQUEIO é condicional. Independente de onboarding_gates_v1_enabled
+  // (Bloco 3). DESLIGADO por padrão.
+  safety_suspension_gate_v1_enabled: false,
+  // Bloco 4: solicita ao passageiro que confirme foto do motorista + placa do
+  // veículo antes do embarque (prompt forte, não bloqueio rígido — ver
+  // src/lib/driverBoardingConfirmation.ts). DESLIGADO por padrão.
+  driver_confirmation_required: false,
+  // Bloco 4: mostra ao passageiro o botão de baixar/compartilhar o recibo
+  // eletrônico completo da corrida (reaproveita src/lib/waybill.ts +
+  // waybillExport.ts, já usados pelo motorista). DESLIGADO por padrão.
+  receipt_passenger_v1_enabled: false,
+  // Bloco 4: mostra ao passageiro (tela RateRide) o botão de denúncia de
+  // segurança contra o motorista (src/lib/safetyIncidents.ts). O registro em
+  // driver_safety_reports e o trigger de suspensão automática (migration
+  // 0060) SEMPRE existem no servidor — esta flag só controla se a UI de
+  // denúncia aparece no app. DESLIGADO por padrão.
+  safety_reports_v1_enabled: false,
+} as const;
+
+export type ConfigKey = keyof typeof CONFIG_DEFAULTS;
+
+const TTL_MS = 60_000;
+const cache = new Map<string, { value: unknown; at: number }>();
+
+/** Valor padrão local (síncrono) — útil como estado inicial antes de a query voltar. */
+export function getConfigDefault<K extends ConfigKey>(key: K): (typeof CONFIG_DEFAULTS)[K] {
+  return CONFIG_DEFAULTS[key];
+}
+
+/**
+ * Lê uma chave de configuração resolvendo "jurisdição específica → global".
+ * Retorna sempre um valor: o configurado, ou o DEFAULT local em caso de falha.
+ */
+export async function getConfig<K extends ConfigKey>(
+  key: K,
+  jurisdiction: string = 'global'
+): Promise<(typeof CONFIG_DEFAULTS)[K]> {
+  const cacheKey = `${jurisdiction}:${key}`;
+  const hit = cache.get(cacheKey);
+  if (hit && Date.now() - hit.at < TTL_MS) {
+    return hit.value as (typeof CONFIG_DEFAULTS)[K];
+  }
+
+  const fallback = CONFIG_DEFAULTS[key];
+
+  try {
+    const jurisdictions = jurisdiction === 'global' ? ['global'] : [jurisdiction, 'global'];
+    const { data, error } = await supabase
+      .from('system_config')
+      .select('jurisdiction, value')
+      .eq('key', key)
+      .in('jurisdiction', jurisdictions);
+
+    if (error || !data || data.length === 0) return fallback;
+
+    // Jurisdição específica sobrescreve a global.
+    const specific = data.find((r) => r.jurisdiction === jurisdiction);
+    const global = data.find((r) => r.jurisdiction === 'global');
+    const row = specific ?? global;
+    const value = (row?.value ?? fallback) as (typeof CONFIG_DEFAULTS)[K];
+
+    cache.set(cacheKey, { value, at: Date.now() });
+    return value;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Lê uma chave de configuração ESTRUTURADA (objeto/lista em jsonb) que não faz
+ * parte do mapa escalar CONFIG_DEFAULTS. Usa a mesma resolução "jurisdição
+ * específica → global" e sempre devolve um valor: o configurado ou o `fallback`.
+ *
+ * Motivação: features como geofences de taxas (P6) guardam uma LISTA de zonas
+ * em system_config. Manter isso fora de CONFIG_DEFAULTS evita poluir a tipagem
+ * escalar e permite fallback tipado explícito por chamada.
+ */
+export async function getConfigValue<T>(
+  key: string,
+  fallback: T,
+  jurisdiction: string = 'global'
+): Promise<T> {
+  const cacheKey = `${jurisdiction}:${key}`;
+  const hit = cache.get(cacheKey);
+  if (hit && Date.now() - hit.at < TTL_MS) {
+    return hit.value as T;
+  }
+
+  try {
+    const jurisdictions = jurisdiction === 'global' ? ['global'] : [jurisdiction, 'global'];
+    const { data, error } = await supabase
+      .from('system_config')
+      .select('jurisdiction, value')
+      .eq('key', key)
+      .in('jurisdiction', jurisdictions);
+
+    if (error || !data || data.length === 0) return fallback;
+
+    const specific = data.find((r) => r.jurisdiction === jurisdiction);
+    const global = data.find((r) => r.jurisdiction === 'global');
+    const row = specific ?? global;
+    const value = (row?.value ?? fallback) as T;
+
+    cache.set(cacheKey, { value, at: Date.now() });
+    return value;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Limpa o cache de config (ex.: após o admin salvar uma alteração). */
+export function clearConfigCache() {
+  cache.clear();
+}

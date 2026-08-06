@@ -32,6 +32,12 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
+
+# Google service account (credencial privada — nunca commitar)
+google-service-account.json
+google-services.json
+GoogleService-Info.plist
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +45,4 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+supabase/.temp/

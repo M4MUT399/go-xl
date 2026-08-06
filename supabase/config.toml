@@ -1,0 +1,23 @@
+# Configuração das Edge Functions do Go XL.
+#
+# Por padrão, o gateway do Supabase exige um Authorization header válido
+# (JWT) em TODA requisição, retornando 401 UNAUTHORIZED_NO_AUTH_HEADER antes
+# mesmo do código da função rodar. Isso quebra a página HTML de retorno do
+# Stripe Checkout (o navegador do usuário chega via redirect após cadastrar
+# o cartão, sem nenhum header de auth do Supabase).
+#
+# setup-card e connect-onboard-driver servem páginas de retorno públicas
+# (GET), mas continuam fazendo sua PRÓPRIA validação interna (getUser()) no
+# POST, que é a parte que realmente precisa de autenticação.
+
+[functions.setup-card]
+verify_jwt = false
+
+[functions.connect-onboard-driver]
+verify_jwt = false
+
+# track-trip serve a página PÚBLICA de rastreio ao vivo (GET, sem login). O
+# contato de confiança chega pelo link com um TOKEN opaco; a função valida o
+# token + expiração com service_role e devolve só campos whitelistados.
+[functions.track-trip]
+verify_jwt = false

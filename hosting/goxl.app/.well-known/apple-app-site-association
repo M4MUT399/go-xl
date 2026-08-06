@@ -1,0 +1,19 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "XQ42TB8472.com.goxl.app",
+        "paths": [
+          "/track",
+          "/track/*",
+          "/track?*",
+          "/qr",
+          "/qr/",
+          "/qr/*",
+          "/qr?*"
+        ]
+      }
+    ]
+  }
+}

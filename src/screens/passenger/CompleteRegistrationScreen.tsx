@@ -1,0 +1,223 @@
+/**
+ * CompleteRegistration — cadastro completo de uma conta EXPRESSA.
+ *
+ * Contas criadas via QR do motorista entram só com o cartão (nome provisório,
+ * sem telefone). Quando o passageiro vai agendar ou pedir a 2ª viagem, este
+ * gate cobra os dados que faltam: nome, e-mail, telefone e uma senha (para que
+ * ele consiga acessar a conta depois pelo login normal).
+ *
+ * Ao concluir, o telefone passa a estar preenchido → o perfil vira "completo"
+ * (ver src/lib/onboarding.ts) e os gates de corrida deixam de aparecer.
+ */
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Alert,
+} from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../types';
+import { Button } from '../../components/common/Button';
+import { Input } from '../../components/common/Input';
+import { useTheme } from '../../hooks/useTheme';
+import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
+import { isProfileComplete } from '../../lib/onboarding';
+import { useTranslation } from '../../i18n';
+
+type Props = {
+  navigation: NativeStackNavigationProp<RootStackParamList, 'CompleteRegistration'>;
+};
+
+export function CompleteRegistrationScreen({ navigation }: Props) {
+  const { profile, session, patchProfile, refreshProfile } = useAuth();
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const styles = makeStyles(colors);
+
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Mesma proteção do AddCardOnboardingScreen: este gate não deveria aparecer
+  // para quem já tem cadastro completo. Um profile null/desatualizado no
+  // momento do gate anterior (rede ruim) pode navegar para cá por engano —
+  // assim que confirmarmos (aqui, ou após o refresh abaixo) que já está
+  // completo, saímos em silêncio.
+  useEffect(() => {
+    if (isProfileComplete(profile)) {
+      if (navigation.canGoBack()) navigation.goBack();
+    }
+  }, [profile, navigation]);
+
+  useEffect(() => {
+    if (!isProfileComplete(profile)) refreshProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSave() {
+    const cleanName = fullName.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const digits = phone.replace(/\D/g, '');
+
+    if (!cleanName || !cleanEmail || !phone) {
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errRequiredFields'));
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errInvalidEmail'));
+      return;
+    }
+    if (digits.length < 10) {
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errInvalidPhone'));
+      return;
+    }
+    if (password.length < 6) {
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errPasswordLength'));
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert(t('completeReg.alertAttentionTitle'), t('completeReg.errPasswordMismatch'));
+      return;
+    }
+
+    const userId = profile?.id ?? session?.user?.id;
+    if (!userId) {
+      Alert.alert(t('completeReg.alertErrorTitle'), t('completeReg.errNoSession'));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // 1) Atualiza o perfil com os dados reais (telefone → cadastro completo).
+      const { error: profErr } = await supabase
+        .from('profiles')
+        .update({ full_name: cleanName, phone: digits, email: cleanEmail })
+        .eq('id', userId);
+      if (profErr) throw profErr;
+
+      // 2) Define uma senha real (para login futuro). Best-effort.
+      try {
+        await supabase.auth.updateUser({ password });
+      } catch { /* não bloqueia o cadastro */ }
+
+      // 3) Tenta trocar o e-mail de login para o real. Pode exigir confirmação
+      //    por e-mail dependendo da configuração do Supabase; por isso é
+      //    best-effort e não trava o fluxo.
+      try {
+        await supabase.auth.updateUser({ email: cleanEmail });
+      } catch { /* confirmação pendente — ok */ }
+
+      // 4) Atualiza o contexto local para os gates liberarem imediatamente.
+      patchProfile({ full_name: cleanName, phone: digits, email: cleanEmail });
+      try { await refreshProfile(); } catch { /* ignora falha de rede */ }
+
+      Alert.alert(
+        t('completeReg.successTitle'),
+        t('completeReg.successMessage'),
+        [{ text: t('completeReg.successContinue'), onPress: () => { if (navigation.canGoBack()) navigation.goBack(); } }]
+      );
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      Alert.alert(t('completeReg.alertErrorTitle'), err?.message ?? t('completeReg.errSaveFailed'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <KeyboardAwareScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        enableOnAndroid
+        extraScrollHeight={20}
+      >
+        <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
+          <Text style={styles.backText}>{t('completeReg.back')}</Text>
+        </TouchableOpacity>
+
+        <View style={styles.header}>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{t('completeReg.badge')}</Text>
+          </View>
+          <Text style={styles.title}>{t('completeReg.title')}</Text>
+          <Text style={styles.subtitle}>
+            {t('completeReg.subtitle')}
+          </Text>
+        </View>
+
+        <View style={styles.form}>
+          <Input
+            label={t('completeReg.fullNameLabel')}
+            value={fullName}
+            onChangeText={setFullName}
+            placeholder={t('completeReg.fullNamePlaceholder')}
+            autoCapitalize="words"
+          />
+          <Input
+            label={t('completeReg.phoneLabel')}
+            value={phone}
+            onChangeText={setPhone}
+            placeholder={t('completeReg.phonePlaceholder')}
+            keyboardType="phone-pad"
+          />
+          <Input
+            label={t('completeReg.emailLabel')}
+            value={email}
+            onChangeText={setEmail}
+            placeholder={t('completeReg.emailPlaceholder')}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+          <Input
+            label={t('completeReg.passwordLabel')}
+            value={password}
+            onChangeText={setPassword}
+            placeholder={t('completeReg.passwordPlaceholder')}
+            secureTextEntry
+          />
+          <Input
+            label={t('completeReg.confirmPasswordLabel')}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            placeholder={t('completeReg.confirmPasswordPlaceholder')}
+            secureTextEntry
+          />
+        </View>
+
+        <Button title={t('completeReg.saveButton')} onPress={handleSave} loading={loading} />
+      </KeyboardAwareScrollView>
+    </SafeAreaView>
+  );
+}
+
+function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scroll: { flexGrow: 1, padding: 24 },
+    back: { marginBottom: 20, alignSelf: 'flex-start' },
+    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+    header: { marginBottom: 24 },
+    badge: {
+      alignSelf: 'flex-start',
+      backgroundColor: colors.gray[100],
+      borderRadius: 20,
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      marginBottom: 16,
+    },
+    badgeText: { fontSize: 13, fontWeight: '600', color: colors.gray[600] },
+    title: {
+      fontSize: 32,
+      fontWeight: '800',
+      color: colors.text,
+      lineHeight: 40,
+      marginBottom: 8,
+    },
+    subtitle: { fontSize: 15, color: colors.gray[500], lineHeight: 21 },
+    form: { marginBottom: 24 },
+  });
+}

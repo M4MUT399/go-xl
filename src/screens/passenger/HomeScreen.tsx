@@ -1,0 +1,552 @@
+import React, { useRef, useState, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform, Linking,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { CarMarker } from '../../components/common/CarMarker';
+import { CrosshairIcon } from '../../components/common/CrosshairIcon';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList, Location } from '../../types';
+import { useTheme } from '../../hooks/useTheme';
+import { useTranslation } from '../../i18n';
+import { AppTheme } from '../../constants/theme';
+import { useLocation } from '../../hooks/useLocation';
+import { useCameraController } from '../../hooks/useCameraController';
+import { useAuth } from '../../hooks/useAuth';
+import { useNearbyDrivers } from '../../hooks/useNearbyDrivers';
+import { useUnreadMessages } from '../../hooks/useUnreadMessages';
+import { usePassengerRide } from '../../hooks/useRide';
+import { useUpcomingScheduledRide } from '../../hooks/useUpcomingScheduledRide';
+import { useScheduledReminderAlert } from '../../hooks/useScheduledReminderAlert';
+import { ScheduledRideBanner } from '../../components/common/ScheduledRideBanner';
+
+type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'PassengerTabs'> };
+
+export function HomeScreen({ navigation }: Props) {
+  const { profile } = useAuth();
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const { location, status, retry } = useLocation();
+  const { drivers } = useNearbyDrivers(true);
+  const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
+  // Corrida em andamento (requesting/accepted/driver_en_route/in_progress).
+  // Antes, ao sair da tela de busca/corrida, a viagem "sumia" (só vivia nos
+  // params de navegação e na subscription realtime). Agora o hook faz um fetch
+  // inicial, então conseguimos oferecer "retomar corrida" ao reabrir o app.
+  const { activeRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
+
+  // Próxima corrida AGENDADA do passageiro (com ou sem motorista) → banner fixo
+  // clicável + alerta sonoro in-app quando fica iminente. Espelha o motorista.
+  const upcomingScheduled = useUpcomingScheduledRide(profile?.id, 'passenger');
+  useScheduledReminderAlert(upcomingScheduled.imminent, upcomingScheduled.ride?.id ?? null);
+
+  const styles = makeStyles(colors);
+  // No Android, o topo (nome, calendário, avatar) fica colado demais na status
+  // bar em vários aparelhos — desce ~0.7cm (1cm ≈ 63dp) só nessa plataforma.
+  const ANDROID_HEADER_OFFSET = Platform.OS === 'android' ? 44 : 0;
+  // Altura real do topBar (paddingTop + maior filho [79, ícones] + paddingBottom).
+  const headerBarHeight = insets.top + 8 + ANDROID_HEADER_OFFSET + 79 + 14;
+  // Barra preta sólida cobrindo o cabeçalho + um degradê curto logo abaixo
+  // para não cortar bruscamente sobre o mapa.
+  const topGradientHeight = headerBarHeight + 40;
+  const headerFadeStart = headerBarHeight / topGradientHeight;
+
+  // Recarrega o badge de mensagens toda vez que a tela entra em foco
+  // (ex.: usuário volta do chat → AsyncStorage já atualizado → badge some)
+  useFocusEffect(
+    React.useCallback(() => { refresh(); }, [refresh])
+  );
+  const mapRef = useRef<MapView>(null);
+  // Bloco 1: câmera passa pelo CameraController (valida coord + clampa deltas).
+  const cam = useCameraController(mapRef, 'PassengerHome');
+  const [destination, setDestination] = useState('');
+
+  // Antes o mapa só montava depois do primeiro fix de GPS (`location` !=
+  // null), deixando o passageiro olhando "Carregando mapa..." por vários
+  // segundos ao abrir o app. Agora o MapView monta IMEDIATAMENTE com uma
+  // região padrão (Orlando, FL — mesma usada em DriverHomeScreen) e, assim
+  // que a localização real chegar pela primeira vez, anima suavemente até
+  // ela — sem bloquear a primeira renderização.
+  const hasCenteredRef = useRef(false);
+  useEffect(() => {
+    if (location && !hasCenteredRef.current) {
+      hasCenteredRef.current = true;
+      cam.region(
+        { lat: location.lat, lng: location.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 },
+        500,
+      );
+    }
+  }, [location]);
+
+  // Os marcadores de motorista renderizam uma <Image> (logo GoXL). Com
+  // tracksViewChanges=false o mapa "fotografa" o marcador uma vez — se a imagem
+  // ainda não pintou, o círculo sai vazio. Então rastreamos por ~1,2s sempre
+  // que a lista muda (tempo de a logo carregar) e depois desligamos, por
+  // performance. Mesmo padrão já usado em ActiveRide/DriverHome.
+  const [tracksDrivers, setTracksDrivers] = useState(true);
+  useEffect(() => {
+    setTracksDrivers(true);
+    const t = setTimeout(() => setTracksDrivers(false), 1200);
+    return () => clearTimeout(t);
+  }, [drivers]);
+
+  // Primeiro nome do passageiro; vazio quando o perfil ainda não tem nome.
+  // NÃO cair para o próprio "Olá" aqui — senão a saudação vira "Olá, Olá".
+  const firstName = profile?.full_name?.trim().split(' ')[0] ?? '';
+
+  function handleOpenChat() {
+    const target = chatRides.find(r => r.unread > 0) ?? chatRides[0];
+    if (target) {
+      navigation.navigate('Chat', { rideId: target.rideId, title: target.title });
+    }
+  }
+
+  function handleSearchFocus() {
+    navigation.navigate('RequestRide', {
+      destination: { lat: 0, lng: 0, address: destination },
+    });
+  }
+
+  function handleResumeRide() {
+    if (!activeRide) return;
+    // 'requesting' ainda está procurando motorista → tela de busca.
+    // Demais estados (accepted/driver_en_route/in_progress) → corrida ativa.
+    if (activeRide.status === 'requesting') {
+      navigation.navigate('FindingDriver', { ride: activeRide });
+    } else {
+      navigation.navigate('ActiveRide', { ride: activeRide });
+    }
+  }
+
+  const resumeLabel =
+    activeRide?.status === 'requesting'
+      ? t('home.resumeRequesting')
+      : activeRide?.status === 'accepted'
+        ? t('home.resumeAccepted')
+        : activeRide?.status === 'driver_en_route'
+          ? t('home.resumeEnroute')
+          : t('home.resumeInProgress');
+
+  function recenter() {
+    if (!location) return;
+    cam.region(
+      { lat: location.lat, lng: location.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+      500,
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      {status === 'denied' ? (
+        <View style={[styles.map, styles.mapPlaceholder]}>
+          <View style={styles.mapError}>
+            <Text style={styles.mapErrorEmoji}>📍</Text>
+            <Text style={styles.mapErrorTitle}>{t('home.locationOff')}</Text>
+            <Text style={styles.mapErrorText}>
+              {t('home.locationOffBody')}
+            </Text>
+            <TouchableOpacity style={styles.mapErrorBtn} onPress={() => Linking.openSettings()}>
+              <Text style={styles.mapErrorBtnText}>{t('home.openSettings')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+          // Monta com uma região padrão (Orlando, FL) e anima até a localização
+          // real assim que o GPS responder (ver efeito acima) — o mapa aparece
+          // na hora, em vez de esperar o primeiro fix de localização.
+          initialRegion={{
+            latitude: location?.lat ?? 28.5383,
+            longitude: location?.lng ?? -81.3792,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }}
+          showsUserLocation
+          showsMyLocationButton={false}
+          // O estilo escuro (navy/gold) do Google Maps SDK no Android renderiza
+          // como "modo noturno" mesmo de dia — visualmente diferente do MapKit
+          // (iOS), que aplica o mesmo customMapStyle de forma mais suave. Por
+          // isso, no Android usamos o estilo padrão (claro) do Maps.
+          customMapStyle={Platform.OS === 'android' ? [] : darkMapStyle}
+          onMapReady={() => cam.setReady(true)}
+        >
+          {/* O ponto de localização do usuário é o nativo (showsUserLocation
+           * acima), que reflete o GPS ao vivo do sistema — nunca fica
+           * desatualizado. Antes havia também um marcador dourado customizado
+           * amarrado ao `location` (estado em JS, alimentado por cache/fix
+           * assíncrono); quando esse cache ficava desatualizado, o marcador
+           * dourado podia aparecer numa posição BEM diferente da real (ex.:
+           * dentro de um lago), enquanto o ponto nativo já mostrava o lugar
+           * certo. Removido para eliminar essa classe de bug de vez. */}
+
+          {drivers.map((d) => (
+            <Marker
+              key={d.driver_id}
+              coordinate={{ latitude: d.lat, longitude: d.lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={tracksDrivers}
+            >
+              <CarMarker heading={d.heading ?? 0} />
+            </Marker>
+          ))}
+        </MapView>
+      )}
+      {status === 'error' && (
+        <View style={styles.mapErrorOverlay} pointerEvents="box-none">
+          <View style={styles.mapError}>
+            <Text style={styles.mapErrorEmoji}>📍</Text>
+            <Text style={styles.mapErrorTitle}>{t('home.noLocation')}</Text>
+            <Text style={styles.mapErrorText}>
+              {t('home.noLocationBody')}
+            </Text>
+            <TouchableOpacity style={styles.mapErrorBtn} onPress={() => retry()}>
+              <Text style={styles.mapErrorBtnText}>{t('home.retry')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Full-bleed: vai até a borda real da tela, ignorando o inset da
+          SafeAreaView (por baixo da status bar/notch) — barra preta a 60% de
+          opacidade por trás do cabeçalho (nome, calendário, chat e avatar),
+          com um degradê curto logo abaixo (60% → 0%) para não cortar
+          bruscamente sobre o mapa. */}
+      <View pointerEvents="none" style={[styles.topGradient, { height: topGradientHeight }]}>
+        <Svg width="100%" height="100%">
+          <Defs>
+            <SvgLinearGradient id="topFade" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#000000" stopOpacity={0.6} />
+              <Stop offset={headerFadeStart} stopColor="#000000" stopOpacity={0.6} />
+              <Stop offset="1" stopColor="#000000" stopOpacity={0} />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height="100%" fill="url(#topFade)" />
+        </Svg>
+      </View>
+
+      <SafeAreaView style={styles.overlay} pointerEvents="box-none">
+        <View style={styles.topBar}>
+          <View style={styles.greeting}>
+            <Text style={styles.greetingText}>
+              {firstName ? `${t('home.greeting')}, ${firstName}` : t('home.greeting')}
+            </Text>
+            <View style={styles.categoryBadge}>
+              <Text style={styles.categoryText}>{t('profile.passenger')}</Text>
+            </View>
+          </View>
+          <View style={styles.topActions}>
+            <TouchableOpacity style={styles.scheduleIcon} onPress={() => navigation.navigate('ScheduledRides')}>
+              <Text style={styles.scheduleIconText}>🗓️</Text>
+            </TouchableOpacity>
+            {chatRides.length > 0 && (
+              <TouchableOpacity style={styles.chatIcon} onPress={handleOpenChat}>
+                <Text style={styles.chatIconText}>💬</Text>
+                {totalUnread > 0 && (
+                  <View style={styles.chatBadge}>
+                    <Text style={styles.chatBadgeText}>
+                      {totalUnread > 9 ? '9+' : String(totalUnread)}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.avatar}
+              onPress={() => (navigation as unknown as { navigate: (route: string) => void }).navigate('Perfil')}
+            >
+              <Text style={styles.avatarText}>{firstName ? firstName[0].toUpperCase() : '·'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.bottomArea} pointerEvents="box-none">
+          {/* Banner clicável da próxima corrida agendada → abre a tela de
+              agendadas (card com todos os dados). Só aparece dentro da janela
+              configurável (scheduled_ride_banner_minutes, padrão 2h). */}
+          {upcomingScheduled.showBanner && upcomingScheduled.ride && (
+            <ScheduledRideBanner
+              ride={upcomingScheduled.ride}
+              minutesUntil={upcomingScheduled.minutesUntil}
+              imminent={upcomingScheduled.imminent}
+              onPress={() => navigation.navigate('ScheduledRides')}
+            />
+          )}
+          <View style={styles.bottomRow} pointerEvents="box-none">
+            <View style={styles.driversStatus}>
+              <View style={[styles.statusDot, drivers.length > 0 ? styles.statusOnline : styles.statusOffline]} />
+              <Text style={styles.driversStatusText}>
+                {drivers.length > 0
+                  ? `${drivers.length} ${drivers.length === 1 ? t('home.driverSingular') : t('home.driverPlural')} ${t('home.nearby')}`
+                  : t('home.searchingDrivers')}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
+              {/* colors.text (não colors.primary): no escuro o botão é navy
+                  (colors.card) e primary também é navy — a mira sumia. text
+                  inverte para claro no dark e mantém contraste nos dois temas. */}
+              <CrosshairIcon size={27.5} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+
+          {activeRide ? (
+            <View style={styles.searchContainer}>
+              <TouchableOpacity style={styles.resumeBanner} onPress={handleResumeRide} activeOpacity={0.9}>
+                <View style={styles.resumePulse} />
+                <View style={styles.resumeInfo}>
+                  <Text style={styles.resumeTitle}>{resumeLabel}</Text>
+                  <Text style={styles.resumeSubtitle} numberOfLines={1}>
+                    {activeRide.destination_address
+                      ? `${t('home.resumeTo')} ${activeRide.destination_address}`
+                      : t('home.resumeTap')}
+                  </Text>
+                </View>
+                <View style={styles.searchArrow}>
+                  <Text style={styles.searchArrowText}>→</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.searchContainer}>
+              <TouchableOpacity style={styles.searchBox} onPress={handleSearchFocus} activeOpacity={0.9}>
+                <View style={styles.originDot} />
+                <Text style={styles.searchPlaceholder}>{t('home.searchPlaceholder')}</Text>
+                <View style={styles.searchArrow}>
+                  <Text style={styles.searchArrowText}>→</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </SafeAreaView>
+    </View>
+  );
+}
+
+const darkMapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#1a1a2e' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#8ec3b9' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#1a3646' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#16213e' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#0f3460' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#0f3460' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0d1b2a' }] },
+];
+
+function makeStyles(colors: AppTheme) {
+  return StyleSheet.create({
+    container: { flex: 1 },
+    map: { flex: 1 },
+    mapPlaceholder: {
+      backgroundColor: colors.primaryLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    mapErrorOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(15,15,30,0.85)',
+    },
+    mapPlaceholderText: { color: colors.gray[400] },
+    mapError: { alignItems: 'center', paddingHorizontal: 40 },
+    mapErrorEmoji: { fontSize: 40, marginBottom: 12 },
+    mapErrorTitle: { color: colors.white, fontSize: 18, fontWeight: '700', marginBottom: 8 },
+    mapErrorText: { color: colors.gray[400], fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 20 },
+    mapErrorBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: 12,
+      paddingHorizontal: 24,
+      paddingVertical: 12,
+    },
+    mapErrorBtnText: { color: colors.primary, fontSize: 15, fontWeight: '700' },
+    overlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      justifyContent: 'space-between',
+    },
+    topGradient: {
+      // Sem zIndex: a ordem de montagem (antes da SafeAreaView) já garante
+      // que o degradê fica por baixo do conteúdo do cabeçalho.
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+    },
+    topBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      // No Android desce ~0.7cm (44dp) a mais — nome/calendário/avatar ficam
+      // colados demais na status bar em vários aparelhos nessa plataforma.
+      paddingTop: 8 + (Platform.OS === 'android' ? 44 : 0),
+      paddingBottom: 14,
+      // O fundo (barra preta 60% → transparente) vem do topGradient, que fica
+      // por baixo desta barra e se estende até a borda real da tela.
+      backgroundColor: 'transparent',
+    },
+    greeting: {},
+    greetingText: { fontSize: 20, fontWeight: '700', color: colors.white },
+    categoryBadge: {
+      alignSelf: 'flex-start',
+      backgroundColor: 'rgba(201,168,76,0.2)',
+      borderRadius: 12,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      marginTop: 2,
+    },
+    categoryText: { color: colors.accent, fontSize: 11, fontWeight: '600' },
+    topActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    scheduleIcon: {
+      width: 79,
+      height: 79,
+      borderRadius: 39.5,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    scheduleIconText: { fontSize: 34 },
+    chatIcon: {
+      width: 79,
+      height: 79,
+      borderRadius: 39.5,
+      backgroundColor: 'rgba(255,255,255,0.12)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    chatIconText: { fontSize: 34 },
+    chatBadge: {
+      position: 'absolute',
+      top: 2,
+      right: 2,
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: '#ef4444',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 4,
+      borderWidth: 1.5,
+      borderColor: 'rgba(26,26,46,0.9)',
+    },
+    chatBadgeText: { color: colors.white, fontSize: 10, fontWeight: '800' },
+    avatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarText: { color: colors.primary, fontSize: 18, fontWeight: '800' },
+    bottomArea: {},
+    bottomRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      marginBottom: 12,
+    },
+    driversStatus: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: 'rgba(15,15,30,0.85)',
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+    },
+    statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+    statusOnline: { backgroundColor: '#22C55E' },
+    statusOffline: { backgroundColor: colors.gray[400] },
+    driversStatusText: { color: colors.white, fontSize: 13, fontWeight: '600' },
+    recenterBtn: {
+      // 25% maior que o botão original (44 → 55) e com visual de mira.
+      width: 55,
+      height: 55,
+      borderRadius: 27.5,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 5,
+    },
+
+    searchContainer: {
+      paddingHorizontal: 16,
+      paddingBottom: 32,
+    },
+    searchBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      height: 58,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.2,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    originDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.accent,
+      marginRight: 12,
+    },
+    searchPlaceholder: { flex: 1, fontSize: 16, color: colors.gray[400] },
+    searchArrow: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    searchArrowText: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+    resumeBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      minHeight: 58,
+      paddingVertical: 10,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    resumePulse: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.accent,
+      marginRight: 12,
+    },
+    resumeInfo: { flex: 1 },
+    resumeTitle: { fontSize: 15, fontWeight: '700', color: colors.white },
+    resumeSubtitle: { fontSize: 12, color: colors.gray[400], marginTop: 2 },
+  });
+}

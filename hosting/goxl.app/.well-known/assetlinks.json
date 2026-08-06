@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.goxl.app",
+      "sha256_cert_fingerprints": [
+        "75:42:79:DE:6B:CD:0D:9D:2E:63:24:55:03:F8:46:9A:3F:A7:62:BC:42:7D:C3:3D:1E:90:55:18:56:A7:F1:B9",
+        "34:8E:C3:ED:E1:87:74:09:A0:12:FD:7C:47:86:16:E9:87:71:DB:DD:11:53:06:A2:F6:B5:0F:DA:E2:90:14:0E"
+      ]
+    }
+  }
+]
