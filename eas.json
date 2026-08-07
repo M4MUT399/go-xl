@@ -56,7 +56,7 @@
       },
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",
-        "track": "alpha"
+        "track": "production"
       }
     }
   }
