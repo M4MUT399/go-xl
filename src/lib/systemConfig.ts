@@ -122,6 +122,21 @@ export const CONFIG_DEFAULTS = {
   // EAS) + permissão "sempre" de localização + notificação persistente no
   // Android (foreground service) — por isso DESLIGADO por padrão. Habilitar por
   // jurisdição só após o rebuild estar publicado nas lojas e QA em campo.
+  //
+  // ⚠️ 10/08/2026 — NÃO LIGUE ESTA FLAG NO ANDROID. O Google Play rejeitou a
+  // atualização por "Feature doesn't meet requirements to access location in
+  // the background": a permissão estava no manifesto e a declaração no Console
+  // descrevia o recurso, mas o revisor nunca conseguiu VER o recurso — ele só
+  // aparece dentro de uma corrida ativa (DriverNavigateScreen), e esta flag
+  // estava OFF na produção. Seguindo a orientação do próprio e-mail de
+  // rejeição, ACCESS_BACKGROUND_LOCATION saiu do app.json (agora em
+  // `blockedPermissions`, com `isAndroidBackgroundLocationEnabled: false`).
+  // Portanto, no Android, ligar a flag hoje só faria aparecer o aviso de
+  // consentimento e falhar em requestBackgroundPermissionsAsync().
+  // Para reativar: (1) devolver a permissão ao app.json, (2) refazer a
+  // declaração de localização em segundo plano com um vídeo em que o recurso
+  // seja reproduzível pelo revisor com a conta DRIVER de teste, (3) publicar e
+  // só então ligar a flag por jurisdição.
   nav_background_location_v1: false,
   // Fase 8 (navegação, F5): GEOFENCE DE CHEGADA (~50 m). Quando o motorista chega
   // ao alvo da fase (embarque na fase pickup, destino na dropoff), a UI destaca a
