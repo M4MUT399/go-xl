@@ -1,12 +1,21 @@
 import type { Location } from '../types';
+import { callEdgeFunction } from './edgeFunction';
 
-// ─── Google Places (principal) ──────────────────────────────────────────────
-// Usa a mesma chave do Google Maps já configurada no app. Requer que a
-// "Places API" esteja ativada no projeto do Google Cloud.
-const GOOGLE_KEY =
-  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ??
-  'AIzaSyCfBXirHVjDBxKjHjWQiV_RW2cFMcy6aPE';
-const GOOGLE_PLACES = 'https://maps.googleapis.com/maps/api/place';
+// ─── Google Places / Geocoding (principal) ──────────────────────────────────
+// Item #81: antes disso fazíamos fetch() DIRETO da Google aqui, com a chave
+// como query param — uma chamada REST do cliente nunca pode ser restringida
+// por app no Google Cloud, então essa chave era necessariamente irrestrita e
+// extraível do bundle publicado. Agora a chamada passa pela Edge Function
+// `places-search` (mesmo padrão de src/lib/nav/directions.ts): a chave real
+// (GOOGLE_PLACES_API_KEY) fica só no servidor, nunca embutida no app. Ver
+// supabase/functions/places-search/index.ts.
+
+interface GooglePlaceApiResult {
+  name: string;
+  formatted_address: string;
+  geometry: { location: { lat: number; lng: number } };
+  types?: string[];
+}
 
 // ─── Nominatim (fallback gratuito) ──────────────────────────────────────────
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -55,40 +64,17 @@ function categoryLabel(types: string[] = []): string | undefined {
   return undefined;
 }
 
-// ─── Busca via Google Places Text Search ────────────────────────────────────
+// ─── Busca via Google Places Text Search (proxiada pela Edge Function) ──────
 async function googleTextSearch(
   query: string,
   near?: { lat: number; lng: number }
 ): Promise<GeocodeResult[]> {
-  const params = new URLSearchParams({
-    query,
-    key: GOOGLE_KEY,
-    language: 'en',
-    region: 'us',
-  });
-  // Vincula os resultados à região do usuário (raio de 50 km)
-  if (near) {
-    params.set('location', `${near.lat},${near.lng}`);
-    params.set('radius', '50000');
-  }
+  const { results } = await callEdgeFunction<{ results: GooglePlaceApiResult[] }>(
+    'places-search',
+    { action: 'search', query, near }
+  );
 
-  const res = await fetch(`${GOOGLE_PLACES}/textsearch/json?${params.toString()}`);
-  if (!res.ok) throw new Error(`places ${res.status}`);
-  const json = (await res.json()) as {
-    status: string;
-    results?: Array<{
-      name: string;
-      formatted_address: string;
-      geometry: { location: { lat: number; lng: number } };
-      types?: string[];
-    }>;
-  };
-
-  if (json.status !== 'OK' && json.status !== 'ZERO_RESULTS') {
-    throw new Error(`places status ${json.status}`);
-  }
-
-  return (json.results ?? []).slice(0, 12).map((item) => ({
+  return (results ?? []).map((item) => ({
     lat: item.geometry.location.lat,
     lng: item.geometry.location.lng,
     address: item.formatted_address,
@@ -154,25 +140,14 @@ export async function searchAddresses(
 }
 
 export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
-  // Google reverse geocoding (mais preciso)
+  // Google reverse geocoding (mais preciso), proxiado pela Edge Function
+  // `places-search` — ver comentário no topo do arquivo (item #81).
   try {
-    const params = new URLSearchParams({
-      latlng: `${lat},${lng}`,
-      key: GOOGLE_KEY,
-      language: 'en',
-    });
-    const res = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`
+    const { formatted_address } = await callEdgeFunction<{ formatted_address: string | null }>(
+      'places-search',
+      { action: 'reverse', lat, lng }
     );
-    if (res.ok) {
-      const json = (await res.json()) as {
-        status: string;
-        results?: Array<{ formatted_address: string }>;
-      };
-      if (json.status === 'OK' && json.results?.[0]) {
-        return shorten(json.results[0].formatted_address);
-      }
-    }
+    if (formatted_address) return shorten(formatted_address);
   } catch {
     // segue para o fallback
   }

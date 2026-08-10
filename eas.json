@@ -5,6 +5,7 @@
   },
   "build": {
     "development": {
+      "environment": "development",
       "developmentClient": true,
       "distribution": "internal",
       "env": {
@@ -20,6 +21,7 @@
       }
     },
     "preview": {
+      "environment": "preview",
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://zukydkodafdmhaulhxeh.supabase.co",
@@ -34,6 +36,7 @@
       }
     },
     "production": {
+      "environment": "production",
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://zukydkodafdmhaulhxeh.supabase.co",
@@ -57,6 +60,13 @@
       "android": {
         "serviceAccountKeyPath": "./google-service-account.json",
         "track": "production"
+      }
+    },
+    "producao-sem-revisao": {
+      "android": {
+        "serviceAccountKeyPath": "./google-service-account.json",
+        "track": "production",
+        "changesNotSentForReview": true
       }
     }
   }

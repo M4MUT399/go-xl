@@ -1,7 +1,7 @@
 // Supabase Edge Function — PROXY da Google Directions API (Fase 1, navegação).
 //
-// Por que existe: a chave do Google no app.json é uma chave de Maps SDK
-// EMBUTIDA no cliente. Usá-la para chamadas HTTP da Directions API exporia a
+// Por que existe: as chaves do Google em app.config.js são chaves de Maps SDK
+// EMBUTIDAS no cliente. Usá-las para chamadas HTTP da Directions API exporia a
 // chave a scraping/cobrança. Esta função guarda uma chave SECRETA no servidor
 // (GOOGLE_DIRECTIONS_API_KEY), chama a Directions API com departure_time=now
 // (ETA COM TRÂNSITO) e devolve o JSON cru da Google — o cliente normaliza num
@@ -11,7 +11,9 @@
 //   → JSON da Google Directions ({ status, routes: [...] })
 //
 // Setup (uma vez):
-//   1) Google Cloud Console → habilitar "Directions API" no projeto goxl-2026
+//   1) Google Cloud Console → habilitar "Directions API" no projeto do Go XL
+//      (atenção: NÃO é o `goxl-2026`, que só tem a service account da Play e
+//      nem faturamento ativo — confira em qual projeto o Maps está habilitado)
 //   2) Criar/reutilizar uma chave de servidor (SEM restrição de app; de
 //      preferência restrita por IP/API à Directions API)
 //   3) supabase secrets set GOOGLE_DIRECTIONS_API_KEY=xxxx
