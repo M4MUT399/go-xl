@@ -51,6 +51,12 @@
     }
   },
   "submit": {
+    "interno": {
+      "android": {
+        "serviceAccountKeyPath": "./google-service-account.json",
+        "track": "internal"
+      }
+    },
     "production": {
       "ios": {
         "appleId": "edson@edsonluiz.adv.br",
