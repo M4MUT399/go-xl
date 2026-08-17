@@ -122,10 +122,14 @@ function maneuverInstruction(type: string, modifier?: string, name?: string): { 
 }
 
 // Retorna { nowKey } quando muito perto (resolvido com t() no componente) ou o texto formatado.
+// Unidades imperiais: o app opera nos EUA e o resto das telas já usa milhas
+// (lib/format.formatDistance). Abaixo de ~1000 pés mostra em pés arredondados
+// de 50 em 50, como Google/Waze fazem na navegação americana.
 function formatStepDist(meters: number): { nowKey: string } | string {
-  if (meters < 30)   return { nowKey: 'driverNav.distNow' };
-  if (meters < 1000) return `${Math.round(meters / 10) * 10} m`;
-  return `${(meters / 1000).toFixed(1)} km`;
+  if (meters < 30) return { nowKey: 'driverNav.distNow' };
+  const feet = meters * 3.28084;
+  if (feet < 1000) return `${Math.round(feet / 50) * 50} ft`;
+  return `${(meters / 1609.344).toFixed(1)} mi`;
 }
 
 // ─── Componente ──────────────────────────────────────────────────────────────
@@ -825,7 +829,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
       : `${m}:${s.toString().padStart(2, '0')}`;
   })();
-  const speedKmh = location?.speed != null ? Math.round(location.speed * 3.6) : null;
+  // location.speed vem em m/s; 1 m/s = 2.23694 mph.
+  const speedMph = location?.speed != null ? Math.round(location.speed * 2.23694) : null;
 
   // Confirmação DUPLA antes de avançar de fase (embarque → destino → finalizar):
   // evita toque acidental encerrando/avançando a corrida sem querer.
@@ -1271,8 +1276,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.compactDivider} />
           <View style={styles.compactStat}>
-            <Text style={styles.compactStatValue}>{speedKmh != null ? speedKmh : '--'}</Text>
-            <Text style={styles.compactStatLabel}>km/h</Text>
+            <Text style={styles.compactStatValue}>{speedMph != null ? speedMph : '--'}</Text>
+            <Text style={styles.compactStatLabel}>mph</Text>
           </View>
         </View>
 
