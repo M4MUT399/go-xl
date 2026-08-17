@@ -3,7 +3,9 @@
 // Eventos tratados:
 //   checkout.session.completed (mode=setup) → grava payment_method_id + card_last4 + card_brand
 //   payment_intent.succeeded                → marca rides.paid = true (backup do charge-ride)
+//                                              SÓ para a tarifa; gorjeta é ignorada
 //   payment_intent.payment_failed           → marca rides.paid = false (cobrança recusada)
+//                                              SÓ para a tarifa; gorjeta é ignorada
 //   account.updated                          → espelha flags Connect + atribui faixa de
 //                                              comissão na 1ª habilitação + tira o motorista
 //                                              do ar se a conta for desabilitada pelo Stripe
@@ -192,11 +194,24 @@ Deno.serve(async (req) => {
   }
 
   // ── payment_intent.succeeded (backup) ───────────────────────────────────
+  // ATENÇÃO ao filtro por `type`: a GORJETA também carrega `rideId` no metadata
+  // (veja tip-ride, que usa `{ rideId, type: 'tip' }`). Sem esse filtro, uma
+  // gorjeta aprovada marcava a corrida inteira como PAGA, mesmo que a tarifa
+  // nunca tivesse sido cobrada — foi exatamente o que aconteceu na corrida
+  // 6acaf884 (tarifa de US$ 49,77 nunca cobrada, gorjeta de US$ 10,00 quitando
+  // a corrida no banco). Pior: isso anulava a rede de segurança do app, que só
+  // cobra na conclusão quando `paid` é falso.
+  //
+  // O teste é "não é gorjeta" em vez de "é tarifa" de propósito: PaymentIntents
+  // antigos da tarifa foram criados sem `type` no metadata, e continuam válidos.
   if (event.type === 'payment_intent.succeeded') {
     const pi     = event.data.object as Stripe.PaymentIntent;
     const rideId = pi.metadata?.rideId;
-    if (rideId) {
-      await admin.from('rides').update({ paid: true }).eq('id', rideId);
+    if (rideId && pi.metadata?.type !== 'tip') {
+      await admin
+        .from('rides')
+        .update({ paid: true, stripe_payment_intent_id: pi.id })
+        .eq('id', rideId);
     }
   }
 
@@ -207,7 +222,8 @@ Deno.serve(async (req) => {
   if (event.type === 'payment_intent.payment_failed') {
     const pi     = event.data.object as Stripe.PaymentIntent;
     const rideId = pi.metadata?.rideId;
-    if (rideId) {
+    // Mesmo cuidado do succeeded: gorjeta recusada não torna a corrida não-paga.
+    if (rideId && pi.metadata?.type !== 'tip') {
       await admin.from('rides').update({ paid: false }).eq('id', rideId);
     }
     console.warn('⚠️ payment_intent.payment_failed', {

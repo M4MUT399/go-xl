@@ -109,7 +109,8 @@ Deno.serve(async (req) => {
       payment_method: p.stripe_payment_method_id,
       off_session: true,
       confirm: true,
-      metadata: { rideId },
+      // `type` explícito: o webhook distingue tarifa de gorjeta por este campo.
+      metadata: { rideId, type: 'fare' },
       description: 'Go XL — Executive XL',
     }, {
       // Idempotência no lado do Stripe: duas chamadas rápidas para a mesma
