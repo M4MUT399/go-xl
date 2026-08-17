@@ -19,6 +19,7 @@
 import type MapView from 'react-native-maps';
 import { addBreadcrumb, reportWarning } from '../errorReporting';
 import {
+  clampAltitude,
   clampRegionDelta,
   clampZoom,
   sanitizeCoords,
@@ -26,6 +27,7 @@ import {
   DEFAULT_GUARD,
   type GuardConfig,
 } from './cameraGuard';
+import { altitudeForZoom } from './follow';
 import { setLastValidCamera } from './lastCamera';
 
 export interface CameraTarget {
@@ -103,13 +105,17 @@ export class CameraController {
     if (!map || !this.ready) return false;
 
     if (!this.opts.enabled()) {
-      // Pass-through legado (flag OFF): comportamento antigo, sem guarda.
+      // Pass-through legado (flag OFF): sem guarda de coordenada/clamp. A
+      // `altitude` vai mesmo assim — sem ela o iOS não recebe escala nenhuma e
+      // o mapa se afasta sozinho (ver nav/follow.altitudeForZoom), então o
+      // rollback da flag não pode significar rollback deste bug.
       map.animateCamera(
         {
           center: target ? { latitude: target.lat, longitude: target.lng } : undefined,
           heading: pose.heading,
           pitch: pose.pitch,
           zoom: pose.zoom,
+          altitude: altitudeForZoom(pose.zoom),
         } as any,
         { duration: durationMs },
       );
@@ -132,6 +138,12 @@ export class CameraController {
     const { zoom, clamped } = clampZoom(pose.zoom, this.guard);
     if (clamped) this.reject('zoom_clamped', { zoom: pose.zoom ?? 0 });
 
+    // O iOS ignora `zoom` e só obedece `altitude`; o Android é o contrário.
+    // Mandamos as duas — sem a altitude, o clamp acima não protege nada no
+    // iPhone (ver nav/follow.altitudeForZoom).
+    const { altitude, clamped: altClamped } = clampAltitude(altitudeForZoom(zoom), this.guard);
+    if (altClamped) this.reject('altitude_clamped', { altitude: altitude ?? 0 });
+
     this.commitValid(target!.lat, target!.lng);
     map.animateCamera(
       {
@@ -139,6 +151,7 @@ export class CameraController {
         heading: pose.heading,
         pitch: pose.pitch,
         zoom,
+        altitude,
       } as any,
       { duration: durationMs },
     );

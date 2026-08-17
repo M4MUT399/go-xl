@@ -1,4 +1,5 @@
 import {
+  clampAltitude,
   clampRegionDelta,
   clampZoom,
   firstValidCoord,
@@ -114,6 +115,26 @@ describe('clampZoom', () => {
   it('zoom ausente/inválido → undefined sem clamp', () => {
     expect(clampZoom(undefined)).toEqual({ zoom: undefined, clamped: false });
     expect(clampZoom(NaN)).toEqual({ zoom: undefined, clamped: false });
+  });
+});
+
+describe('clampAltitude', () => {
+  it('mantém altitude dentro da faixa operacional', () => {
+    expect(clampAltitude(350)).toEqual({ altitude: 350, clamped: false });
+  });
+  it('corrige altitude alta demais para o teto anti-continente', () => {
+    // É este o caso do bug do iPhone: a altitude realimentada cresce a cada fix.
+    expect(clampAltitude(120_000)).toEqual({
+      altitude: DEFAULT_GUARD.maxAltitude,
+      clamped: true,
+    });
+  });
+  it('corrige altitude baixa demais para o piso', () => {
+    expect(clampAltitude(1)).toEqual({ altitude: DEFAULT_GUARD.minAltitude, clamped: true });
+  });
+  it('altitude ausente/inválida → undefined sem clamp', () => {
+    expect(clampAltitude(undefined)).toEqual({ altitude: undefined, clamped: false });
+    expect(clampAltitude(NaN)).toEqual({ altitude: undefined, clamped: false });
   });
 });
 

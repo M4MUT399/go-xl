@@ -1,11 +1,13 @@
 import {
   zoomForSpeed,
+  altitudeForZoom,
   headingForMotion,
   updateOffRoute,
   initialOffRouteState,
   SLOW_ZOOM,
   FAST_ZOOM,
   BASE_ZOOM,
+  BASE_ALTITUDE,
 } from '../follow';
 
 const kmhToMps = (kmh: number): number => kmh / 3.6;
@@ -26,6 +28,31 @@ describe('nav/follow — zoom dinâmico por velocidade', () => {
   test('nula/indefinida = parado', () => {
     expect(zoomForSpeed(null)).toBe(SLOW_ZOOM);
     expect(zoomForSpeed(undefined)).toBe(SLOW_ZOOM);
+  });
+});
+
+describe('nav/follow — altitude equivalente ao zoom (iOS/MapKit)', () => {
+  test('o zoom base corresponde à altitude âncora', () => {
+    expect(altitudeForZoom(BASE_ZOOM)).toBe(BASE_ALTITUDE);
+  });
+  test('cada nível de zoom dobra ou divide a altitude', () => {
+    expect(altitudeForZoom(SLOW_ZOOM)).toBe(175); // 18.5 → mais perto
+    expect(altitudeForZoom(FAST_ZOOM)).toBe(700); // 16.5 → mais longe
+    expect(altitudeForZoom(BASE_ZOOM - 1)).toBe(BASE_ALTITUDE * 2);
+  });
+  test('zoom ausente/inválido não inventa altitude', () => {
+    expect(altitudeForZoom(undefined)).toBeUndefined();
+    expect(altitudeForZoom(null)).toBeUndefined();
+    expect(altitudeForZoom(NaN)).toBeUndefined();
+  });
+  test('toda a faixa operacional de velocidade cabe no teto anti-continente', () => {
+    // Se qualquer zoomForSpeed gerasse altitude acima do teto do guarda, o clamp
+    // atuaria em operação normal — sinal de que a conversão está errada.
+    for (let kmh = 0; kmh <= 200; kmh += 5) {
+      const alt = altitudeForZoom(zoomForSpeed(kmh / 3.6))!;
+      expect(alt).toBeGreaterThan(50);
+      expect(alt).toBeLessThan(5000);
+    }
   });
 });
 

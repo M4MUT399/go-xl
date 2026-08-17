@@ -26,6 +26,29 @@ export function zoomForSpeed(speedMps: number | null | undefined): number {
   return round2(SLOW_ZOOM + (FAST_ZOOM - SLOW_ZOOM) * f);
 }
 
+// ─── Altitude da câmera (iOS / MapKit) ───────────────────────────────────────
+//
+// `zoom` só existe no Google Maps (Android). O MKMapView do iOS NÃO lê essa
+// chave em animateCamera — o bridge (RCTConvert+AirMap.m) só olha
+// center/pitch/altitude/heading. Sem mandar `altitude`, o nativo copia a câmera
+// atual e, com pitch != 0, a altitude relida volta maior que a aplicada: cada
+// fix de GPS realimenta um valor um pouco maior e o mapa se afasta sozinho até a
+// visão de continente. Por isso toda pose manda AS DUAS chaves — o Android
+// ignora `altitude`, o iOS ignora `zoom`.
+
+/** Altitude (m) equivalente ao BASE_ZOOM — âncora da conversão abaixo. */
+export const BASE_ALTITUDE = 350;
+
+/**
+ * Altitude em metros equivalente a um nível de zoom. Cada nível de zoom dobra
+ * ou divide a escala, então a altitude segue a mesma potência de 2:
+ *   zoom 18.5 → 175 m · zoom 17.5 → 350 m · zoom 16.5 → 700 m.
+ */
+export function altitudeForZoom(zoom: number | null | undefined): number | undefined {
+  if (zoom == null || !Number.isFinite(zoom)) return undefined;
+  return Math.round(BASE_ALTITUDE * Math.pow(2, BASE_ZOOM - zoom));
+}
+
 // ─── Heading de navegação (com congelamento parado) ──────────────────────────
 
 /** Abaixo desta velocidade, o rumo do GPS é ruído — congelamos o último válido. */

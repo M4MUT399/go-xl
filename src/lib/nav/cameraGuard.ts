@@ -32,6 +32,10 @@ export interface GuardConfig {
   maxAccuracyMeters: number;
   /** latitudeDelta/longitudeDelta máximos (modo region) — teto anti-continente. */
   maxRegionDelta: number;
+  /** Altitude mínima da câmera (m) — equivalente iOS do maxZoom. */
+  minAltitude: number;
+  /** Altitude máxima da câmera (m) — equivalente iOS do minZoom, anti-continente. */
+  maxAltitude: number;
 }
 
 export const DEFAULT_GUARD: GuardConfig = {
@@ -40,6 +44,8 @@ export const DEFAULT_GUARD: GuardConfig = {
   maxJumpMeters: 200_000, // 200 km entre dois fixes consecutivos é impossível
   maxAccuracyMeters: 100,
   maxRegionDelta: 0.5, // ~zoom 9.8: nunca "abre" além do bairro/cidade em operação
+  minAltitude: 50, // m
+  maxAltitude: 5_000, // m — bem abaixo da visão de estado/continente
 };
 
 export type RejectReason =
@@ -120,6 +126,21 @@ export function clampZoom(
   if (zoom < cfg.minZoom) return { zoom: cfg.minZoom, clamped: true };
   if (zoom > cfg.maxZoom) return { zoom: cfg.maxZoom, clamped: true };
   return { zoom, clamped: false };
+}
+
+/**
+ * Corrige a altitude (iOS/MapKit) para a faixa operacional. Mesmo papel do
+ * clampZoom, mas para a chave que o MKMapView realmente lê. Altitude ausente
+ * retorna undefined (deixa o SDK manter a atual).
+ */
+export function clampAltitude(
+  altitude: number | null | undefined,
+  cfg: GuardConfig = DEFAULT_GUARD,
+): { altitude: number | undefined; clamped: boolean } {
+  if (altitude == null || !Number.isFinite(altitude)) return { altitude: undefined, clamped: false };
+  if (altitude < cfg.minAltitude) return { altitude: cfg.minAltitude, clamped: true };
+  if (altitude > cfg.maxAltitude) return { altitude: cfg.maxAltitude, clamped: true };
+  return { altitude, clamped: false };
 }
 
 /**
