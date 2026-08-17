@@ -172,9 +172,12 @@ function ClaimedCard({
           <View style={styles.routeLine} />
           <View style={styles.dotDest} />
         </View>
+        {/* Duas linhas por endereço: é este o card que o motorista abre para
+            saber onde buscar, e numa linha só "Residence Inn Orlando at
+            FLAMINGO…" virava reticências antes de dizer a rua. */}
         <View style={styles.routeAddrs}>
-          <Text style={styles.addr} numberOfLines={1}>{ride.origin_address}</Text>
-          <Text style={[styles.addr, styles.addrDest]} numberOfLines={1}>{ride.destination_address}</Text>
+          <Text style={styles.addr} numberOfLines={2}>{ride.origin_address}</Text>
+          <Text style={[styles.addr, styles.addrDest]} numberOfLines={2}>{ride.destination_address}</Text>
         </View>
       </View>
 

@@ -2,7 +2,7 @@ import {
   minutesUntil,
   shouldShowBanner,
   isImminent,
-  formatCountdown,
+  countdownFor,
   pickSoonest,
 } from '../scheduledRides';
 
@@ -45,15 +45,23 @@ describe('isImminent', () => {
   });
 });
 
-describe('formatCountdown', () => {
-  it('formata minutos, horas e "agora"', () => {
-    expect(formatCountdown(0.5)).toBe('agora');
-    expect(formatCountdown(1)).toBe('agora');
-    expect(formatCountdown(-2)).toBe('agora');
-    expect(formatCountdown(42)).toBe('42 min');
-    expect(formatCountdown(90.4)).toBe('1h 30min');
-    expect(formatCountdown(120)).toBe('2h');
-    expect(formatCountdown(Infinity)).toBe('');
+describe('countdownFor', () => {
+  it('descreve minutos e horas sem montar texto', () => {
+    expect(countdownFor(42)).toEqual({ kind: 'min', min: 42 });
+    expect(countdownFor(90.4)).toEqual({ kind: 'hm', h: 1, m: 30 });
+    expect(countdownFor(120)).toEqual({ kind: 'hm', h: 2, m: 0 });
+  });
+  it('a janela do "agora" é o minuto em torno do horário', () => {
+    expect(countdownFor(1)).toEqual({ kind: 'now' });
+    expect(countdownFor(0.5)).toEqual({ kind: 'now' });
+    expect(countdownFor(-1)).toEqual({ kind: 'now' });
+  });
+  it('depois disso conta o ATRASO, em vez de um "agora" eterno', () => {
+    expect(countdownFor(-2)).toEqual({ kind: 'late', min: 2 });
+    expect(countdownFor(-40)).toEqual({ kind: 'late', min: 40 });
+  });
+  it('sem horário não inventa contagem', () => {
+    expect(countdownFor(Infinity)).toEqual({ kind: 'none' });
   });
 });
 

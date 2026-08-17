@@ -33,17 +33,29 @@ export function isImminent(mins: number, reminderMinutes: number): boolean {
 }
 
 /**
- * Rótulo curto de contagem regressiva para o banner.
- * Ex.: 90.4 → "1h 30min"; 42 → "42 min"; 0.5 → "agora"; -2 → "agora".
+ * Contagem regressiva do banner, em forma de DADO e não de texto — quem
+ * renderiza é que resolve o idioma com t(). Antes esta função devolvia string
+ * pronta, e o "agora" em português vazava para a interface em inglês.
+ *
+ * Passado o horário, a corrida NÃO vira um "agora" eterno: contamos o atraso,
+ * porque um agendamento vencido há 40 min é uma informação diferente de um que
+ * vence neste instante — e é a que o motorista precisa ver.
+ *   Ex.: 90.4 → hm(1,30) · 42 → min(42) · 0.5 → now · -40 → late(40).
  */
-export function formatCountdown(mins: number): string {
-  if (!Number.isFinite(mins)) return '';
+export type Countdown =
+  | { kind: 'none' }
+  | { kind: 'now' }
+  | { kind: 'late'; min: number }
+  | { kind: 'min'; min: number }
+  | { kind: 'hm'; h: number; m: number };
+
+export function countdownFor(mins: number): Countdown {
+  if (!Number.isFinite(mins)) return { kind: 'none' };
   const m = Math.round(mins);
-  if (m <= 1) return 'agora';
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem === 0 ? `${h}h` : `${h}h ${rem}min`;
+  if (m <= -2) return { kind: 'late', min: -m };
+  if (m <= 1) return { kind: 'now' };
+  if (m < 60) return { kind: 'min', min: m };
+  return { kind: 'hm', h: Math.floor(m / 60), m: m % 60 };
 }
 
 /**

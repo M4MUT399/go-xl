@@ -54,7 +54,26 @@ export function useUpcomingScheduledRide(
       .eq('status', 'scheduled')
       .eq(ownerColumn, userId)
       .order('scheduled_for', { ascending: true });
-    setRides((data as RideRecord[]) ?? []);
+    const list = (data as RideRecord[]) ?? [];
+
+    // A tabela `rides` não guarda o nome do passageiro — só o id. O banner do
+    // motorista precisa dizer QUEM ele vai buscar, então anexamos o nome numa
+    // consulta só. Para o passageiro isso é dispensável (ele é o passageiro).
+    if (role === 'driver' && list.length > 0) {
+      const ids = Array.from(new Set(list.map((r) => r.passenger_id).filter(Boolean)));
+      if (ids.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles_public')
+          .select('id, full_name')
+          .in('id', ids);
+        const nameById = new Map(
+          ((profs as { id: string; full_name: string | null }[]) ?? []).map((p) => [p.id, p.full_name]),
+        );
+        setRides(list.map((r) => ({ ...r, passenger_name: nameById.get(r.passenger_id) ?? null })));
+        return;
+      }
+    }
+    setRides(list);
   }, [userId, role]);
 
   // Carrega as janelas configuráveis (uma vez; cache de 60s no getConfig).

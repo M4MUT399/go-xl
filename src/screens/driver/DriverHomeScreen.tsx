@@ -438,6 +438,12 @@ export function DriverHomeScreen({ navigation }: Props) {
             ride={upcoming.ride}
             minutesUntil={upcoming.minutesUntil}
             imminent={upcoming.imminent}
+            passengerName={upcoming.ride.passenger_name}
+            ctaLabel={
+              startingBannerRide
+                ? t('driverHome.startingRoute')
+                : t('scheduledBanner.startRoute')
+            }
             onPress={handleStartScheduledFromBanner}
           />
         )}
