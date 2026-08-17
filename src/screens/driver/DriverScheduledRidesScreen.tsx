@@ -374,6 +374,12 @@ export function DriverScheduledRidesScreen() {
 
   async function handleStart(ride: RideRecord) {
     const activated = await activate(ride.id);
+    // Cartão do passageiro recusado: a corrida não inicia — igual ao aceite
+    // imediato. Avisar é essencial, senão o botão simplesmente não faz nada.
+    if (activated === 'payment_error') {
+      Alert.alert(t('driverScheduled.oops'), t('driverScheduled.paymentError'));
+      return;
+    }
     if (activated) {
       navigation.navigate('DriverNavigate', { ride: activated as Ride });
     }

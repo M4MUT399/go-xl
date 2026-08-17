@@ -139,6 +139,13 @@ export function ScheduledRidesScreen({ navigation }: Props) {
 
   async function handleActivate(ride: RideRecord) {
     const activated = await activate(ride.id);
+    // Cartão recusado na cobrança da tarifa: a corrida NÃO começa (mesma regra
+    // do aceite imediato). Sem este ramo, 'payment_error' seria truthy e a tela
+    // navegaria para a corrida ativa com uma string no lugar do objeto.
+    if (activated === 'payment_error') {
+      Alert.alert(t('scheduled.oops'), t('scheduled.paymentError'));
+      return;
+    }
     if (!activated) {
       Alert.alert(t('scheduled.oops'), t('scheduled.activateError'));
       return;

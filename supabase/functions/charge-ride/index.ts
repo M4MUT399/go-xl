@@ -50,12 +50,6 @@ Deno.serve(async (req) => {
 
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-    const { data: caller } = await admin
-      .from('profiles').select('type').eq('id', user.id).single();
-    if ((caller as { type?: string } | null)?.type !== 'driver') {
-      return json({ error: 'Apenas motoristas podem iniciar a cobrança da corrida.' }, 403);
-    }
-
     // ── Busca dados da corrida ───────────────────────────────────────────────
     const { data: ride, error: rideErr } = await admin
       .from('rides')
@@ -66,6 +60,23 @@ Deno.serve(async (req) => {
     if (rideErr || !ride) return json({ error: 'Corrida não encontrada' }, 404);
 
     const r = ride as { passenger_id: string; price?: number; paid?: boolean; status: string };
+
+    // Autorização. Dois chamadores legítimos, e só eles:
+    //   • qualquer MOTORISTA — a cobrança do aceite acontece antes de o
+    //     driver_id existir na corrida, então não dá para amarrar ao motorista
+    //     daquela corrida específica;
+    //   • o PASSAGEIRO DAQUELA corrida — é o caso do agendamento que o próprio
+    //     passageiro ativa (o cartão cobrado é o dele, não há vetor de abuso).
+    // A busca da corrida vem antes justamente para poder fazer essa segunda
+    // checagem; sem ela, ativar uma agendada pelo app do passageiro devolvia
+    // 403 e a corrida seguia sem cobrança nenhuma.
+    if (user.id !== r.passenger_id) {
+      const { data: caller } = await admin
+        .from('profiles').select('type').eq('id', user.id).single();
+      if ((caller as { type?: string } | null)?.type !== 'driver') {
+        return json({ error: 'Não autorizado a cobrar esta corrida.' }, 403);
+      }
+    }
 
     // Idempotência: já foi cobrada
     if (r.paid) return json({ success: true, already_paid: true });

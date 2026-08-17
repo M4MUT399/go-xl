@@ -833,11 +833,28 @@ export function useScheduledRides(passengerId: string | undefined, jurisdiction:
     refresh();
   }, [refresh]);
 
-  const activate = useCallback(async (rideId: string): Promise<Ride | null> => {
+  const activate = useCallback(async (rideId: string): Promise<Ride | null | 'payment_error'> => {
     // Verifica se já tem motorista pré-confirmado
     const { data: current } = await supabase
       .from('rides').select('driver_id,destination_address,price').eq('id', rideId).single();
     const preAssigned = !!(current as { driver_id?: string })?.driver_id;
+
+    // COBRANÇA DO AGENDAMENTO. Uma agendada com motorista já confirmado vai
+    // daqui direto para 'accepted' — ela NUNCA passa por acceptRide, que era o
+    // único lugar do app que chamava chargeRide. Resultado do buraco: toda
+    // corrida agendada e confirmada em avanço rodava de graça, e no Stripe só
+    // aparecia a gorjeta do fim (que tem função e PaymentIntent próprios).
+    // Cobramos ANTES de travar o status, igual ao aceite imediato: se o cartão
+    // recusar, a corrida NÃO começa. `charge-ride` é idempotente (flag `paid` +
+    // idempotencyKey `charge_<rideId>`), então o caminho sem motorista, que
+    // segue para o leque e cobra no aceite, não corre risco de cobrar duas vezes.
+    if (preAssigned) {
+      const charge = await chargeRide(rideId);
+      if (!charge.ok) {
+        reportError(charge.error, { op: 'activateScheduled.charge', rideId });
+        return 'payment_error';
+      }
+    }
 
     const nextStatus: RideStatus = preAssigned ? 'accepted' : 'requesting';
     const extra = preAssigned ? { accepted_at: new Date().toISOString() } : {};
@@ -1856,7 +1873,34 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
         .eq('id', rideId)
         .select('id');
 
-      if (!error && (data?.length ?? 0) > 0) return true;
+      if (!error && (data?.length ?? 0) > 0) {
+        // REDE DE SEGURANÇA DA COBRANÇA. Nenhuma corrida pode terminar sem que
+        // a tarifa tenha sido cobrada. O caminho normal cobra lá atrás (aceite
+        // imediato ou ativação da agendada); aqui só fechamos a última porta —
+        // se por qualquer motivo `paid` ainda estiver falso ao concluir, a
+        // cobrança sai agora. É idempotente dos dois lados (flag `paid` no
+        // banco + idempotencyKey no Stripe), então o caso normal é um no-op.
+        //
+        // Não bloqueia a conclusão: a viagem fisicamente acabou e prender o
+        // motorista numa tela por causa de cartão recusado seria pior. A falha
+        // vira telemetria para cobrança/estorno manual.
+        if (status === 'completed') {
+          void (async () => {
+            try {
+              const { data: row } = await supabase
+                .from('rides').select('paid').eq('id', rideId).maybeSingle();
+              if ((row as { paid?: boolean } | null)?.paid) return;
+              const charge = await chargeRide(rideId);
+              if (!charge.ok) {
+                reportError(charge.error, { op: 'completeRide.chargeFallback', rideId });
+              }
+            } catch (e) {
+              reportError(e, { op: 'completeRide.chargeFallback', rideId });
+            }
+          })();
+        }
+        return true;
+      }
 
       console.warn(
         `[useRide] updateRideStatus('${status}') falhou (tentativa ${attempt}/${MAX_ATTEMPTS}):`,

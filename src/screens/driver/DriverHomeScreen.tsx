@@ -336,6 +336,10 @@ export function DriverHomeScreen({ navigation }: Props) {
     setStartingBannerRide(true);
     const activated = await activateScheduledRide(upcoming.ride.id);
     setStartingBannerRide(false);
+    if (activated === 'payment_error') {
+      Alert.alert(t('driverScheduled.oops'), t('driverScheduled.paymentError'));
+      return;
+    }
     if (activated) {
       navigation.navigate('DriverNavigate', {
         ride: activated,
