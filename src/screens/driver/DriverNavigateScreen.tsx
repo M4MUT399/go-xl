@@ -800,9 +800,16 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // ── Painel reduzido pós-aceite: cronômetro da corrida + velocidade atual ──
   // Marca o início no momento em que a corrida foi aceita (accepted_at); se por
   // algum motivo não vier preenchido, usa o instante em que esta tela montou.
-  const [rideStartMs] = useState(() =>
-    ride.accepted_at ? new Date(ride.accepted_at).getTime() : Date.now()
-  );
+  //
+  // RESERVA: numa corrida agendada o motorista aceita horas antes, então
+  // accepted_at não serve de marco — o cronômetro já apareceria correndo há
+  // muito tempo antes de a corrida começar. Nesse caso o marco é a hora
+  // marcada (scheduled_for), e até ela chegar o contador fica em 0:00.
+  const [rideStartMs] = useState(() => {
+    const accepted = ride.accepted_at ? new Date(ride.accepted_at).getTime() : Date.now();
+    const scheduled = ride.scheduled_for ? new Date(ride.scheduled_for).getTime() : null;
+    return scheduled != null ? Math.max(accepted, scheduled) : accepted;
+  });
   const [elapsedSec, setElapsedSec] = useState(() => Math.max(0, Math.floor((Date.now() - rideStartMs) / 1000)));
   useEffect(() => {
     const interval = setInterval(() => {
