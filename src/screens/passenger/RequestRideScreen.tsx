@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
   TextInput, ScrollView, Alert, ActivityIndicator, Modal, Platform,
@@ -22,7 +22,9 @@ import { estimateAirportFees } from '../../lib/airportFees';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
-import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
+import {
+  searchPlaces, resolvePlace, reverseGeocode, newSessionToken, PlaceSuggestion,
+} from '../../lib/geocoding';
 import { hasPaymentCard, isProfileComplete } from '../../lib/onboarding';
 import { useTranslation } from '../../i18n';
 
@@ -30,6 +32,19 @@ type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RequestRide'>;
   route: RouteProp<RootStackParamList, 'RequestRide'>;
 };
+
+// A régua do autocomplete é 300 ms do último toque até a lista na tela, e o
+// resto desse orçamento é rede (Edge Function `places-search` → Google). Um
+// debounce que sozinho estoura os 300 ms torna o critério inalcançável por
+// melhor que esteja a rede — era o caso do valor anterior, 450 ms. Baixar só
+// não custa a conta porque a busca é cobrada por SESSÃO (ver `newSessionToken`
+// em lib/geocoding): as teclas de uma mesma busca entram na mesma sessão.
+const AUTOCOMPLETE_DEBOUNCE_MS = 150;
+
+// O fallback Nominatim não tem placeId; o endereço é o que resta de estável.
+function rowKey(s: PlaceSuggestion): string {
+  return s.placeId || s.address;
+}
 
 export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const { t } = useTranslation();
@@ -48,15 +63,18 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
   const [destinationText, setDestinationText] = useState('');
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
-  const [results, setResults] = useState<GeocodeResult[]>([]);
+  const [results, setResults] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   // Endereço da localização GPS atual (reverse geocode). É o embarque padrão,
   // mas o passageiro pode sobrepor escolhendo outro ponto (selectedOrigin).
   const [originAddress, setOriginAddress] = useState(t('requestRide.currentLocation'));
   const [originText, setOriginText] = useState('');
   const [selectedOrigin, setSelectedOrigin] = useState<Location | null>(null);
-  const [originResults, setOriginResults] = useState<GeocodeResult[]>([]);
+  const [originResults, setOriginResults] = useState<PlaceSuggestion[]>([]);
   const [originSearching, setOriginSearching] = useState(false);
+  // Sugestão em que o passageiro tocou e que ainda está virando coordenada.
+  // Sem isto o toque fica sem resposta durante o `resolvePlace`.
+  const [resolvingPlaceId, setResolvingPlaceId] = useState<string | null>(null);
   // Qual campo está sendo editado agora — controla qual lista de sugestões
   // aparece embaixo. Começa em 'destination' pra manter o fluxo atual (o
   // passageiro já cai digitando o destino).
@@ -71,8 +89,14 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [tollAmount, setTollAmount] = useState<number>(0);
   const [venueFee, setVenueFee] = useState<number>(0);
 
-  const debouncedQuery = useDebounce(destinationText, 450);
-  const debouncedOriginQuery = useDebounce(originText, 450);
+  const debouncedQuery = useDebounce(destinationText, AUTOCOMPLETE_DEBOUNCE_MS);
+  const debouncedOriginQuery = useDebounce(originText, AUTOCOMPLETE_DEBOUNCE_MS);
+
+  // Uma sessão de cobrança por campo, porque são duas buscas independentes.
+  // Cada uma vive até o `resolvePlace` que fecha a escolha e é trocada logo
+  // depois: token reusado depois de fechado volta a ser cobrado por tecla.
+  const destSessionRef = useRef(newSessionToken());
+  const originSessionRef = useRef(newSessionToken());
 
   useEffect(() => {
     if (location) {
@@ -89,7 +113,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     }
     let cancelled = false;
     setSearching(true);
-    searchAddresses(debouncedQuery, location ?? undefined).then((res) => {
+    searchPlaces(debouncedQuery, destSessionRef.current, location ?? undefined).then((res) => {
       if (!cancelled) {
         setResults(res);
         setSearching(false);
@@ -106,7 +130,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     }
     let cancelled = false;
     setOriginSearching(true);
-    searchAddresses(debouncedOriginQuery, location ?? undefined).then((res) => {
+    searchPlaces(debouncedOriginQuery, originSessionRef.current, location ?? undefined).then((res) => {
       if (!cancelled) {
         setOriginResults(res);
         setOriginSearching(false);
@@ -114,6 +138,33 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     });
     return () => { cancelled = true; };
   }, [debouncedOriginQuery, selectedOrigin, location?.lat, location?.lng]);
+
+  // Escolher a sugestão virou uma espera: a predição do autocomplete não traz
+  // coordenada, ela só chega no `resolvePlace`. Se falhar, o passageiro precisa
+  // saber — um toque que não faz nada é pior do que um aviso.
+  async function escolherSugestao(s: PlaceSuggestion, campo: 'origin' | 'destination') {
+    const sessao = campo === 'origin' ? originSessionRef : destSessionRef;
+    setResolvingPlaceId(rowKey(s));
+    const ponto = await resolvePlace(s, sessao.current);
+    setResolvingPlaceId(null);
+
+    if (!ponto) {
+      Alert.alert(t('requestRide.errorTitle'), t('payment.genericError'));
+      return;
+    }
+    // Sessão fechada na Google — a próxima busca precisa de token novo.
+    sessao.current = newSessionToken();
+
+    if (campo === 'origin') {
+      setSelectedOrigin({ ...ponto, address: s.address });
+      setOriginText(s.shortName);
+      setActiveField('destination');
+    } else {
+      setSelectedDest({ ...ponto, address: s.address });
+      setDestinationText(s.shortName);
+      Keyboard.dismiss();
+    }
+  }
 
   // Embarque efetivo: usa o ponto escolhido manualmente pelo passageiro
   // (selectedOrigin) ou, por padrão, a localização GPS atual.
@@ -480,9 +531,10 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 )}
                 {!selectedOrigin && !originSearching && originResults.map((d, i) => (
                   <TouchableOpacity
-                    key={`o-${d.lat}-${d.lng}-${i}`}
+                    key={`o-${rowKey(d)}-${i}`}
                     style={styles.suggestionItem}
-                    onPress={() => { setSelectedOrigin(d); setOriginText(d.shortName); setActiveField('destination'); }}
+                    disabled={resolvingPlaceId !== null}
+                    onPress={() => { escolherSugestao(d, 'origin'); }}
                   >
                     <Text style={styles.suggestionIcon}>📍</Text>
                     <View style={styles.suggestionTextWrap}>
@@ -492,6 +544,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                       </Text>
                       <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
                     </View>
+                    {resolvingPlaceId === rowKey(d) && (
+                      <ActivityIndicator color={colors.accent} size="small" />
+                    )}
                   </TouchableOpacity>
                 ))}
                 {!selectedOrigin && !originSearching && debouncedOriginQuery.trim().length >= 3 && originResults.length === 0 && (
@@ -508,9 +563,10 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 )}
                 {!selectedDest && !searching && results.map((d, i) => (
                   <TouchableOpacity
-                    key={`${d.lat}-${d.lng}-${i}`}
+                    key={`${rowKey(d)}-${i}`}
                     style={styles.suggestionItem}
-                    onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); Keyboard.dismiss(); }}
+                    disabled={resolvingPlaceId !== null}
+                    onPress={() => { escolherSugestao(d, 'destination'); }}
                   >
                     <Text style={styles.suggestionIcon}>📍</Text>
                     <View style={styles.suggestionTextWrap}>
@@ -520,6 +576,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                       </Text>
                       <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
                     </View>
+                    {resolvingPlaceId === rowKey(d) && (
+                      <ActivityIndicator color={colors.accent} size="small" />
+                    )}
                   </TouchableOpacity>
                 ))}
                 {!selectedDest && !searching && debouncedQuery.trim().length >= 3 && results.length === 0 && (

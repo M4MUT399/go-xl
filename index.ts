@@ -1,5 +1,12 @@
 import { registerRootComponent } from 'expo';
 
+// Primeiro instante que o JS alcança. Fica no topo porque tudo abaixo desta
+// linha entra na conta — e o que está ACIMA dela (spawn do processo, init
+// nativo, carga do bundle) fica de fora e continua exigindo medição nativa.
+import { markJsBootstrapStart } from './src/lib/fieldMetrics';
+
+markJsBootstrapStart();
+
 // Efeito colateral: define a TASK de background de revogação (Camada 2) no escopo
 // do módulo, ANTES de o SO poder invocá-la ao lançar o app em background. Precisa
 // vir antes do import de App para o TaskManager.defineTask já estar registrado.

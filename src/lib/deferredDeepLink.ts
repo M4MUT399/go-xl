@@ -24,11 +24,12 @@
  * unidade sem o módulo nativo no ambiente do jest.
  */
 
+// `normalizeDriverCode` é puro e não importa nada (ver src/lib/driverCode.ts),
+// então este módulo continua carregável no jest sem módulo nativo.
+import { normalizeDriverCode } from './driverCode';
+
 /** Prefixo que identifica um payload de driver code na área de transferência. */
 export const DEFERRED_CLIP_PREFIX = 'goxl-ride:';
-
-/** Mesmo charset de `codeFromId` (QRCodeScreen) — Crockford-ish, sem I/O/0/1. */
-const DRIVER_CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
 
 /**
  * Extrai um driver code de um conteúdo de clipboard, se e só se ele seguir o
@@ -40,8 +41,7 @@ export function parseClipboardPayload(raw: string | null | undefined): string | 
   if (!raw) return null;
   const trimmed = raw.trim();
   if (!trimmed.startsWith(DEFERRED_CLIP_PREFIX)) return null;
-  const code = trimmed.slice(DEFERRED_CLIP_PREFIX.length).trim().toUpperCase();
-  return DRIVER_CODE_RE.test(code) ? code : null;
+  return normalizeDriverCode(trimmed.slice(DEFERRED_CLIP_PREFIX.length));
 }
 
 /**
@@ -61,10 +61,7 @@ export function parseInstallReferrer(ref: string | null | undefined): string | n
     // referrer malformado → usa como veio
   }
   const params = new URLSearchParams(decoded.replace(/^\?/, ''));
-  const raw = params.get('goxl_driver') ?? params.get('driver');
-  if (!raw) return null;
-  const code = raw.trim().toUpperCase();
-  return DRIVER_CODE_RE.test(code) ? code : null;
+  return normalizeDriverCode(params.get('goxl_driver') ?? params.get('driver'));
 }
 
 /**

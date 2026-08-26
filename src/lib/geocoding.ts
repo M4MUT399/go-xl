@@ -1,5 +1,6 @@
-import type { Location } from '../types';
+import type { Coordinates } from '../types';
 import { callEdgeFunction } from './edgeFunction';
+import { startTiming } from './fieldMetrics';
 
 // ─── Google Places / Geocoding (principal) ──────────────────────────────────
 // Item #81: antes disso fazíamos fetch() DIRETO da Google aqui, com a chave
@@ -10,11 +11,16 @@ import { callEdgeFunction } from './edgeFunction';
 // (GOOGLE_PLACES_API_KEY) fica só no servidor, nunca embutida no app. Ver
 // supabase/functions/places-search/index.ts.
 
-interface GooglePlaceApiResult {
-  name: string;
-  formatted_address: string;
-  geometry: { location: { lat: number; lng: number } };
-  types?: string[];
+interface GoogleAutocompleteSuggestion {
+  placePrediction?: {
+    placeId?: string;
+    text?: { text?: string };
+    structuredFormat?: {
+      mainText?: { text?: string };
+      secondaryText?: { text?: string };
+    };
+    types?: string[];
+  };
 }
 
 // ─── Nominatim (fallback gratuito) ──────────────────────────────────────────
@@ -24,11 +30,36 @@ const NOMINATIM_HEADERS = {
   'Accept-Language': 'en-US',
 };
 
-export interface GeocodeResult extends Location {
+export interface PlaceSuggestion {
+  /** Id da Google. Vazio quando a sugestão veio do fallback Nominatim. */
+  placeId: string;
   /** Nome curto/principal — ex.: "AdventHealth Orlando" ou "S Orange Ave". */
   shortName: string;
+  address: string;
   /** Categoria do local (hospital, school, restaurant…), quando disponível. */
   category?: string;
+  /**
+   * Só o fallback já chega com coordenada. Na Google a predição NÃO traz
+   * geometria — ela só vem no `resolvePlace`, e é justamente essa segunda
+   * chamada que fecha a sessão de cobrança.
+   */
+  location?: Coordinates;
+}
+
+/**
+ * Token de sessão da Google: é o que faz autocomplete + details serem cobrados
+ * como uma sessão só, em vez de uma requisição por tecla digitada.
+ *
+ * Não é credencial — não autentica nem protege nada, só agrupa chamadas —, por
+ * isso não precisa de gerador criptográfico. A Google só exige que seja único
+ * por sessão e recomenda o formato UUID v4.
+ */
+export function newSessionToken(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 function shorten(displayName: string): string {
@@ -64,30 +95,33 @@ function categoryLabel(types: string[] = []): string | undefined {
   return undefined;
 }
 
-// ─── Busca via Google Places Text Search (proxiada pela Edge Function) ──────
-async function googleTextSearch(
+// ─── Autocomplete via Google Places (proxiado pela Edge Function) ───────────
+async function googleAutocomplete(
   query: string,
+  sessionToken: string,
   near?: { lat: number; lng: number }
-): Promise<GeocodeResult[]> {
-  const { results } = await callEdgeFunction<{ results: GooglePlaceApiResult[] }>(
+): Promise<PlaceSuggestion[]> {
+  const { suggestions } = await callEdgeFunction<{ suggestions: GoogleAutocompleteSuggestion[] }>(
     'places-search',
-    { action: 'search', query, near }
+    { action: 'autocomplete', query, near, sessionToken }
   );
 
-  return (results ?? []).map((item) => ({
-    lat: item.geometry.location.lat,
-    lng: item.geometry.location.lng,
-    address: item.formatted_address,
-    shortName: item.name,
-    category: categoryLabel(item.types),
-  }));
+  return (suggestions ?? [])
+    .map((s) => s.placePrediction)
+    .filter((p): p is NonNullable<typeof p> => !!p?.placeId)
+    .map((p) => ({
+      placeId: p.placeId!,
+      shortName: p.structuredFormat?.mainText?.text ?? p.text?.text ?? '',
+      address: p.structuredFormat?.secondaryText?.text ?? p.text?.text ?? '',
+      category: categoryLabel(p.types),
+    }));
 }
 
 // ─── Busca via Nominatim (fallback) ─────────────────────────────────────────
 async function nominatimSearch(
   query: string,
   near?: { lat: number; lng: number }
-): Promise<GeocodeResult[]> {
+): Promise<PlaceSuggestion[]> {
   const params = new URLSearchParams({
     q: query,
     format: 'json',
@@ -110,32 +144,94 @@ async function nominatimSearch(
     display_name: string;
   }>;
   return data.map((item) => ({
-    lat: parseFloat(item.lat),
-    lng: parseFloat(item.lon),
+    placeId: '',
     address: item.display_name,
     shortName: shorten(item.display_name),
+    location: { lat: parseFloat(item.lat), lng: parseFloat(item.lon) },
   }));
 }
 
-export async function searchAddresses(
+/**
+ * Sugestões para o que está sendo digitado. O `sessionToken` tem de ser o
+ * mesmo em todas as teclas da MESMA busca e o mesmo entregue depois ao
+ * `resolvePlace` — é isso que a Google cobra como uma sessão só.
+ */
+export async function searchPlaces(
   query: string,
+  sessionToken: string,
   near?: { lat: number; lng: number }
-): Promise<GeocodeResult[]> {
+): Promise<PlaceSuggestion[]> {
   if (query.trim().length < 3) return [];
+
+  // Cronômetro aberto DEPOIS do corte de 3 caracteres: aquele retorno não faz
+  // ida à rede, e contá-lo como amostra encheria a série de zeros e faria a
+  // régua de 300 ms parecer folgada. O texto digitado nunca entra no contexto
+  // — endereço de embarque é dado de quem viaja, não métrica.
+  const fim = startTiming('autocomplete_round_trip');
 
   // 1) Google Places — resultados ricos (endereços, comércios, hospitais,
   //    escolas, pontos turísticos…). 2) Fallback para Nominatim em caso de erro.
   try {
-    const results = await googleTextSearch(query, near);
-    if (results.length > 0) return results;
+    const results = await googleAutocomplete(query, sessionToken, near);
+    if (results.length > 0) {
+      fim({ source: 'google', results: results.length });
+      return results;
+    }
   } catch {
     // segue para o fallback
   }
 
   try {
-    return await nominatimSearch(query, near);
+    // A Google respondendo vazio também cai aqui, e a amostra sai como
+    // 'nominatim' de propósito: quem digitou esperou as DUAS idas.
+    const results = await nominatimSearch(query, near);
+    fim({ source: 'nominatim', results: results.length });
+    return results;
   } catch {
+    fim({ source: 'failed', results: 0 });
     return [];
+  }
+}
+
+/**
+ * Converte a sugestão escolhida em coordenada — e, com isso, FECHA a sessão
+ * na Google. Depois desta chamada o token está queimado: quem chamou precisa
+ * gerar um novo antes da próxima busca, senão a Google volta a cobrar por
+ * requisição.
+ *
+ * Devolve `null` quando não dá para resolver (rede, sessão, lugar sumido). Sem
+ * coordenada não há corrida, então o chamador precisa tratar — o custo de
+ * engolir isso em silêncio seria um toque na sugestão que não faz nada.
+ */
+export async function resolvePlace(
+  suggestion: PlaceSuggestion,
+  sessionToken: string
+): Promise<Coordinates | null> {
+  // O fallback já veio com coordenada e não tem sessão na Google para fechar.
+  if (suggestion.location) return suggestion.location;
+  if (!suggestion.placeId) return null;
+
+  // Só o caminho que realmente vai à rede é cronometrado; os dois retornos
+  // acima são decisões locais.
+  const fim = startTiming('place_details_round_trip');
+
+  try {
+    const { location } = await callEdgeFunction<{
+      location: { latitude: number; longitude: number } | null;
+    }>('places-search', {
+      action: 'details',
+      placeId: suggestion.placeId,
+      sessionToken,
+    });
+    if (!location) {
+      fim({ resolved: false });
+      return null;
+    }
+    fim({ resolved: true });
+    return { lat: location.latitude, lng: location.longitude };
+  } catch {
+    fim({ resolved: false, failed: true });
+    return null;
   }
 }
 

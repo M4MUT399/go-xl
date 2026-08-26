@@ -34,8 +34,14 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { rides, loading, refresh, activate, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
+  const { rides, loading, loadFailed, refresh, activate, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
+  // Id do agendamento com uma ação em voo. `activate` COBRA O CARTÃO e `cancel`
+  // pode cobrar a multa da janela de 60 min — as duas passam bem dos 400 ms e
+  // antes não davam nenhum retorno visual: o card ficava exatamente igual, com
+  // os botões ativos, convidando o passageiro a tocar de novo (e a cobrar duas
+  // vezes). Guardamos o id, e não um booleano, para travar só o card em questão.
+  const [busyRideId, setBusyRideId] = useState<string | null>(null);
 
   const styles = makeStyles(colors);
 
@@ -138,7 +144,10 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   }, [profile?.id, refresh, t]);
 
   async function handleActivate(ride: RideRecord) {
+    if (busyRideId) return;
+    setBusyRideId(ride.id);
     const activated = await activate(ride.id);
+    setBusyRideId(null);
     // Cartão recusado na cobrança da tarifa: a corrida NÃO começa (mesma regra
     // do aceite imediato). Sem este ramo, 'payment_error' seria truthy e a tela
     // navegaria para a corrida ativa com uma string no lugar do objeto.
@@ -158,6 +167,29 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     }
   }
 
+  /**
+   * Antes: `onPress: () => cancel(ride.id)` — dispara e esquece. O `cancel` não
+   * olhava o erro do UPDATE e não devolvia nada, então, quando o servidor
+   * recusava, o card continuava na lista sem uma palavra de explicação. Num
+   * cancelamento que pode custar a tarifa cheia (janela de 60 min), "não sei se
+   * cancelou" é o pior estado possível. Agora esperamos a confirmação, travamos
+   * o card enquanto ela não chega e dizemos quando falha.
+   */
+  async function runCancel(ride: RideRecord) {
+    if (busyRideId) return;
+    setBusyRideId(ride.id);
+    const ok = await cancel(ride.id);
+    setBusyRideId(null);
+    if (!ok) {
+      // PENDÊNCIA DE PRODUTO: falta uma chave `scheduled.cancelError` = "Não foi
+      // possível cancelar seu agendamento. Ele continua ativo — verifique sua
+      // conexão e tente de novo." Reusamos `scheduled.activateError`, o texto
+      // genérico de falha desta mesma tela, porque src/i18n/translations.ts está
+      // sob edição do dono e não pode receber chaves novas.
+      Alert.alert(t('scheduled.oops'), t('scheduled.activateError'));
+    }
+  }
+
   function handleCancel(ride: RideRecord) {
     if (!isCancellationFree(ride.scheduled_for)) {
       Alert.alert(
@@ -165,14 +197,14 @@ export function ScheduledRidesScreen({ navigation }: Props) {
         t('scheduled.cancelChargedMessage'),
         [
           { text: t('scheduled.noKeep'), style: 'cancel' },
-          { text: t('scheduled.cancelAnyway'), style: 'destructive', onPress: () => cancel(ride.id) },
+          { text: t('scheduled.cancelAnyway'), style: 'destructive', onPress: () => { runCancel(ride); } },
         ]
       );
       return;
     }
     Alert.alert(t('scheduled.cancelScheduleTitle'), t('scheduled.cancelScheduleMessage'), [
       { text: t('scheduled.no'), style: 'cancel' },
-      { text: t('scheduled.yesCancel'), style: 'destructive', onPress: () => cancel(ride.id) },
+      { text: t('scheduled.yesCancel'), style: 'destructive', onPress: () => { runCancel(ride); } },
     ]);
   }
 
@@ -201,10 +233,22 @@ export function ScheduledRidesScreen({ navigation }: Props) {
           contentContainerStyle={[styles.list, Platform.OS === 'android' && { paddingBottom: 24 + insets.bottom }]}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
           ListEmptyComponent={
+            // Com a leitura falhando, "Você não tem agendamentos" é mentira: pode
+            // haver viagens marcadas que o app não conseguiu ler. Trocamos o
+            // texto para dizer que foi falha de carregamento — o RefreshControl
+            // acima já é o caminho de tentar de novo.
+            // PENDÊNCIA DE PRODUTO: o ideal seria `scheduled.loadError` = "Não
+            // foi possível carregar seus agendamentos. Puxe para atualizar."
+            // Reusamos `scheduled.activateError` (texto genérico de falha desta
+            // tela) porque translations.ts está sob edição do dono.
             <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>🗓️</Text>
-              <Text style={styles.emptyTitle}>{t('scheduled.emptyTitle')}</Text>
-              <Text style={styles.emptyText}>{t('scheduled.emptyText')}</Text>
+              <Text style={styles.emptyEmoji}>{loadFailed ? '⚠️' : '🗓️'}</Text>
+              <Text style={styles.emptyTitle}>
+                {loadFailed ? t('scheduled.oops') : t('scheduled.emptyTitle')}
+              </Text>
+              <Text style={styles.emptyText}>
+                {loadFailed ? t('scheduled.activateError') : t('scheduled.emptyText')}
+              </Text>
             </View>
           }
           renderItem={({ item }) => {
@@ -215,6 +259,7 @@ export function ScheduledRidesScreen({ navigation }: Props) {
                 driverInfo={driverInfo}
                 onActivate={handleActivate}
                 onCancel={handleCancel}
+                busy={busyRideId === item.id}
                 onChat={item.driver_id ? () => handleChat(item, driverInfo) : undefined}
                 styles={styles}
                 colors={colors}
@@ -228,13 +273,15 @@ export function ScheduledRidesScreen({ navigation }: Props) {
 }
 
 function ScheduledCard({
-  ride, driverInfo, onActivate, onCancel, onChat, styles, colors,
+  ride, driverInfo, onActivate, onCancel, onChat, busy, styles, colors,
 }: {
   ride: RideRecord;
   driverInfo?: DriverInfo;
   onActivate: (r: RideRecord) => void;
   onCancel: (r: RideRecord) => void;
   onChat?: () => void;
+  /** true enquanto ativar/cancelar deste card está em voo — ver `busyRideId`. */
+  busy: boolean;
   styles: ReturnType<typeof makeStyles>;
   colors: AppTheme;
 }) {
@@ -343,18 +390,33 @@ function ScheduledCard({
 
       {/* ── Ações ── */}
       <View style={styles.cardActions}>
+        {/*
+          Os dois botões ficam desabilitados enquanto QUALQUER das duas ações
+          deste card está em voo, e o que foi tocado mostra o spinner. Antes
+          ambos seguiam ativos durante a chamada (que cobra o cartão, no caso do
+          "pedir agora") — um segundo toque duplicava a cobrança.
+        */}
         <TouchableOpacity
-          style={[styles.cancelBtn, !canCancel && styles.cancelBtnCharged]}
+          style={[styles.cancelBtn, !canCancel && styles.cancelBtnCharged, busy && styles.btnBusy]}
           onPress={() => onCancel(ride)}
+          disabled={busy}
         >
           <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
             {canCancel ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.activateBtn} onPress={() => onActivate(ride)}>
-          <Text style={styles.activateBtnText}>
-            {hasDriver ? t('scheduled.startRide') : t('scheduled.requestNow')}
-          </Text>
+        <TouchableOpacity
+          style={[styles.activateBtn, busy && styles.btnBusy]}
+          onPress={() => onActivate(ride)}
+          disabled={busy}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.activateBtnText}>
+              {hasDriver ? t('scheduled.startRide') : t('scheduled.requestNow')}
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -476,6 +538,9 @@ function makeStyles(colors: AppTheme) {
     cancelBtnTextCharged: { color: '#ef4444', fontSize: 13 },
     activateBtn: { flex: 2, height: 44, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
     activateBtnText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
+    // Opacidade é o sinal de "está desabilitado" — sem ela o botão travado
+    // ficava idêntico ao ativo e o toque simplesmente não fazia nada.
+    btnBusy: { opacity: 0.5 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
     emptyEmoji: { fontSize: 48, marginBottom: 16 },
     emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 6 },

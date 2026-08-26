@@ -1,4 +1,9 @@
-import { resolveRevocation, type DriverOfferState } from '../rideRevocation';
+import {
+  resolveRevocation,
+  decideOfferSilence,
+  type DriverOfferState,
+  type OfferSilenceInput,
+} from '../rideRevocation';
 
 // Estado base de um motorista com uma corrida imediata e uma agendada em oferta,
 // além de uma corrida ativa já aceita — para exercitar cada caminho isolado.
@@ -118,5 +123,105 @@ describe('resolveRevocation', () => {
     expect(resolveRevocation(evt, loserB).clearPendingRide).toBe(true);
     // O vencedor recebe o eco do próprio aceite e NÃO limpa.
     expect(resolveRevocation(evt, winner).clearPendingRide).toBe(false);
+  });
+});
+
+describe('decideOfferSilence', () => {
+  // Modo antigo (uma oferta por vez): quem manda é a cabeça da fila.
+  const singleHead: OfferSilenceInput = {
+    reason: 'taken',
+    multiOffer: false,
+    offerInQueue: false,
+    clearPendingRide: true,
+    alreadyHandled: false,
+  };
+
+  it('modo single: silencia quando a revogada é a oferta pendente', () => {
+    expect(decideOfferSilence(singleHead).silenceThisOffer).toBe(true);
+  });
+
+  it('modo single: NÃO silencia oferta de outra corrida', () => {
+    expect(
+      decideOfferSilence({ ...singleHead, clearPendingRide: false }).silenceThisOffer
+    ).toBe(false);
+  });
+
+  it('modo single IGNORA a fila — é a regressão que separa os dois modos', () => {
+    // Com a flag desligada, estar na fila não pode bastar: se bastasse, o modo
+    // single passaria a silenciar ofertas da cauda que ele nem exibe.
+    expect(
+      decideOfferSilence({
+        ...singleHead,
+        offerInQueue: true,
+        clearPendingRide: false,
+      }).silenceThisOffer
+    ).toBe(false);
+  });
+
+  it('modo multi: silencia oferta na CAUDA, que a cabeça não enxerga', () => {
+    // Este é o defeito concreto que a regra existe para evitar: com múltiplas
+    // ofertas, `clearPendingRide` é false para tudo que não é a cabeça, e sem
+    // a fila a oferta da cauda continuaria tocando depois de dada a outro.
+    expect(
+      decideOfferSilence({
+        ...singleHead,
+        multiOffer: true,
+        offerInQueue: true,
+        clearPendingRide: false,
+      }).silenceThisOffer
+    ).toBe(true);
+  });
+
+  it('modo multi IGNORA a cabeça quando a oferta saiu da fila', () => {
+    expect(
+      decideOfferSilence({
+        ...singleHead,
+        multiOffer: true,
+        offerInQueue: false,
+        clearPendingRide: true,
+      }).silenceThisOffer
+    ).toBe(false);
+  });
+
+  it.each([
+    ['taken', 'taken'],
+    ['expired', 'expired'],
+    ['cancelled', 'revoked'],
+  ] as const)('motivo %s vira alerta %s', (reason, expected) => {
+    expect(decideOfferSilence({ ...singleHead, reason }).alertReason).toBe(expected);
+  });
+
+  it('audita apenas na primeira vez (broadcastRideRevoked emite dois eventos)', () => {
+    expect(decideOfferSilence(singleHead).logTakenByOther).toBe(true);
+    expect(
+      decideOfferSilence({ ...singleHead, alreadyHandled: true }).logTakenByOther
+    ).toBe(false);
+  });
+
+  it('o dedupe vale só para a auditoria: o segundo evento AINDA silencia', () => {
+    // Silenciar é idempotente e barato; contar a mesma perda duas vezes não é.
+    // Se alguém "simplificar" fazendo o dedupe barrar o silenciamento, um card
+    // que voltasse depois do primeiro evento ficaria tocando para sempre.
+    const segundo = decideOfferSilence({ ...singleHead, alreadyHandled: true });
+    expect(segundo.silenceThisOffer).toBe(true);
+    expect(segundo.logTakenByOther).toBe(false);
+  });
+
+  it('nunca audita o que não silenciou', () => {
+    // Invariante: auditar 'taken_by_other' sem ter tirado a oferta deste
+    // motorista registraria uma perda de corrida que não aconteceu.
+    for (const multiOffer of [false, true]) {
+      for (const offerInQueue of [false, true]) {
+        for (const clearPendingRide of [false, true]) {
+          const d = decideOfferSilence({
+            ...singleHead,
+            multiOffer,
+            offerInQueue,
+            clearPendingRide,
+          });
+          if (!d.silenceThisOffer) expect(d.logTakenByOther).toBe(false);
+        }
+      }
+    }
   });
 });

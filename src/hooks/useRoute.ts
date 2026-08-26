@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getRoute, getRouteViaDirections, RouteResult } from '../lib/routing';
 import { useFeatureFlag } from './useFeatureFlag';
+import { startTiming } from '../lib/fieldMetrics';
 
 export function useRoute(
   origin: { lat: number; lng: number } | null | undefined,
@@ -18,6 +19,12 @@ export function useRoute(
   // (comportamento legado). Rollout por jurisdição após QA.
   const directionsV2 = useFeatureFlag('directions_v2');
 
+  // Só para rotular a métrica: o que fez ESTE cálculo acontecer. Um desvio de
+  // rota chega aqui como `origin_change` (DriverNavigateScreen chama
+  // setRouteOrigin ao detectar off-route), e é assim que a régua de reroute
+  // consegue ser lida sem um caminho de código separado.
+  const anterior = useRef<{ key: string; refreshKey?: number } | null>(null);
+
   useEffect(() => {
     if (!origin || !dest) {
       setRoute(null);
@@ -26,15 +33,35 @@ export function useRoute(
     let cancelled = false;
     setLoading(true);
 
+    const key = `${origin.lat},${origin.lng}|${dest.lat},${dest.lng}`;
+    const prev = anterior.current;
+    const trigger = !prev
+      ? 'initial'
+      : prev.key !== key
+        ? 'origin_change'
+        : prev.refreshKey !== refreshKey
+          ? 'refresh'
+          : 'remount';
+    anterior.current = { key, refreshKey };
+
     (async () => {
+      // Cronômetro do que o MOTORISTA espera, não de uma chamada isolada: a
+      // tentativa na Google e a queda no OSRM são uma espera só.
+      const fim = startTiming('route_compute');
       let result: RouteResult | null = null;
+      let fellBack = false;
       if (directionsV2) {
         result = await getRouteViaDirections(origin, dest);
       }
       // Fallback seguro: sem a flag, ou se a Google falhar/não retornar rota.
       if (!result) {
+        fellBack = directionsV2;
         result = await getRoute(origin, dest);
       }
+      // Registrada mesmo com `cancelled`: a espera aconteceu de verdade, e
+      // descartá-la tiraria da série justamente os cálculos mais lentos, que
+      // são os que o usuário abandona.
+      fim({ trigger, fellBack, got: !!result });
       if (!cancelled) {
         setRoute(result);
         setLoading(false);

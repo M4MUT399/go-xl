@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { readDeferredDriverCode } from '../lib/deferredDeepLink';
+import { normalizeDriverCode, resolveDriverCode } from '../lib/driverCode';
 
 import { RootStackParamList } from '../types';
 import { useAuth } from '../hooks/useAuth';
@@ -21,6 +22,7 @@ import { useNotifications, InAppMessage } from '../hooks/useNotifications';
 import { useDriverReminderScheduler } from '../hooks/useDriverReminderScheduler';
 import { usePassengerReminderScheduler } from '../hooks/usePassengerReminderScheduler';
 import { setNotifyHandler } from '../lib/inAppNotify';
+import { markAppInteractive } from '../lib/fieldMetrics';
 import { useTranslation, type Lang } from '../i18n';
 
 import { WelcomeScreen } from '../screens/auth/WelcomeScreen';
@@ -245,7 +247,17 @@ export function AppNavigator() {
   // Libera a splash nativa (ver App.tsx) assim que o check de sessão termina —
   // evita a piscada splash → tela em branco → LoadingScreen.
   useEffect(() => {
-    if (!loading) SplashScreen.hideAsync().catch(() => {});
+    if (loading) return;
+    SplashScreen.hideAsync().catch(() => {});
+    // A splash saindo é o instante em que o app fica utilizável — o fim da
+    // única parte da partida que o JS consegue cronometrar. `markAppInteractive`
+    // é de disparo único, então o `loading` voltando a oscilar em troca de
+    // sessão não registra amostra nova.
+    // `session` é lido sem entrar nas dependências de propósito: incluí-lo
+    // faria `hideAsync` disparar de novo a cada troca de sessão, mudando um
+    // efeito que já está em produção só para enfeitar uma métrica. Quando
+    // `loading` cai, o auth já resolveu, então este `session` é o definitivo.
+    markAppInteractive({ authed: !!session });
   }, [loading]);
 
   const { inAppMessage, clearInAppMessage, showBanner } = useNotifications(
@@ -334,7 +346,12 @@ export function AppNavigator() {
       return;
     }
 
-    const driverCode = parsed.queryParams?.driver as string | undefined;
+    // Normaliza (trim + UPPER) e valida o formato canônico antes de guardar.
+    // A landing goxl.app/qr pode entregar o código em qualquer caixa, e
+    // `profiles.driver_code` é comparado case-sensitive — sem isto, um link com
+    // o código em minúsculas nunca casava e a trava do QR se perdia em
+    // silêncio. Também impede que lixo de query string seja carregado adiante.
+    const driverCode = normalizeDriverCode(parsed.queryParams?.driver as string | undefined);
     if (!driverCode) return;
 
     // Guarda SEMPRE — o despacho definitivo (RequestRide travado x
@@ -353,21 +370,45 @@ export function AppNavigator() {
     // `[loading, session]` cuida de despachar assim que o auth resolver.
   }
 
-  /** Faz o lookup no DB e navega para RequestRide com o motorista travado. */
+  /**
+   * Resolve o driver code e navega para RequestRide com o motorista travado.
+   *
+   * O lookup vai pela Edge Function `resolve-driver-code`, não mais por um
+   * SELECT em `profiles_public` — a migration 0067 revogou `anon` daquela view
+   * (ela é `security_invoker = off` e entregava nome/foto/nota/tipo/driver_code
+   * de TODOS os usuários a quem tivesse a anon key embutida no binário).
+   *
+   * Os três caminhos que chamam esta função hoje já garantem sessão assentada
+   * (`session` não-nulo no efeito `[loading, session]`, ou `isAuthedRef.current`
+   * no warm start), então o SELECT antigo saía mesmo como `authenticated` e
+   * não teria quebrado com a revogação. Ainda assim passou a usar a função
+   * pública: com ela o resultado independe de a sessão ter assentado, o que
+   * elimina de vez a classe de corrida descrita no JSDoc de `captureDeepLink`
+   * acima — os dois destinos do QR (ExpressRegister e RequestRide travado)
+   * resolvem o código exatamente pelo mesmo caminho.
+   */
   async function dispatchPendingDeepLink() {
     const code = pendingDriverCode.current;
     if (!code) return;
     pendingDriverCode.current = null;
 
-    const { data } = await supabase
-      .from('profiles_public')
-      .select('id, full_name')
-      .eq('driver_code', code)
-      .eq('type', 'driver')
-      .maybeSingle();
-
-    if (!data) return;
-    const { id, full_name } = data as { id: string; full_name: string };
+    // `unavailable` não é veredito sobre o código — é rede, timeout, 429 do
+    // rate limit público ou 503 do disjuntor (ver `DriverCodeLookup` em
+    // src/lib/driverCode.ts). Este caminho não tem tela onde mostrar erro: ele
+    // roda no despacho do deep link, antes de qualquer navegação. Então a única
+    // reação útil é uma segunda tentativa depois de um respiro.
+    //
+    // UMA, e não um laço: o 429 vem com `Retry-After` de até um minuto, e
+    // insistir só gastaria o mesmo balde que acabou de barrar. Falhando as
+    // duas, o QR simplesmente não trava a corrida — o passageiro segue para o
+    // app normal, que é o mesmo desfecho de antes desta mudança.
+    let lookup = await resolveDriverCode(code);
+    if (lookup.status === 'unavailable') {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      lookup = await resolveDriverCode(code);
+    }
+    if (lookup.status !== 'ok') return;
+    const { id, full_name } = lookup.driver;
 
     // Ler um QR code SEMPRE vincula o passageiro ao motorista dono do QR,
     // porém apenas para ESTA viagem (a trava é um parâmetro da corrida, não

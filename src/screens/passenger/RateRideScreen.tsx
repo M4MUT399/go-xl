@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, TextInput,
   Keyboard, Alert, ActivityIndicator, Platform,
@@ -18,13 +18,17 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 import { useTranslation } from '../../i18n';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { SAFETY_INCIDENT_CATEGORIES, type SafetyIncidentCategory } from '../../lib/safetyIncidents';
+import { TIP_PRESETS } from '../../lib/tip';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'RateRide'>;
   route: RouteProp<RootStackParamList, 'RateRide'>;
 };
 
-const TIP_PRESETS = [5, 10, 15]; // em dólares
+// Os valores sugeridos passaram a morar em `src/lib/tip.ts`, junto com a regra
+// de prazo e os limites da `tip-ride`. Duas listas em telas diferentes divergem
+// no dia em que alguém mexe numa só, e o passageiro passa a ver sugestões
+// diferentes conforme o caminho por onde chegou à gorjeta.
 
 export function RateRideScreen({ navigation, route }: Props) {
   const { ride } = route.params;
@@ -43,6 +47,12 @@ export function RateRideScreen({ navigation, route }: Props) {
   const [isCustom, setIsCustom]         = useState(false);
   const [customTip, setCustomTip]       = useState('');
   const [tipLoading, setTipLoading]     = useState(false);
+  // A gorjeta é um PaymentIntent próprio, cobrado ANTES de gravar a avaliação.
+  // Como agora a falha do INSERT da avaliação mantém o passageiro na tela (antes
+  // ela fechava mesmo com erro), um segundo toque em "Enviar" passaria de novo
+  // pelo bloco da gorjeta e cobraria o cartão duas vezes. Este flag marca que a
+  // gorjeta desta tela já foi paga — retentativas vão direto para a avaliação.
+  const tipChargedRef = useRef(false);
 
   // Bloco 4 (compliance TNC F.S. 627.748): denúncia de segurança contra o
   // motorista. Ação INDEPENDENTE da avaliação/gorjeta -- o passageiro pode
@@ -99,11 +109,12 @@ export function RateRideScreen({ navigation, route }: Props) {
 
     const finalTip = getFinalTip();
 
-    // 1. Cobra gorjeta se aplicável
-    if (finalTip >= 0.5) {
+    // 1. Cobra gorjeta se aplicável (uma única vez — ver `tipChargedRef`)
+    if (finalTip >= 0.5 && !tipChargedRef.current) {
       setTipLoading(true);
       const result = await tipRide(ride.id, Math.round(finalTip * 100));
       setTipLoading(false);
+      if (result.ok) tipChargedRef.current = true;
       if (!result.ok) {
         setLoading(false);
         Alert.alert(
@@ -128,7 +139,13 @@ export function RateRideScreen({ navigation, route }: Props) {
   }
 
   async function submitRating() {
-    await supabase.from('ratings').insert({
+    // O erro do INSERT era descartado e a tela fechava do mesmo jeito: o
+    // passageiro dava 1 estrela e escrevia o motivo, via a tela sair e acreditava
+    // ter registrado a avaliação — que nunca chegou ao banco (RLS, rede, ou a
+    // constraint de avaliação única). Como esta tela não tem volta (o
+    // `navigation.reset` apaga a pilha), a avaliação era perdida em silêncio.
+    // Agora, quando a gravação falha, ficamos na tela com o texto preservado.
+    const { error } = await supabase.from('ratings').insert({
       ride_id:   ride.id,
       from_user: profile?.id,
       to_user:   ride.driver_id,
@@ -136,6 +153,16 @@ export function RateRideScreen({ navigation, route }: Props) {
       comment:   comment.trim() || null,
     });
     setLoading(false);
+    if (error) {
+      // PENDÊNCIA DE PRODUTO: falta uma chave `rate.saveError` = "Não foi
+      // possível salvar sua avaliação. Verifique sua conexão e tente de novo."
+      // Reusamos `payment.connectError`, que já diz exatamente isso em en/es/pt
+      // — src/i18n/translations.ts está sob edição do dono.
+      // A gorjeta, se houve, já foi cobrada e NÃO é cobrada de novo numa
+      // retentativa — `tipChargedRef` (acima) guarda isso.
+      Alert.alert(t('common.error'), t('payment.connectError'));
+      return;
+    }
     navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
   }
 

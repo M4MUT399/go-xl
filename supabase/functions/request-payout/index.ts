@@ -37,6 +37,7 @@ import {
   type RideTransferResult,
 } from '../_shared/payout.ts';
 import { centsToDollars, dollarsToCents, sumDollarsToCents } from '../_shared/money.ts';
+import { claimPendingTips, settleTips, type PendingTip } from '../_shared/tipPayout.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
@@ -115,6 +116,9 @@ async function unstickStalePayouts(admin: SupabaseClient, driverId: string, now:
     .update({ status: 'failed', failure_reason: 'auto_unstuck_timeout' })
     .in('id', ids);
   await admin.from('rides').update({ payout_id: null }).in('payout_id', ids);
+  // A gorjeta é reservada por coluna própria: sem soltar tip_payout_id também,
+  // ela ficaria presa no payout morto para sempre.
+  await admin.from('rides').update({ tip_payout_id: null }).in('tip_payout_id', ids);
   log('self_heal', { unstuck: ids.length });
 }
 
@@ -231,11 +235,27 @@ Deno.serve(async (req) => {
       .not('driver_amount', 'is', null);
 
     const eligibleRows = (eligible as EligibleRide[]) ?? [];
-    const eligibleCents = sumDollarsToCents(eligibleRows.map((r) => r.driver_amount));
+    const fareCents = sumDollarsToCents(eligibleRows.map((r) => r.driver_amount));
+
+    // ── Gorjetas pendentes → também são saldo do motorista ────────────────────
+    // Entram no MESMO repasse, mas por um caminho próprio: a gorjeta é uma
+    // cobrança separada da tarifa e vira um transfer separado (ver 0064).
+    // Contam para o mínimo repassável, senão um motorista com SÓ gorjeta a
+    // receber nunca conseguiria sacar.
+    const { data: eligibleTips } = await admin
+      .from('rides')
+      .select('id, tip_amount, tip_payment_intent_id')
+      .eq('driver_id', user.id)
+      .eq('paid', true)
+      .is('tip_payout_id', null)
+      .gt('tip_amount', 0);
+
+    const tipCents = sumDollarsToCents(((eligibleTips as PendingTip[]) ?? []).map((t) => t.tip_amount));
+    const eligibleCents = fareCents + tipCents;
 
     // ── DECISÃO única, com código claro ───────────────────────────────────────
     const decision = classifyPayoutRequest({ hasAccount, payoutsEnabled, hasInFlightPayout, eligibleCents });
-    log('decision', { hasAccount, payoutsEnabled, hasInFlightPayout, eligibleCents, code: decision.code });
+    log('decision', { hasAccount, payoutsEnabled, hasInFlightPayout, fareCents, tipCents, code: decision.code });
     if (!decision.ok) {
       return json({ error: decision.message, code: decision.code }, httpStatusForCode(decision.code));
     }
@@ -280,9 +300,13 @@ Deno.serve(async (req) => {
       .select('id, driver_amount, stripe_payment_intent_id');
 
     const claimedRows = (claimed as EligibleRide[]) ?? [];
-    log('rides_claimed', { count: claimedRows.length });
 
-    if (claimedRows.length === 0) {
+    // Reserva atômica das GORJETAS pendentes — coluna própria (tip_payout_id),
+    // porque a gorjeta pode chegar depois do repasse da corrida (ver 0064).
+    const claimedTips = await claimPendingTips(admin, user.id, payoutId);
+    log('rides_claimed', { count: claimedRows.length, tips: claimedTips.length });
+
+    if (claimedRows.length === 0 && claimedTips.length === 0) {
       // Nada para reservar (corrida a corrida já consumida) — desfaz o payout.
       await admin.from('payouts').update({ status: 'failed', failure_reason: 'no_rides_claimed' }).eq('id', payoutId);
       return json(
@@ -294,25 +318,48 @@ Deno.serve(async (req) => {
     // ── 3) Transfer real + conciliação pura ───────────────────────────────────
     const results = await settleTransfers(accountId, payoutId, claimedRows, { driver_id: user.id });
     const settled = reconcileSettlement(results);
+
+    // Gorjetas: transfer PRÓPRIO por corrida, sacado da cobrança da gorjeta e
+    // sem comissão. Falha de gorjeta nunca derruba o repasse da tarifa.
+    const tipSettled = await settleTips(
+      stripe,
+      accountId,
+      payoutId,
+      claimedTips,
+      { driver_id: user.id },
+      resolveChargeId,
+    );
+
+    const totalCents = settled.transferredCents + tipSettled.transferredCents;
     log('settle_done', {
       status: settled.status,
       transferred: settled.transferredCount,
       cents: settled.transferredCents,
       failed: settled.failedRideIds.length,
+      tips: tipSettled.transferredCount,
+      tipCents: tipSettled.transferredCents,
+      tipsFailed: tipSettled.failedRideIds.length,
     });
 
-    // Corridas que falharam voltam ao saldo (nova tentativa futura).
+    // Corridas que falharam voltam ao saldo (nova tentativa futura). Tarifa e
+    // gorjeta voltam por colunas diferentes: uma pode falhar sem a outra.
     if (settled.failedRideIds.length) {
       await admin.from('rides').update({ payout_id: null }).in('id', settled.failedRideIds);
     }
+    if (tipSettled.failedRideIds.length) {
+      await admin.from('rides').update({ tip_payout_id: null }).in('id', tipSettled.failedRideIds);
+    }
 
-    if (settled.status === 'failed') {
-      // REVERSÃO total: nenhuma saiu → payout 'failed' + desvincula tudo.
+    // REVERSÃO total só quando NADA saiu — nem tarifa, nem gorjeta. Um repasse
+    // só de gorjeta é legítimo (a corrida já foi paga num repasse anterior), por
+    // isso não basta olhar o status da tarifa.
+    if (settled.transferredCount === 0 && tipSettled.transferredCount === 0) {
       await admin
         .from('payouts')
         .update({ status: 'failed', failure_reason: settled.lastReason ?? 'transfer_failed' })
         .eq('id', payoutId);
       await admin.from('rides').update({ payout_id: null }).eq('payout_id', payoutId);
+      await admin.from('rides').update({ tip_payout_id: null }).eq('tip_payout_id', payoutId);
       log('finalized', { status: 'failed' });
       return json(
         { error: friendlyProviderError(settled.lastReason), code: 'PROVIDER_ERROR' },
@@ -321,14 +368,21 @@ Deno.serve(async (req) => {
     }
 
     // Sucesso (total ou parcial): reflete o que REALMENTE saiu.
+    // rides_count conta CORRIDAS distintas: a mesma corrida pode ter mandado
+    // tarifa e gorjeta (dois transfers), e ainda assim é uma corrida só.
+    const paidRideIds = new Set<string>([
+      ...results.filter((r) => r.ok).map((r) => r.rideId),
+      ...claimedTips.filter((t) => !tipSettled.failedRideIds.includes(t.id)).map((t) => t.id),
+    ]);
+
     await admin
       .from('payouts')
       .update({
         status: 'completed',
         processed_at: new Date().toISOString(),
         stripe_transfer_id: settled.firstTransferId,
-        amount: centsToDollars(settled.transferredCents),
-        rides_count: settled.transferredCount,
+        amount: centsToDollars(totalCents),
+        rides_count: paidRideIds.size,
       })
       .eq('id', payoutId);
     log('finalized', { status: 'completed' });
@@ -337,8 +391,9 @@ Deno.serve(async (req) => {
       ok: true,
       payout_id: payoutId,
       transfer_id: settled.firstTransferId,
-      amount: centsToDollars(settled.transferredCents),
-      rides_count: settled.transferredCount,
+      amount: centsToDollars(totalCents),
+      tip_amount: centsToDollars(tipSettled.transferredCents),
+      rides_count: paidRideIds.size,
       skipped: claimedRows.length - settled.transferredCount,
     });
   } catch (e) {

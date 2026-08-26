@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Platform, Alert, ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -12,6 +13,10 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 import { useAuth } from '../../hooks/useAuth';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { generateAndShareWaybill } from '../../lib/waybillExport';
+import { tipRide } from '../../hooks/useRide';
+import {
+  TIP_PRESETS, isTipAmountValid, parseTipInput, tipEligibility, toTipCents,
+} from '../../lib/tip';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetails'>;
 
@@ -72,6 +77,49 @@ export function TripDetailsScreen({ navigation, route }: Props) {
     }
   }
 
+  // ── Gorjeta retroativa ────────────────────────────────────────────────────
+  // Até aqui a gorjeta só existia na `RateRideScreen`, alcançável de UM jeito:
+  // a `ActiveRideScreen` navegando para lá no instante em que o status vira
+  // `completed`, e só com aquela tela em foco. Passageiro com o celular
+  // bloqueado no fim da corrida nunca via a tela — e não havia volta. Esta tela
+  // MOSTRAVA a gorjeta quando ela existia e não oferecia nenhuma.
+  //
+  // A `tip-ride` publicada já aceita isto sem alteração: autoriza por
+  // `passenger_id`, é idempotente e não impõe janela. O prazo é regra de
+  // produto e mora em `src/lib/tip.ts` — hoje só do lado do app, o que está
+  // escrito lá.
+  //
+  // `tipPago` guarda o valor recém-dado para a tela mudar na hora: `ride` vem
+  // dos params da navegação e não é refeito.
+  const [tipPago, setTipPago] = useState<number | null>(null);
+  const [tipEscolhido, setTipEscolhido] = useState<number>(0);
+  const [tipDigitado, setTipDigitado] = useState('');
+  const [tipEnviando, setTipEnviando] = useState(false);
+
+  const tipValor = tipDigitado.trim() ? (parseTipInput(tipDigitado) ?? 0) : tipEscolhido;
+  const elegivel = tipEligibility(
+    { ...ride, tip_amount: tipPago ?? ride.tip_amount },
+    Date.now(),
+  );
+
+  async function handleTip() {
+    if (tipEnviando || !isTipAmountValid(tipValor)) return;
+    setTipEnviando(true);
+    const r = await tipRide(ride.id, toTipCents(tipValor));
+    setTipEnviando(false);
+    if (r.ok) {
+      // `already_tipped` também volta `ok`: alguém gorjetou desta ou de outra
+      // sessão. Marcar como pago é o desfecho certo dos dois jeitos — o que não
+      // pode acontecer é a tela continuar oferecendo e o passageiro tentar de
+      // novo achando que falhou.
+      setTipPago(tipValor);
+      setTipDigitado('');
+      setTipEscolhido(0);
+      return;
+    }
+    Alert.alert(t('rate.tipErrorTitle'), r.error || t('rate.tipErrorMessage'));
+  }
+
   const info = statusInfo(ride);
   const isCancelled = ride.status === 'cancelled';
   const scheduled = fmtDateTime(ride.scheduled_for);
@@ -79,6 +127,30 @@ export function TripDetailsScreen({ navigation, route }: Props) {
   const accepted = fmtDateTime(ride.accepted_at);
   const completed = fmtDateTime(ride.completed_at);
   const duration = fmtDuration(ride.duration_min);
+
+  // A gorjeta é cobrada num PaymentIntent SEPARADO da tarifa (migração 0064 e
+  // supabase/functions/tip-ride), então `rides.price` NÃO a contém. Enquanto
+  // esta tela mostrava só `price` sob o rótulo "Total", um passageiro que
+  // gorjetou via um total menor do que o que a fatura do cartão dele cobra —
+  // um "erro de cobrança" que não existe, mas gera disputa. Somamos aqui.
+  const fareAmount = Number(ride.price) || 0;
+  // `tipPago` entra aqui para que a gorjeta dada AGORA apareça no resumo sem
+  // depender de a tela ser recarregada — `ride` vem dos params e não é refeito.
+  const tipRaw = tipPago ?? (Number(ride.tip_amount) || 0);
+  const tipAmount = tipRaw > 0 ? tipRaw : 0;
+
+  // `paid = false` significa que a TARIFA não está no cartão do passageiro: ou
+  // nunca foi capturada, ou foi estornada (supabase/functions/refund-ride grava
+  // `paid = false` ao estornar). A gorjeta vive num PaymentIntent separado e o
+  // refund-ride NÃO a estorna, então ela continua cobrada. Somar `price` num
+  // total depois de um estorno faria a tela afirmar uma cobrança que já foi
+  // desfeita — o passageiro compara com a fatura, não bate, e abre disputa.
+  // O total só soma o que o cartão realmente reteve.
+  const fareCollected = ride.paid === true;
+  const totalAmount = (fareCollected ? fareAmount : 0) + tipAmount;
+  // Quando a tarifa não foi retida precisamos mostrar a linha dela mesmo sem
+  // gorjeta, senão o valor da corrida sumiria da tela sem explicação.
+  const showFareLine = tipAmount > 0 || !fareCollected;
 
   // Só renderiza linhas de metadados que existem — evita "—" espalhados.
   const rows: { label: string; value: string }[] = [];
@@ -151,9 +223,29 @@ export function TripDetailsScreen({ navigation, route }: Props) {
                 {ride.paid ? t('history.paid') : t('history.unpaid')}
               </Text>
             </View>
+            {/* Tarifa e gorjeta aparecem separadas quando houve gorjeta ou
+                quando a tarifa não foi retida — no caso simples (paga, sem
+                gorjeta) a tela fica exatamente como antes: uma linha "Total". */}
+            {showFareLine && (
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>{t('rate.summaryFare')}</Text>
+                <Text style={styles.metaValue}>{formatCurrency(fareAmount)}</Text>
+              </View>
+            )}
+            {tipAmount > 0 && (
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>{t('rate.summaryTip')}</Text>
+                <Text style={styles.metaValue}>{formatCurrency(tipAmount)}</Text>
+              </View>
+            )}
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>{t('tripDetails.total')}</Text>
-              <Text style={styles.totalValue}>{formatCurrency(ride.price)}</Text>
+              {/* "Total com gorjeta" só é verdade quando as DUAS parcelas foram
+                  cobradas. Sem a tarifa, o total é só a gorjeta e o rótulo
+                  volta a ser o neutro "Total". */}
+              <Text style={styles.totalLabel}>
+                {fareCollected && tipAmount > 0 ? t('rate.summaryTotalWithTip') : t('tripDetails.total')}
+              </Text>
+              <Text style={styles.totalValue}>{formatCurrency(totalAmount)}</Text>
             </View>
 
             {receiptEnabled && ride.status === 'completed' && (
@@ -168,6 +260,64 @@ export function TripDetailsScreen({ navigation, route }: Props) {
                   ? <ActivityIndicator size="small" color={colors.primary} />
                   : <Text style={styles.receiptBtnText}>{t('tripDetails.downloadReceipt')}</Text>}
               </TouchableOpacity>
+            )}
+
+            {/* Gorjeta retroativa. Só aparece quando ainda cabe: corrida
+                concluída, sem gorjeta e dentro do prazo (src/lib/tip.ts).
+                Fora disso não há bloco nenhum — um botão desabilitado com
+                explicação seria pior do que a ausência dele, porque convida a
+                tentar e depois nega. */}
+            {elegivel.canTip && (
+              <View style={styles.tipBox}>
+                <Text style={styles.tipTitle}>{t('rate.tipTitle')}</Text>
+                <Text style={styles.tipSub}>{t('rate.tipSub')}</Text>
+
+                <View style={styles.tipPresets}>
+                  {TIP_PRESETS.map((v) => {
+                    const ativo = !tipDigitado.trim() && tipEscolhido === v;
+                    return (
+                      <TouchableOpacity
+                        key={v}
+                        style={[styles.tipChip, ativo && styles.tipChipOn]}
+                        onPress={() => { setTipDigitado(''); setTipEscolhido(ativo ? 0 : v); }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: ativo }}
+                        accessibilityLabel={formatCurrency(v)}
+                      >
+                        <Text style={[styles.tipChipText, ativo && styles.tipChipTextOn]}>
+                          {formatCurrency(v)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <TextInput
+                    style={styles.tipInput}
+                    value={tipDigitado}
+                    onChangeText={(v) => { setTipDigitado(v); setTipEscolhido(0); }}
+                    placeholder={t('rate.customTip')}
+                    placeholderTextColor={colors.gray[400]}
+                    keyboardType="decimal-pad"
+                    accessibilityLabel={t('rate.customTip')}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.tipBtn, !isTipAmountValid(tipValor) && styles.tipBtnOff]}
+                  onPress={handleTip}
+                  disabled={tipEnviando || !isTipAmountValid(tipValor)}
+                  accessibilityRole="button"
+                >
+                  {tipEnviando
+                    ? <ActivityIndicator size="small" color={colors.card} />
+                    : (
+                      <Text style={styles.tipBtnText}>
+                        {isTipAmountValid(tipValor)
+                          ? t('rate.tipPreview').replace('{amount}', formatCurrency(tipValor))
+                          : t('rate.tipTitle')}
+                      </Text>
+                    )}
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         )}
@@ -254,6 +404,30 @@ function makeStyles(colors: AppTheme) {
       borderWidth: 1.5, borderColor: colors.primary, alignItems: 'center',
     },
     receiptBtnText: { fontSize: 14, fontWeight: '700', color: colors.primary },
+
+    // Gorjeta retroativa
+    tipBox: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.gray[100] },
+    tipTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+    tipSub: { fontSize: 13, color: colors.gray[500], marginTop: 2, marginBottom: 12 },
+    tipPresets: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    tipChip: {
+      flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center',
+      borderWidth: 1.5, borderColor: colors.gray[200],
+    },
+    tipChipOn: { borderColor: colors.primary, backgroundColor: 'rgba(201,168,76,0.12)' },
+    tipChipText: { fontSize: 14, fontWeight: '700', color: colors.gray[500] },
+    tipChipTextOn: { color: colors.primary },
+    tipInput: {
+      flex: 1, paddingVertical: 11, paddingHorizontal: 10, borderRadius: 10,
+      borderWidth: 1.5, borderColor: colors.gray[200],
+      fontSize: 14, fontWeight: '700', color: colors.text, textAlign: 'center',
+    },
+    tipBtn: {
+      marginTop: 12, paddingVertical: 13, borderRadius: 10,
+      alignItems: 'center', backgroundColor: colors.primary,
+    },
+    tipBtnOff: { opacity: 0.4 },
+    tipBtnText: { fontSize: 15, fontWeight: '700', color: colors.card },
 
     idRow: {
       flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

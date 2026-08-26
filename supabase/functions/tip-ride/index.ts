@@ -16,7 +16,22 @@ const SUPABASE_ANON_KEY    = Deno.env.get('SUPABASE_ANON_KEY')         ?? '';
 
 // Teto de gorjeta (proteção contra abuso/cobrança de valor arbitrário).
 // Configurável por env; default $200.
-const MAX_TIP_CENTS = Number(Deno.env.get('MAX_TIP_CENTS') ?? '20000') || 20000;
+//
+// P2-10: o teto configurável passa a ser limitado por um teto RÍGIDO de $2000,
+// que é o mesmo do CHECK `rides_fee_components_sane` (migração 0065:
+// `tip_amount <= 2000`). Sem este `Math.min`, subir MAX_TIP_CENTS por variável
+// de ambiente acima de 200000 abriria uma janela em que o Stripe COBRA o
+// passageiro com sucesso e o UPDATE seguinte (`tip_amount: amountCents / 100`,
+// mais abaixo) é rejeitado pelo banco: dinheiro capturado, gorjeta não
+// registrada e — como o repasse sai de `tip_amount`/`tip_payment_intent_id` —
+// gorjeta nunca paga a ninguém. Com o teto rígido, a recusa acontece ANTES da
+// cobrança. Se um dia o produto precisar de gorjeta acima de $2000, é o CHECK
+// que muda primeiro: os dois números não podem divergir.
+const DB_MAX_TIP_CENTS = 200000; // espelha o CHECK tip_amount <= 2000 (0065)
+const MAX_TIP_CENTS = Math.min(
+  Number(Deno.env.get('MAX_TIP_CENTS') ?? '20000') || 20000,
+  DB_MAX_TIP_CENTS,
+);
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -108,9 +123,16 @@ Deno.serve(async (req) => {
     });
 
     if (paymentIntent.status === 'succeeded') {
+      // Grava também o PaymentIntent DA GORJETA. Ele é o que lastreia o transfer
+      // da gorjeta para o motorista (source_transaction) no repasse — sem esse
+      // id a gorjeta não teria como ser paga a quem é de direito. Ver migração
+      // 0064 para o porquê de a gorjeta ser um transfer separado do da tarifa.
       await admin
         .from('rides')
-        .update({ tip_amount: amountCents / 100 })
+        .update({
+          tip_amount: amountCents / 100,
+          tip_payment_intent_id: paymentIntent.id,
+        })
         .eq('id', rideId);
       return json({ success: true });
     }

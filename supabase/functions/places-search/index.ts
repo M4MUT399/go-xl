@@ -13,14 +13,33 @@
 // servidor (GOOGLE_PLACES_API_KEY) e o cliente nunca mais recebe/embute
 // nenhuma chave para esse uso.
 //
+//   POST { action: 'autocomplete', query, near?: {lat,lng}, sessionToken }
+//     → { suggestions: [...] } (Places API New — places:autocomplete)
+//   POST { action: 'details', placeId, sessionToken }
+//     → { location: { latitude, longitude } | null } (Places API New)
 //   POST { action: 'search', query: string, near?: {lat,lng} }
 //     → { results: [{ name, formatted_address, geometry, types }] } (Places Text Search)
 //   POST { action: 'reverse', lat: number, lng: number }
 //     → { formatted_address: string | null } (Geocoding reverso)
 //
+// Por que autocomplete+details e não mais text search para a digitação: Text
+// Search cobra por requisição e é desenhado para uma consulta inteira, não
+// para uma lista que se refaz a cada tecla. O par autocomplete→details com o
+// MESMO `sessionToken` é cobrado como UMA sessão, o que é o que permite baixar
+// o debounce sem multiplicar a conta. A regra que sustenta isso: o token vale
+// de quando o passageiro começa a digitar até o details que resolve a escolha;
+// depois disso ele morre e o cliente precisa gerar outro. Reusar um token já
+// fechado faz a Google cobrar tudo por requisição de novo.
+//
+// `action: 'search'` continua aqui porque há app instalado em campo (os QR já
+// impressos) que ainda chama essa rota. Pode sair quando não houver mais build
+// antigo em uso — hoje nada no repositório chama.
+//
 // Setup (uma vez):
-//   1) Google Cloud Console (projeto goxl-2026) → confirmar "Places API" e
-//      "Geocoding API" habilitadas
+//   1) Google Cloud Console (projeto goxl-2026) → confirmar "Places API (New)"
+//      (autocomplete/details), "Places API" (text search legado) e
+//      "Geocoding API" habilitadas. Sem a (New), o autocomplete falha e o
+//      cliente cai no Nominatim — degrada, não quebra.
 //   2) Criar uma chave de SERVIDOR nova e dedicada (Restrição de aplicativo:
 //      Nenhuma — ela nunca sai do servidor; Restrição de API: Places API +
 //      Geocoding API, para limitar o raio de dano caso vaze de outra forma)
@@ -38,6 +57,14 @@ const GOOGLE_KEY         = Deno.env.get('GOOGLE_PLACES_API_KEY') ?? '';
 
 const GOOGLE_PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const GOOGLE_GEOCODE_REVERSE   = 'https://maps.googleapis.com/maps/api/geocode/json';
+const GOOGLE_PLACES_AUTOCOMPLETE = 'https://places.googleapis.com/v1/places:autocomplete';
+const GOOGLE_PLACES_DETAILS      = 'https://places.googleapis.com/v1/places';
+
+// O placeId e o token entram numa URL montada aqui. Sem esta trava, um cliente
+// autenticado escolhe o caminho e a query string da chamada que sai DO NOSSO
+// servidor COM A NOSSA CHAVE — o encode sozinho não impede um `..` no caminho.
+const PLACE_ID_OK = /^[A-Za-z0-9_-]{1,512}$/;
+const SESSION_TOKEN_OK = /^[A-Za-z0-9-]{1,64}$/;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -76,6 +103,59 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const { action } = body ?? {};
+
+    if (action === 'autocomplete') {
+      const query = typeof body.query === 'string' ? body.query.trim() : '';
+      if (query.length < 3) return json({ suggestions: [] });
+
+      const sessionToken = typeof body.sessionToken === 'string' ? body.sessionToken : '';
+      if (!SESSION_TOKEN_OK.test(sessionToken)) return json({ error: 'sessionToken inválido' }, 400);
+
+      const payload: Record<string, unknown> = {
+        input: query,
+        languageCode: 'en',
+        includedRegionCodes: ['us'],
+        sessionToken,
+      };
+      if (isLatLng(body.near)) {
+        payload.locationBias = {
+          circle: {
+            center: { latitude: body.near.lat, longitude: body.near.lng },
+            radius: 50000,
+          },
+        };
+      }
+
+      const res = await fetch(GOOGLE_PLACES_AUTOCOMPLETE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': GOOGLE_KEY },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return json({ error: 'Falha na busca' }, 502);
+      const data = await res.json();
+      return json({ suggestions: data.suggestions ?? [] });
+    }
+
+    if (action === 'details') {
+      const placeId = typeof body.placeId === 'string' ? body.placeId : '';
+      if (!PLACE_ID_OK.test(placeId)) return json({ error: 'placeId inválido' }, 400);
+
+      const sessionToken = typeof body.sessionToken === 'string' ? body.sessionToken : '';
+      if (!SESSION_TOKEN_OK.test(sessionToken)) return json({ error: 'sessionToken inválido' }, 400);
+
+      // A máscara é só `location`, e é de propósito: `location` é Essentials,
+      // mas `displayName` é Pro e subiria a sessão inteira de faixa. Nome e
+      // endereço já vieram na predição do autocomplete — pedir de novo aqui
+      // seria pagar mais caro pelo que o cliente já tem na mão.
+      const url = `${GOOGLE_PLACES_DETAILS}/${encodeURIComponent(placeId)}` +
+        `?sessionToken=${encodeURIComponent(sessionToken)}`;
+      const res = await fetch(url, {
+        headers: { 'X-Goog-Api-Key': GOOGLE_KEY, 'X-Goog-FieldMask': 'location' },
+      });
+      if (!res.ok) return json({ error: 'Falha ao resolver o endereço' }, 502);
+      const data = await res.json();
+      return json({ location: data.location ?? null });
+    }
 
     if (action === 'search') {
       const query = typeof body.query === 'string' ? body.query.trim() : '';

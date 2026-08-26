@@ -67,6 +67,12 @@ export interface CompletedRide {
   distance_km: number;
   completed_at: string;
   destination_address: string;
+  /** Parte do motorista na TARIFA (já com pedágio, sem a comissão). */
+  driver_amount?: number | null;
+  /** Gorjeta do passageiro — vai INTEIRA ao motorista, fora do split. */
+  tip_amount?: number | null;
+  /** Tarifa realmente retida no cartão. `false` = nunca capturada ou estornada. */
+  paid?: boolean | null;
 }
 
 export function useDriverStats(driverId: string | undefined) {
@@ -85,7 +91,13 @@ export function useDriverStats(driverId: string | undefined) {
       const { data, error: queryError } = await withTimeout(
         supabase
           .from('rides')
-          .select('id, price, distance_km, completed_at, destination_address')
+          // driver_amount e tip_amount são o que o motorista REALMENTE recebe.
+          // Sem eles a tela caía no fallback price * DRIVER_SHARE, que ignora
+          // pedágio, taxa de aeroporto e gorjeta.
+          // `paid` entra porque uma corrida estornada mantém driver_amount
+          // preenchido: sem esta coluna a tela soma como ganho um dinheiro que
+          // o motorista não vai receber (o repasse exige paid = true).
+          .select('id, price, distance_km, completed_at, destination_address, driver_amount, tip_amount, paid')
           .eq('driver_id', driverId)
           .eq('status', 'completed')
           .order('completed_at', { ascending: false }),

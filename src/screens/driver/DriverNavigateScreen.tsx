@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Platform, Alert, Image, Dimensions, LayoutAnimation, UIManager,
+  Platform, Alert, Image, Dimensions, LayoutAnimation, UIManager, ActivityIndicator,
 } from 'react-native';
 import MapView, { Marker, MarkerAnimated, AnimatedRegion, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -156,6 +156,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   // mesmo que o motorista já estivesse a caminho do destino.
   const [phase, setPhase] = useState<Phase>(() => (ride.status === 'in_progress' ? 'dropoff' : 'pickup'));
   const [loading, setLoading] = useState(false);
+  /** Cancelamento (estorno + UPDATE) em voo — trava o botão, ver handleCancel. */
+  const [cancelling, setCancelling] = useState(false);
   // Bloco 4 (compliance TNC F.S. 627.748): aviso não bloqueante se o
   // passageiro ainda não confirmou motorista+veículo (ver
   // src/lib/driverBoardingConfirmation.ts — DECISÃO DE DESIGN: nunca trava o
@@ -749,9 +751,38 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
         text: t('driverNav.yesCancel'),
         style: 'destructive',
         onPress: async () => {
-          // Extorna o pagamento antes de cancelar
-          await refundRide(ride.id);
+          if (cancelling) return;
+          setCancelling(true);
+          // Extorna o pagamento antes de cancelar.
+          //
+          // O resultado do estorno era DESCARTADO — e o alerta que o motorista
+          // acabou de aceitar (`driverNav.cancelRideConfirm`) diz, com todas as
+          // letras, "o passageiro será reembolsado automaticamente". Com a Edge
+          // Function falhando, a corrida era cancelada mesmo assim e o dinheiro
+          // do passageiro continuava retido no cartão, sem que ninguém — nem o
+          // motorista, nem o passageiro — soubesse. Uma promessa de devolver
+          // dinheiro que não se cumpre e não se comunica é o pior defeito que
+          // este app pode ter.
+          //
+          // Por isso abortamos o cancelamento quando o estorno não confirma.
+          // Isso NÃO prende o motorista: `refund-ride` é idempotente (uma
+          // corrida sem cobrança volta `success: true, no_charge: true`), então
+          // tentar de novo funciona; e se a falha for de rede, o
+          // `updateRideStatus` logo abaixo — mesma rede — falharia igualmente.
+          const refund = await refundRide(ride.id);
+          if (!refund.ok) {
+            setCancelling(false);
+            // PENDÊNCIA DE PRODUTO: falta `driverNav.refundFailed` = "Não foi
+            // possível estornar o passageiro, então a corrida não foi cancelada.
+            // Tente de novo." Reusamos `driverNav.statusUpdateFailed`, que já diz
+            // "não foi possível atualizar a corrida, verifique sua conexão e
+            // tente de novo" — verdadeiro aqui e presente em en/es/pt.
+            // src/i18n/translations.ts está sob edição do dono.
+            Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+            return;
+          }
           const ok = await updateRideStatus(ride.id, 'cancelled' as RideStatus);
+          setCancelling(false);
           if (!ok) {
             // Escrita não confirmada: NÃO sai da tela, senão a corrida fica
             // presa como ativa no banco. O motorista pode tentar de novo.
@@ -878,11 +909,18 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       return;
     }
 
+    // Este SELECT é um round-trip completo antes de qualquer diálogo aparecer.
+    // O botão principal já sabe mostrar spinner (`loading={loading}`), mas o
+    // `loading` só era ligado lá dentro, em `handleNextPhase` — durante esta
+    // consulta o botão ficava inerte e o motorista, sem nenhuma resposta ao
+    // toque, apertava de novo. Ligamos o mesmo estado aqui.
+    setLoading(true);
     const { data } = await supabase
       .from('rides')
       .select('passenger_confirmed_driver_at')
       .eq('id', ride.id)
       .maybeSingle();
+    setLoading(false);
 
     const warning = boardingWarning({
       rideStatus: ride.status,
@@ -1298,8 +1336,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           style={arrivalGeofenceEnabled && arrivedHint ? styles.btnArrived : styles.btn}
         />
         {phase === 'pickup' && (
-          <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
-            <Text style={styles.cancelBtnText}>{t('driverNav.cancelRide')}</Text>
+          // O cancelamento faz duas chamadas de rede em sequência (estorno +
+          // UPDATE de status) e passa fácil dos 400 ms. Antes o botão continuava
+          // ativo e sem qualquer sinal durante todo esse tempo — o motorista
+          // tocava de novo e disparava um segundo estorno em paralelo.
+          <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel} disabled={cancelling}>
+            {cancelling
+              ? <ActivityIndicator size="small" color={colors.error} />
+              : <Text style={styles.cancelBtnText}>{t('driverNav.cancelRide')}</Text>}
           </TouchableOpacity>
         )}
       </View>

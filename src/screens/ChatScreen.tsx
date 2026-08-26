@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  FlatList, KeyboardAvoidingView, Platform,
+  FlatList, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
 } from 'react-native';
 // SafeAreaView do 'react-native' (não deste pacote) é NO-OP no Android — só
 // aplica insets no iOS. Isso deixava o header do chat sobrepondo a barra de
@@ -29,7 +29,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { messages, sendMessage } = useMessages(rideId, profile?.id);
+  const { messages, loadFailed, sendMessage } = useMessages(rideId, profile?.id);
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const listRef = useRef<FlatList<Message>>(null);
@@ -55,10 +55,41 @@ export function ChatScreen({ navigation, route }: Props) {
     }, [rideId])
   );
 
-  function handleSend() {
-    if (!text.trim()) return;
-    sendMessage(text);
+  /**
+   * Antes: `sendMessage(text); setText('')` — o campo era limpo e a mensagem
+   * "sumia" para sempre quando o INSERT falhava (RLS, rede), sem bolha na lista
+   * e sem aviso. Num chat de corrida isso é caro: o passageiro escreve "estou
+   * na porta 3", vê o campo esvaziar, acredita que avisou e fica esperando.
+   * Agora, na falha, o texto VOLTA ao campo (para reenviar sem redigitar) e o
+   * erro é dito em voz alta.
+   *
+   * A limpeza continua OTIMISTA — `setText('')` ANTES do `await`, não depois —
+   * e é de propósito. Uma versão anterior deste comentário dizia "só limpamos
+   * depois do servidor confirmar", o que o código abaixo desmente: num chat, o
+   * campo que não esvazia no toque parece travado, e o INSERT passa dos 400 ms
+   * em rede ruim. O que consertou o defeito não foi atrasar a limpeza, foi
+   * passar a RESTAURAR. E a restauração é `current ? current : outgoing`
+   * justamente para não apagar o que o usuário digitou enquanto o envio voava.
+   * O `sending` existe porque o botão ficava ativo durante esses 400 ms — dois
+   * toques gravavam a mesma mensagem duas vezes.
+   */
+  const [sending, setSending] = useState(false);
+
+  async function handleSend() {
+    const outgoing = text.trim();
+    if (!outgoing || sending) return;
+    setSending(true);
     setText('');
+    const ok = await sendMessage(outgoing);
+    setSending(false);
+    if (!ok) {
+      setText((current) => (current ? current : outgoing));
+      // PENDÊNCIA DE PRODUTO: falta uma chave `chat.sendFailed` = "Não foi
+      // possível enviar sua mensagem. Verifique sua conexão e tente de novo."
+      // Reusamos `payment.connectError` (mesmo sentido, existe em en/es/pt)
+      // porque src/i18n/translations.ts está sob edição do dono.
+      Alert.alert(t('common.error'), t('payment.connectError'));
+    }
   }
 
   return (
@@ -88,9 +119,20 @@ export function ChatScreen({ navigation, route }: Props) {
           contentContainerStyle={styles.list}
           onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
           ListEmptyComponent={
+            // Quando a leitura do histórico falha, a lista vem vazia igualzinho a
+            // uma conversa que ainda não começou. Mostrar "Nenhuma mensagem ainda"
+            // nesse caso é mentira: pode haver mensagens do outro lado que o
+            // usuário não está vendo. Trocamos o texto (e o ícone) para dizer que
+            // foi falha de carregamento.
+            // PENDÊNCIA DE PRODUTO: o ideal seria `chat.loadFailed` = "Não foi
+            // possível carregar as mensagens." — translations.ts está sob edição
+            // do dono, então reusamos `payment.connectError`, que já diz
+            // "não foi possível conectar, verifique sua conexão" em en/es/pt.
             <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>💬</Text>
-              <Text style={styles.emptyText}>{t('chat.empty')}</Text>
+              <Text style={styles.emptyEmoji}>{loadFailed ? '⚠️' : '💬'}</Text>
+              <Text style={styles.emptyText}>
+                {loadFailed ? t('payment.connectError') : t('chat.empty')}
+              </Text>
             </View>
           }
           renderItem={({ item }) => {
@@ -118,8 +160,14 @@ export function ChatScreen({ navigation, route }: Props) {
             multiline
             onSubmitEditing={handleSend}
           />
-          <TouchableOpacity style={[styles.sendBtn, !text.trim() && styles.sendBtnDisabled]} onPress={handleSend} disabled={!text.trim()}>
-            <Text style={styles.sendBtnText}>↑</Text>
+          <TouchableOpacity
+            style={[styles.sendBtn, (!text.trim() || sending) && styles.sendBtnDisabled]}
+            onPress={handleSend}
+            disabled={!text.trim() || sending}
+          >
+            {sending
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Text style={styles.sendBtnText}>↑</Text>}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>

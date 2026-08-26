@@ -29,6 +29,7 @@ import Stripe from 'npm:stripe@17';
 import { createClient, SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { reconcileSettlement, type RideTransferResult } from '../_shared/payout.ts';
 import { centsToDollars, dollarsToCents, sumDollarsToCents } from '../_shared/money.ts';
+import { claimPendingTips, settleTips, type PendingTip } from '../_shared/tipPayout.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
@@ -106,6 +107,7 @@ async function payoutDriver(
   driverId: string,
   accountId: string,
   rides: EligibleRide[],
+  pendingTips: PendingTip[],
 ): Promise<DriverResult> {
   // Confirma no Stripe que a conta pode receber payouts AGORA (flag do banco
   // pode estar desatualizada — só é sincronizada quando o motorista abre o app).
@@ -115,7 +117,10 @@ async function payoutDriver(
   }
 
   // Saldo em CENTAVOS inteiros (fim do "saldo fantasma" de float; _shared/money).
-  const amountCents = sumDollarsToCents(rides.map((r) => r.driver_amount));
+  // A gorjeta entra no saldo: é dinheiro do motorista igual à tarifa (ver 0064).
+  const fareCents = sumDollarsToCents(rides.map((r) => r.driver_amount));
+  const tipCents = sumDollarsToCents(pendingTips.map((t) => t.tip_amount));
+  const amountCents = fareCents + tipCents;
   if (amountCents <= 0) {
     return { driver_id: driverId, status: 'skipped', reason: 'no_balance' };
   }
@@ -147,7 +152,10 @@ async function payoutDriver(
     .select('id, driver_id, driver_amount, stripe_payment_intent_id');
   const claimedRows = (claimed as EligibleRide[]) ?? [];
 
-  if (claimedRows.length === 0) {
+  // Mesma reserva atômica para as GORJETAS, por coluna própria (tip_payout_id).
+  const claimedTips = await claimPendingTips(admin, driverId, payoutId);
+
+  if (claimedRows.length === 0 && claimedTips.length === 0) {
     await admin.from('payouts').update({ status: 'failed', failure_reason: 'no_rides_claimed' }).eq('id', payoutId);
     return { driver_id: driverId, status: 'skipped', reason: 'no_rides_claimed' };
   }
@@ -180,33 +188,57 @@ async function payoutDriver(
     }
   }
 
+  // 3) Gorjetas: transfer PRÓPRIO por corrida, sacado da cobrança da gorjeta e
+  //    INTEIRO (sem comissão da plataforma). Ver _shared/tipPayout.ts.
+  const tipSettled = await settleTips(
+    stripe,
+    accountId,
+    payoutId,
+    claimedTips,
+    { driver_id: driverId, source: 'weekly_cron' },
+    resolveChargeId,
+  );
+
   // Conciliação pura (mesma regra do request-payout): completed/failed + quais desvincular.
   const settled = reconcileSettlement(results);
   if (settled.failedRideIds.length) {
     await admin.from('rides').update({ payout_id: null }).in('id', settled.failedRideIds);
   }
+  if (tipSettled.failedRideIds.length) {
+    await admin.from('rides').update({ tip_payout_id: null }).in('id', tipSettled.failedRideIds);
+  }
 
-  if (settled.status === 'failed') {
+  // Falha total só quando NADA saiu — nem tarifa, nem gorjeta. Um repasse só de
+  // gorjeta é legítimo: a corrida pode já ter sido paga num repasse anterior.
+  if (settled.transferredCount === 0 && tipSettled.transferredCount === 0) {
     await admin.from('payouts')
       .update({ status: 'failed', failure_reason: settled.lastReason ?? 'transfer_failed' })
       .eq('id', payoutId);
     await admin.from('rides').update({ payout_id: null }).eq('payout_id', payoutId);
+    await admin.from('rides').update({ tip_payout_id: null }).eq('tip_payout_id', payoutId);
     return { driver_id: driverId, status: 'failed', reason: settled.lastReason ?? 'transfer_failed' };
   }
+
+  const totalCents = settled.transferredCents + tipSettled.transferredCents;
+  // Corridas DISTINTAS: a mesma corrida pode ter mandado tarifa e gorjeta.
+  const paidRideIds = new Set<string>([
+    ...results.filter((r) => r.ok).map((r) => r.rideId),
+    ...claimedTips.filter((t) => !tipSettled.failedRideIds.includes(t.id)).map((t) => t.id),
+  ]);
 
   await admin.from('payouts').update({
     status: 'completed',
     processed_at: new Date().toISOString(),
     stripe_transfer_id: settled.firstTransferId,
-    amount: centsToDollars(settled.transferredCents),
-    rides_count: settled.transferredCount,
+    amount: centsToDollars(totalCents),
+    rides_count: paidRideIds.size,
   }).eq('id', payoutId);
 
   return {
     driver_id: driverId,
     status: 'paid',
-    amount: centsToDollars(settled.transferredCents),
-    rides_count: settled.transferredCount,
+    amount: centsToDollars(totalCents),
+    rides_count: paidRideIds.size,
     transfer_id: settled.firstTransferId,
   };
 }
@@ -242,7 +274,23 @@ Deno.serve(async (req) => {
       .not('driver_id', 'is', null);
 
     const rows = (eligible as EligibleRide[]) ?? [];
-    if (rows.length === 0) {
+
+    // ── Gorjetas pendentes de TODOS os motoristas ─────────────────────────────
+    // Varredura SEPARADA de propósito: a gorjeta tem reserva própria
+    // (tip_payout_id), então uma corrida já repassada pode continuar devendo
+    // gorjeta. Se dependêssemos só da varredura acima, essa gorjeta nunca
+    // entraria em repasse nenhum.
+    const { data: eligibleTips } = await admin
+      .from('rides')
+      .select('id, driver_id, tip_amount, tip_payment_intent_id')
+      .eq('paid', true)
+      .is('tip_payout_id', null)
+      .gt('tip_amount', 0)
+      .not('driver_id', 'is', null);
+
+    const tipRows = ((eligibleTips as (PendingTip & { driver_id: string })[]) ?? []);
+
+    if (rows.length === 0 && tipRows.length === 0) {
       return json({ ok: true, dry_run: dryRun, drivers: 0, paid: 0, total: 0, results: [] });
     }
 
@@ -252,6 +300,16 @@ Deno.serve(async (req) => {
       const list = byDriver.get(r.driver_id) ?? [];
       list.push(r);
       byDriver.set(r.driver_id, list);
+    }
+
+    // Gorjetas por motorista — e motorista que só tem gorjeta a receber também
+    // entra na fila (entrada vazia de corridas).
+    const tipsByDriver = new Map<string, PendingTip[]>();
+    for (const t of tipRows) {
+      const list = tipsByDriver.get(t.driver_id) ?? [];
+      list.push(t);
+      tipsByDriver.set(t.driver_id, list);
+      if (!byDriver.has(t.driver_id)) byDriver.set(t.driver_id, []);
     }
 
     // Só motoristas com conta Express configurada entram no repasse.
@@ -277,14 +335,18 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      const tips = tipsByDriver.get(driverId) ?? [];
+
       if (dryRun) {
-        const total = centsToDollars(sumDollarsToCents(rides.map((r) => r.driver_amount)));
+        const total = centsToDollars(
+          sumDollarsToCents(rides.map((r) => r.driver_amount)) + sumDollarsToCents(tips.map((t) => t.tip_amount)),
+        );
         results.push({ driver_id: driverId, status: 'paid', amount: total, rides_count: rides.length });
         continue;
       }
 
       try {
-        results.push(await payoutDriver(admin, driverId, accountId, rides));
+        results.push(await payoutDriver(admin, driverId, accountId, rides, tips));
       } catch (e) {
         // Isola a falha de um motorista para não travar a fila inteira.
         results.push({ driver_id: driverId, status: 'failed', reason: String(e) });

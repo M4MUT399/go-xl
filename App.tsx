@@ -12,6 +12,7 @@ import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
 import { installNetworkErrorGuard } from './src/lib/networkErrorGuard';
 import { preloadDriverMarkerAssets } from './src/lib/preloadAssets';
 import { registerBackgroundRevocationTask } from './src/lib/backgroundNotifications';
+import { setMetricsSink, consoleMetricsSink } from './src/lib/fieldMetrics';
 
 // Mantém a splash nativa visível até o AuthContext terminar o check de sessão
 // (AppNavigator chama SplashScreen.hideAsync() quando `loading` vira false).
@@ -32,6 +33,11 @@ preloadDriverMarkerAssets();
 // background/lockscreen). Idempotente e best-effort: no-op no Expo Go/web,
 // só ativa em build nativo. A task em si foi definida no import de index.ts.
 registerBackgroundRevocationTask();
+
+// Em dev, as métricas de campo saem no console do `expo start`. Em produção
+// não há destino: as amostras ficam só em memória até alguém plugar um sink
+// de verdade (ver src/lib/fieldMetrics.ts).
+if (__DEV__) setMetricsSink(consoleMetricsSink);
 
 // Reforço em dev: oculta o overlay de log para essas mensagens benignas.
 // Nunca aparece em build de produção.

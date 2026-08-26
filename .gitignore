@@ -46,3 +46,6 @@ GoogleService-Info.plist
 /ios
 /android
 supabase/.temp/
+
+# Cache de build do Netlify — 236 MB, com node_modules dentro. Nunca versionar.
+.netlify/

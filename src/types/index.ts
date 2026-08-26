@@ -44,6 +44,12 @@ export interface Profile {
   stripe_payment_method_id?: string;
   card_last4?: string;
   card_brand?: string;
+  // Migration 0078. Os dois campos acima ficam NULOS quando o método salvo não
+  // é cartão (Link, por exemplo), e o perfil ficava com forma de pagamento
+  // válida e invisível na tela. Estes dizem o que ela é. Nulos em perfil
+  // anterior à 0078 — ver src/lib/paymentMethod.ts, que trata os dois casos.
+  payment_method_type?: string | null;
+  payment_method_label?: string | null;
   // Stripe Connect (motorista parceiro)
   stripe_account_id?: string;
   stripe_onboarding_complete?: boolean;
@@ -174,6 +180,11 @@ export interface RideRecord {
   destination_address: string;
   status: RideStatus;
   price?: number;
+  // Gorjeta — cobrada num PaymentIntent SEPARADO da tarifa (ver 0064 e
+  // tip-ride/index.ts), então `price` NÃO a inclui. Quem exibe "total" ao
+  // passageiro precisa somar as duas, senão a tela contradiz a fatura do
+  // cartão. `useRideHistory` faz `select('*')`, então a coluna já vem.
+  tip_amount?: number;
   distance_km?: number;
   duration_min?: number;
   scheduled_for?: string;

@@ -9,6 +9,7 @@ import { offerAlertManager } from '../../lib/offerAlertManager';
 import { navigationRef } from '../../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { IncomingRideCall } from './IncomingRideCall';
+import { driverFareLines } from '../../lib/driverFareLines';
 import { useTranslation } from '../../i18n';
 import { addCarRideActionListener } from '../../native/carRideBridge';
 
@@ -193,6 +194,14 @@ export function GlobalDriverRideOverlay() {
       .then(() => {});
   }
 
+  // A taxa de aeroporto entra no `price` mas NÃO no repasse do motorista: ela
+  // é regulatória, e a comissão dele incide sobre `price - toll - venueFee`.
+  // Sem esta linha ele lê o total e espera comissão sobre ele.
+  const fareBreakdown = driverFareLines(pendingRide).map((l) => ({
+    label: t(l.labelKey),
+    value: l.value,
+  }));
+
   return (
     <IncomingRideCall
       ride={pendingRide}
@@ -200,6 +209,7 @@ export function GlobalDriverRideOverlay() {
       timeoutSeconds={callTimeout}
       accepting={accepting}
       isQrLocked={!!pendingRide.driver_id}
+      fareBreakdown={fareBreakdown}
       onAccept={handleAccept}
       onReject={handleReject}
       onExpire={handleExpire}

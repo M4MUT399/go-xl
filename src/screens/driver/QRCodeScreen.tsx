@@ -9,27 +9,33 @@ import { useTheme } from '../../hooks/useTheme';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../hooks/useAuth';
 import { useTranslation } from '../../i18n';
+import { MAX_CODE_ATTEMPTS, codeFromId } from '../../lib/driverCode';
 import type { RootStackParamList } from '../../types';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'QRCode'>;
 };
 
+/** Violação de UNIQUE no Postgres — o índice criado na migration 0069. */
+const PG_UNIQUE_VIOLATION = '23505';
+
 /**
- * Deriva um código de 6 letras/números a partir do UUID do motorista.
- * Determinístico: mesmo ID → mesmo código. Único porque UUIDs são únicos.
- * Não precisa de consulta ao banco para verificar unicidade.
+ * Quantas vezes insistir quando a GRAVAÇÃO falha (rede, RLS) — distinto de
+ * `MAX_CODE_ATTEMPTS`, que conta derivações de código em caso de colisão.
  */
-function codeFromId(id: string): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const hex = id.replace(/-/g, '');
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    const byte = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-    result += chars[byte % chars.length];
-  }
-  return result;
-}
+const MAX_WRITE_ATTEMPTS = 3;
+/** Espera entre as tentativas de gravação. Curta: o motorista está na tela. */
+const WRITE_BACKOFF_MS = [800, 2000];
+
+// `codeFromId` e `MAX_CODE_ATTEMPTS` vivem em `src/lib/driverCode.ts`.
+//
+// Estavam AQUI, com uma terceira cópia do alfabeto canônico embutida. Duas
+// consequências, ambas ruins: o literal do ESCRITOR — a única função que grava
+// `profiles.driver_code` — não era comparado com o do client nem com o do
+// servidor (`guard.ts`), e nenhum teste conseguia alcançá-lo, porque importar
+// esta tela no Jest arrasta `react-native-qrcode-svg` e o AsyncStorage. Mover
+// para `lib/` resolve os dois de uma vez; ver `driverCode.test.ts`, que fixa
+// os vetores legados de `attempt = 0`.
 
 export function QRCodeScreen({ navigation }: Props) {
   const { profile, refreshProfile } = useAuth();
@@ -40,28 +46,107 @@ export function QRCodeScreen({ navigation }: Props) {
 
   const styles = makeStyles(colors);
 
-  // Gera e salva o código na primeira vez que o motorista abre esta tela
+  // Gera e salva o código na primeira vez que o motorista abre esta tela.
+  //
+  // Com o índice único da 0069, gravar pode colidir com o código de OUTRO
+  // motorista. A colisão não é tratada como erro: é o caso previsto, e a saída
+  // é re-derivar com sal (ver `codeFromId`) e tentar de novo.
   useEffect(() => {
     if (code || !profile?.id) return;
-
-    const newCode = codeFromId(profile.id);
+    const driverId = profile.id;
+    let alive = true;
     setSaving(true);
 
-    supabase
-      .from('profiles')
-      .update({ driver_code: newCode })
-      .eq('id', profile.id)
-      .then(({ error }) => {
+    (async () => {
+      // Dois contadores, e não um: `salt` avança SÓ em colisão de código
+      // (23505), porque só nesse caso o código é que está errado. Falha de
+      // gravação (rede, RLS) repete o MESMO candidato — gastar sal por causa de
+      // Wi-Fi ruim esvaziaria as 8 derivações sem que nenhuma tivesse sido de
+      // fato recusada pelo banco.
+      let salt = 0;
+      let writeErrors = 0;
+
+      while (salt < MAX_CODE_ATTEMPTS) {
+        const candidate = codeFromId(driverId, salt);
+        // `.select()` NÃO é enfeite: desde a 0069 C.3 um trigger pode REVERTER
+        // esta gravação em silêncio — sem erro, status 200 — quando o perfil
+        // não é `type = 'driver'` ou quando já existe um código (o valor virou
+        // imutável para o cliente). Sem ler de volta, a tela exibiria um QR que
+        // não está no banco, que é o pior desfecho possível: ele resolve para
+        // "código inválido" na câmera de quem escaneia, e o motorista não tem
+        // como saber. O que vale é o que o servidor devolve.
+        const { data, error } = await supabase
+          .from('profiles')
+          .update({ driver_code: candidate })
+          .eq('id', driverId)
+          .select('driver_code')
+          .maybeSingle();
+
+        if (!alive) return;
+
         if (!error) {
-          setCode(newCode);
+          const landed = (data as { driver_code?: string | null } | null)?.driver_code ?? null;
+
+          if (!landed) {
+            // Gravação revertida pelo guard. Re-salgar não ajuda — não é
+            // colisão, é o perfil não ter direito a código. Não exibe QR.
+            console.warn('[QRCode] driver_code revertido pelo servidor (perfil não é de motorista?)');
+            setSaving(false);
+            return;
+          }
+
+          // `landed` pode DIFERIR de `candidate`: é o caso de já existir um
+          // código no banco que o perfil em memória não tinha. O certo é o do
+          // banco — é ele que resolve.
+          setCode(landed);
           refreshProfile?.();
-        } else {
-          // Mesmo com erro no save, exibe o QR com o código derivado
-          console.warn('[QRCode] erro ao salvar driver_code:', error.message);
-          setCode(newCode);
+          setSaving(false);
+          return;
         }
-        setSaving(false);
-      });
+
+        if (error.code === PG_UNIQUE_VIOLATION) {
+          // Outro motorista já tem este código. Sala e tenta de novo.
+          console.warn(`[QRCode] driver_code ${candidate} já em uso; sal ${salt + 1}`);
+          salt++;
+          continue;
+        }
+
+        // Qualquer outro erro (rede, RLS, coluna). Aqui a tela EXIBIA o código
+        // derivado assim mesmo — e essa era a contradição: quatro linhas abaixo
+        // o caminho de tentativas esgotadas se recusa a exibir código não
+        // gravado, com a justificativa certa ("um QR que leva a 'código
+        // inválido' é pior do que a ausência de QR"). O mesmo argumento vale
+        // aqui, e com mais força: rede caindo é MUITO mais provável do que oito
+        // colisões seguidas. O motorista colava no vidro um adesivo que não
+        // resolve para ninguém, sem nenhum sinal de que algo falhou.
+        //
+        // Rede é transitória, então antes de desistir o laço espera e repete —
+        // o spinner já está na tela e diz a verdade enquanto isso. Só a espera
+        // é nova; a decisão de não exibir é a mesma do bloco final.
+        writeErrors++;
+        console.warn(`[QRCode] erro ao salvar driver_code (falha ${writeErrors}):`, error.message);
+        if (writeErrors >= MAX_WRITE_ATTEMPTS) break;
+        await new Promise((resolve) => setTimeout(resolve, WRITE_BACKOFF_MS[writeErrors - 1] ?? 2000));
+        if (!alive) return;
+      }
+
+      // Duas saídas caem aqui: as 8 derivações colidiram (base absurdamente
+      // densa, ou bug em `codeFromId`), ou a gravação falhou nas três
+      // tentativas. Nos dois casos NÃO existe código gravado, e a tela não
+      // exibe QR: um adesivo que resolve para "código inválido" na câmera do
+      // passageiro é pior do que a ausência de QR, e o motorista não teria como
+      // descobrir sozinho.
+      //
+      // PENDÊNCIA DE PRODUTO: hoje o desfecho é a área do QR ficar vazia, sem
+      // texto. O certo é uma mensagem com botão de repetir, e ela precisa de
+      // chaves novas em `src/i18n/translations.ts` — arquivo em edição pelo
+      // dono e por isso não tocado aqui.
+      if (!alive) return;
+      console.warn('[QRCode] nenhum driver_code gravado; QR não será exibido');
+      setSaving(false);
+    })();
+
+    return () => { alive = false; };
   }, [profile?.id]);
 
   /** URL que o QR code vai codificar.

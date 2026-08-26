@@ -72,9 +72,14 @@ Deno.serve(async (req) => {
       return json({ cards: [] });
     }
 
-    const pms = await stripe.paymentMethods.list({
-      customer: customerId,
-      type: 'card',
+    // SEM `type: 'card'`. Aquele filtro fazia esta função devolver `cards: []`
+    // para quem paga com Link — e um array vazio é indistinguível de "não tem
+    // forma de pagamento". A passageira da corrida f28f2887 tinha método salvo,
+    // anexado e cobrável, e a tela dela dizia que não tinha nada.
+    //
+    // `listPaymentMethods` sem tipo devolve todos os métodos ANEXADOS ao
+    // cliente, que é exatamente o conjunto que pode ser cobrado.
+    const pms = await stripe.customers.listPaymentMethods(customerId, {
       limit: 100,
     });
 
@@ -87,10 +92,22 @@ Deno.serve(async (req) => {
     const cards = pms.data
       .map((pm) => ({
         id: pm.id,
+        // `brand`/`last4`/`exp*` seguem no formato de sempre — a build do app
+        // em campo depende deles e não conhece os campos novos. Para não-cartão
+        // continuam vazios, como já vinham.
         brand: pm.card?.brand ?? '',
         last4: pm.card?.last4 ?? '',
         expMonth: pm.card?.exp_month ?? null,
         expYear: pm.card?.exp_year ?? null,
+        // Os dois campos novos: o tipo cru e um rótulo pronto para a tela.
+        // Sem eles, um método sem cartão chega ao app como três strings vazias
+        // e não há como renderizá-lo senão como um cartão em branco.
+        type: pm.type,
+        label: pm.card
+          ? `${pm.card.brand} •••• ${pm.card.last4}`
+          : pm.type === 'link'
+            ? `Link${pm.link?.email ? ` · ${pm.link.email}` : ''}`
+            : pm.type,
         isDefault: pm.id === defaultId,
       }))
       // Cartão padrão sempre primeiro na lista.

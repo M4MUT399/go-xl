@@ -89,3 +89,60 @@ export function resolveRevocation(
     logTakenByOther: clearPendingRide,
   };
 }
+
+/** Como o som/vibração desta oferta deve ser encerrado. */
+export type OfferAlertReason = 'taken' | 'expired' | 'revoked';
+
+export type OfferSilenceInput = {
+  reason: RideRevokeReason;
+  /** Flag de múltiplas ofertas simultâneas ligada. */
+  multiOffer: boolean;
+  /** Com multiOffer, a oferta revogada está na fila (cabeça OU cauda). */
+  offerInQueue: boolean;
+  /** `clearPendingRide` de `resolveRevocation` — só enxerga a CABEÇA. */
+  clearPendingRide: boolean;
+  /** Esta revogação (rideId+reason) já foi processada nesta sessão. */
+  alreadyHandled: boolean;
+};
+
+export type OfferSilenceDecision = {
+  /** Parar som/vibração/watchdog, fechar o card e dispensar a notificação. */
+  silenceThisOffer: boolean;
+  /** Motivo a passar para o gerenciador de alerta. */
+  alertReason: OfferAlertReason;
+  /** Auditar 'taken_by_other' — só na PRIMEIRA vez. */
+  logTakenByOther: boolean;
+};
+
+/**
+ * Decide se ESTA oferta deve ser silenciada, e com que motivo.
+ *
+ * Vivia embutido no callback de broadcast do `useRide`, onde não havia como
+ * testá-lo sem montar o hook inteiro com Realtime falso — e um teste desses
+ * prova o mock, não a regra.
+ *
+ * Duas regras que não são óbvias e por isso existem aqui:
+ *
+ *   • `resolveRevocation` só compara com `pendingRideId`, que é a CABEÇA da
+ *     fila. Com múltiplas ofertas simultâneas a revogada pode estar na CAUDA:
+ *     nesse modo quem manda é a presença na fila, não a cabeça. Usar só a
+ *     cabeça deixaria uma oferta já dada a outro motorista tocando na cauda.
+ *
+ *   • `broadcastRideRevoked` emite DOIS eventos no aceite (`ride_offer_revoked`
+ *     e o `ride_taken` legado). Silenciar duas vezes é inofensivo — é
+ *     idempotente — mas AUDITAR duas vezes contaria a mesma perda de corrida
+ *     em dobro. Por isso o dedupe vale para o log e não para o silenciamento:
+ *     se o segundo evento chegar depois de um card ter voltado, ele ainda deve
+ *     conseguir calar o som.
+ */
+export function decideOfferSilence(input: OfferSilenceInput): OfferSilenceDecision {
+  const { reason, multiOffer, offerInQueue, clearPendingRide, alreadyHandled } = input;
+
+  const silenceThisOffer = multiOffer ? offerInQueue : clearPendingRide;
+
+  return {
+    silenceThisOffer,
+    alertReason: reason === 'taken' ? 'taken' : reason === 'expired' ? 'expired' : 'revoked',
+    logTakenByOther: silenceThisOffer && !alreadyHandled,
+  };
+}

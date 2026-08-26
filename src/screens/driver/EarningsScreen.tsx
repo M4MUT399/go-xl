@@ -43,7 +43,7 @@ export function EarningsScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
-  const { payouts, pendingBalance, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
+  const { payouts, pendingBalance, pendingTips, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
   const { status: connect, loading: connectLoading, onboarding, refresh: refreshConnect, startOnboarding } = useConnectAccount(profile?.id);
   const waybill = useWaybillConfig();
   const [period, setPeriod] = useState<Period>('week');
@@ -70,19 +70,34 @@ export function EarningsScreen() {
   }, [rides, period]);
 
   const stats = useMemo(() => {
-    const gross = filtered.reduce((s, r) => s + (Number(r.price) || 0), 0);
+    // Só conta como ganho o que o cartão do passageiro REALMENTE reteve.
+    // `refund-ride` grava paid = false ao estornar e NÃO zera driver_amount, e
+    // toda via de repasse exige paid = true (run-weekly-payouts, request-payout)
+    // — sem este filtro, uma corrida estornada seguia somando aqui e o motorista
+    // via na tela um dinheiro que nunca vai receber. Mesmo critério já aplicado
+    // no lado do passageiro (TripDetailsScreen/TripHistoryScreen).
+    // A LISTA abaixo continua mostrando a corrida: sumir com ela seria pior.
+    const paidRides = filtered.filter((r) => r.paid === true);
+    const gross = paidRides.reduce((s, r) => s + (Number(r.price) || 0), 0);
     // Usa driver_amount se disponível, fallback para gross * DRIVER_SHARE
-    const net = filtered.reduce((s, r) => {
-      const da = (r as CompletedRide & { driver_amount?: number }).driver_amount;
+    const fare = paidRides.reduce((s, r) => {
+      const da = r.driver_amount;
       return s + (da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE);
     }, 0);
-    const distance = filtered.reduce((s, r) => s + (Number(r.distance_km) || 0), 0);
+    // Gorjeta é somada FORA do split: vai inteira ao motorista, e por isso não
+    // entra no cálculo da comissão (senão a plataforma apareceria descontando
+    // uma comissão que não existe sobre a gorjeta).
+    const tips = paidRides.reduce((s, r) => s + (Number(r.tip_amount) || 0), 0);
+    const net = fare + tips;
+    const distance = paidRides.reduce((s, r) => s + (Number(r.distance_km) || 0), 0);
     return {
       gross: Math.round(gross * 100) / 100,
+      fare: Math.round(fare * 100) / 100,
+      tips: Math.round(tips * 100) / 100,
       net: Math.round(net * 100) / 100,
-      platformFee: Math.round((gross - net) * 100) / 100,
-      rides: filtered.length,
-      avg: filtered.length ? Math.round((net / filtered.length) * 100) / 100 : 0,
+      platformFee: Math.round((gross - fare) * 100) / 100,
+      rides: paidRides.length,
+      avg: paidRides.length ? Math.round((net / paidRides.length) * 100) / 100 : 0,
       miles: kmToMiles(distance),
     };
   }, [filtered]);
@@ -132,12 +147,15 @@ export function EarningsScreen() {
       const next = d.getTime() + 24 * 60 * 60 * 1000;
       const value = rides
         .filter((r) => {
+          // Mesmo critério de `stats`: corrida estornada (paid = false) não é ganho.
+          if (r.paid !== true) return false;
           const t = new Date(r.completed_at).getTime();
           return t >= d.getTime() && t < next;
         })
         .reduce((s, r) => {
-          const da = (r as CompletedRide & { driver_amount?: number }).driver_amount;
-          return s + (da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE);
+          const da = r.driver_amount;
+          const fare = da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE;
+          return s + fare + (Number(r.tip_amount) || 0);
         }, 0);
       days.push({ label: d.toLocaleDateString('en-US', { weekday: 'short' })[0], value });
     }
@@ -183,6 +201,17 @@ export function EarningsScreen() {
               <Text style={styles.heroBreakdownLabel}>{t('earnings.platformFee')}</Text>
               <Text style={styles.heroBreakdownValue}>- {formatCurrency(stats.platformFee)}</Text>
             </View>
+            {/* Gorjeta em linha PRÓPRIA (pedido do motorista, padrão Uber/Lyft):
+                sem isso ela some dentro do total e parece que não foi paga. */}
+            {stats.tips > 0 && (
+              <>
+                <View style={styles.heroBreakdownSep} />
+                <View style={styles.heroBreakdownItem}>
+                  <Text style={styles.heroBreakdownLabel}>{t('earnings.tips')}</Text>
+                  <Text style={[styles.heroBreakdownValue, styles.tipValue]}>+ {formatCurrency(stats.tips)}</Text>
+                </View>
+              </>
+            )}
           </View>
         </View>
 
@@ -220,6 +249,12 @@ export function EarningsScreen() {
             <Text style={styles.balanceValue}>{formatCurrency(pendingBalance)}</Text>
             {pendingRidesCount > 0 && (
               <Text style={styles.balanceSub}>{t('earnings.balanceSub').replace('{count}', String(pendingRidesCount))}</Text>
+            )}
+            {/* Quanto do saldo é gorjeta — o motorista pediu para ver separado. */}
+            {pendingTips > 0 && (
+              <Text style={styles.balanceTip}>
+                {t('earnings.balanceTips').replace('{amount}', formatCurrency(pendingTips))}
+              </Text>
             )}
             {connect.payoutsEnabled && (
               <Text style={styles.balanceOk}>{t('earnings.balanceOk')}</Text>
@@ -398,6 +433,7 @@ function makeStyles(colors: AppTheme) {
     heroBreakdownItem: { alignItems: 'center' },
     heroBreakdownLabel: { fontSize: 11, color: colors.gray[400], marginBottom: 2 },
     heroBreakdownValue: { fontSize: 14, fontWeight: '700', color: colors.white },
+    tipValue: { color: colors.success },
     heroBreakdownSep: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
     balanceCard: {
       backgroundColor: colors.card,
@@ -413,6 +449,7 @@ function makeStyles(colors: AppTheme) {
     balanceLabel: { fontSize: 12, color: colors.gray[500], fontWeight: '600', marginBottom: 4 },
     balanceValue: { fontSize: 26, fontWeight: '900', color: colors.text },
     balanceSub: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
+    balanceTip: { fontSize: 11, color: colors.success, fontWeight: '600', marginTop: 2 },
     balanceOk: { fontSize: 11, color: colors.success, fontWeight: '700', marginTop: 4 },
     autoPayoutNote: { fontSize: 11, color: colors.gray[400], lineHeight: 15, marginTop: -6, marginBottom: 14, paddingHorizontal: 4 },
     connectBanner: {

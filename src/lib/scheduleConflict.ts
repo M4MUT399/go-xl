@@ -11,8 +11,6 @@
 // orquestrador `checkScheduleConflict` injeta um resolvedor de tempo de
 // deslocamento (default = OSRM via getRoute), então também é testável com stub.
 
-import { getRoute } from './routing';
-
 /** Folga fixa, em minutos, exigida entre o fim de uma corrida e o início da próxima. */
 export const SCHEDULE_BUFFER_MIN = 20;
 
@@ -97,7 +95,10 @@ export function fallbackTravelMin(from: LatLng, to: LatLng): number {
   return Math.max(1, Math.round((roadKm / 35) * 60));
 }
 
+// Import tardio: `./routing` puxa a cadeia de AsyncStorage, que não existe fora
+// do runtime nativo. No topo, ele derrubava a suíte inteira deste arquivo.
 const osrmTravelMin: TravelMinResolver = async (from, to) => {
+  const { getRoute } = await import('./routing');
   const r = await getRoute(from, to);
   return r?.durationMin ?? fallbackTravelMin(from, to);
 };

@@ -24,6 +24,7 @@ import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { supabase } from '../../lib/supabase';
+import { resolveDriverCode } from '../../lib/driverCode';
 import { setPendingExpressRide } from '../../lib/expressRide';
 import { EXPRESS_PLACEHOLDER_NAME } from '../../lib/onboarding';
 import { LanguageSelector } from '../../components/common/LanguageSelector';
@@ -51,20 +52,31 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
     setLoading(true);
     try {
       // ── 1. Busca o motorista pelo código ───────────────────────────────────
-      const { data: driver } = await supabase
-        .from('profiles_public')
-        .select('id, full_name')
-        .eq('driver_code', driverCode)
-        .eq('type', 'driver')
-        .maybeSingle();
+      // Vai pela Edge Function `resolve-driver-code` (verify_jwt = false), NÃO
+      // mais por um SELECT anônimo em `profiles_public`. Esta tela roda antes
+      // do `signUp()` logo abaixo, ou seja, SEM sessão: a requisição saía como
+      // papel `anon`, e era só por causa dela que `anon` precisava de SELECT
+      // naquela view — o que dava a qualquer um com a anon key embutida no
+      // binário a lista de nome/foto/nota/tipo/driver_code de TODOS os
+      // usuários. Ver migration 0067 e src/lib/driverCode.ts.
+      const lookup = await resolveDriverCode(driverCode);
 
-      const driverId   = (driver as { id: string; full_name: string } | null)?.id ?? null;
-      const driverName = (driver as { id: string; full_name: string } | null)?.full_name ?? '';
-
-      if (!driverId) {
+      // "Código inválido — peça um novo ao motorista" SÓ pode aparecer quando o
+      // servidor de fato deu esse veredito. Em `unavailable` (rede, timeout,
+      // 429 do rate limit público, 503 do disjuntor) o QR está perfeito e a
+      // mensagem antiga mandava o passageiro descartá-lo na frente do
+      // motorista. Ver `DriverCodeLookup` em src/lib/driverCode.ts.
+      if (lookup.status === 'unavailable') {
+        Alert.alert(t('express.errorTitle'), t('express.errorGeneric'));
+        return;
+      }
+      if (lookup.status === 'not_found') {
         Alert.alert(t('express.invalidCodeTitle'), t('express.invalidCodeMessage'));
         return;
       }
+
+      const driverId   = lookup.driver.id;
+      const driverName = lookup.driver.full_name;
 
       // ── 2. Cria conta expressa no Supabase ────────────────────────────────
       // E-mail interno único (o passageiro informa o e-mail real depois, no

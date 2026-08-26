@@ -31,7 +31,13 @@ export function HomeScreen({ navigation }: Props) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const { location, status, retry } = useLocation();
-  const { drivers } = useNearbyDrivers(true);
+  // A posição do passageiro é o CENTRO do raio da RPC `nearby_online_drivers`
+  // (migration 0069): coordenada de motorista não sai mais por listagem. Até o
+  // GPS resolver, o hook cai no centro de Orlando.
+  const { drivers } = useNearbyDrivers(
+    true,
+    location ? { lat: location.lat, lng: location.lng } : null,
+  );
   const { chatRides, totalUnread, refresh } = useUnreadMessages(profile?.id);
   // Corrida em andamento (requesting/accepted/driver_en_route/in_progress).
   // Antes, ao sair da tela de busca/corrida, a viagem "sumia" (só vivia nos
@@ -193,7 +199,13 @@ export function HomeScreen({ navigation }: Props) {
               anchor={{ x: 0.5, y: 0.5 }}
               tracksViewChanges={tracksDrivers}
             >
-              <CarMarker heading={d.heading ?? 0} />
+              {/* SEM `heading`: a RPC `nearby_online_drivers` deixou de
+                  devolvê-lo (0069 B.2). Rumo somado a posição, amostrados no
+                  tempo, é trilha de deslocamento — e este mapa só precisa
+                  dizer que há carro por perto. O marcador do motorista DA
+                  corrida, esse sim orientado, é outro caminho
+                  (ActiveRideScreen, via rides.driver_heading). */}
+              <CarMarker />
             </Marker>
           ))}
         </MapView>

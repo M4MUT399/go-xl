@@ -162,7 +162,19 @@ Deno.serve(async (req) => {
       if (p) {
         await admin.from('profiles').update(
           stale
-            ? { stripe_customer_id: customerId, stripe_payment_method_id: null, card_last4: null, card_brand: null }
+            // `payment_method_type`/`payment_method_label` entram aqui pelo mesmo
+            // motivo dos dois de cartão (0078): sem eles, o perfil trocaria de
+            // Customer e continuaria exibindo o rótulo do método antigo, que já
+            // não pode ser cobrado. Limpar pela metade é como o cache velho de
+            // `card_brand` sobreviveu por tanto tempo.
+            ? {
+              stripe_customer_id: customerId,
+              stripe_payment_method_id: null,
+              card_last4: null,
+              card_brand: null,
+              payment_method_type: null,
+              payment_method_label: null,
+            }
             : { stripe_customer_id: customerId },
         ).eq('id', user.id);
       } else {
@@ -193,6 +205,25 @@ Deno.serve(async (req) => {
       mode: 'setup',
       customer: customerId,
       currency: 'usd',
+      // SEM `payment_method_types`, DE PROPÓSITO — e a decisão tem história.
+      //
+      // A ausência desta chave faz o Checkout em modo `setup` usar os métodos
+      // automáticos da conta, que hoje incluem **Link**. Isso produziu a corrida
+      // f28f2887 (Jennifer Newton, $30.17): ela salvou Link, e o resto do
+      // sistema — `list-cards`, `PaymentScreen`, `remove-card`, o script
+      // `cobrar` — assumia cartão em todo lugar. A tela não mostrava forma de
+      // pagamento nenhuma e a corrida rodou sem cobrar.
+      //
+      // A primeira reação foi restringir a `['card']`. Foi REVERTIDA depois de
+      // um teste: a cobrança da corrida dela, `off_session: true` num
+      // `payment_method` de `type: 'link'`, PASSOU — PaymentIntent
+      // pi_3U6wAOCgSu88OSlV1YssXOqx. Ou seja, Link é cobrável neste projeto, e
+      // o que faltava nunca foi a cobrança: era a exibição e a gestão.
+      //
+      // Por isso o cadastro segue aberto e o conserto foi feito do outro lado —
+      // `stripe-webhook` grava o TIPO e um rótulo legível, `list-cards` para de
+      // filtrar por cartão, e a tela renderiza pelo que veio. Restringir aqui
+      // teria escondido o defeito em vez de consertá-lo.
       metadata: { passenger_id: user.id },
       success_url: 'goxl://card-return?status=success',
       cancel_url:  'goxl://card-return?status=cancel',

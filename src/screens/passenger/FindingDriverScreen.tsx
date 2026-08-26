@@ -30,6 +30,8 @@ export function FindingDriverScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
+  // Cancelamento em voo — ver `beforeRemove` abaixo.
+  const [cancelling, setCancelling] = useState(false);
 
   const styles = makeStyles(colors);
 
@@ -166,7 +168,25 @@ export function FindingDriverScreen({ navigation, route }: Props) {
             text: t('finding.yesCancel'),
             style: 'destructive',
             onPress: async () => {
-              await cancelRide(initialRide.id);
+              // O cancelamento faz vários round-trips (refund-ride, UPDATE,
+              // dispatch-engine): sem este estado a tela ficava idêntica,
+              // "procurando motorista", durante segundos após o toque.
+              setCancelling(true);
+              const ok = await cancelRide(initialRide.id);
+              setCancelling(false);
+              if (!ok) {
+                // Antes saíamos da tela sem olhar o resultado. Com o UPDATE
+                // recusado, a corrida seguia em 'requesting' no banco — um
+                // motorista ainda podia aceitá-la e cobrar o passageiro, que já
+                // acreditava ter cancelado. Ficamos na tela.
+                // PENDÊNCIA DE PRODUTO: falta uma chave `finding.cancelFailed`
+                // ("Não conseguimos cancelar. Ainda estamos procurando um
+                // motorista — tente de novo."). Reusamos
+                // `driverNav.statusUpdateFailed`, verdadeira nos dois modos de
+                // falha; translations.ts está sob edição do dono.
+                Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+                return;
+              }
               allowLeaveRef.current = true;
               navigation.dispatch(e.data.action);
             },
@@ -230,7 +250,7 @@ export function FindingDriverScreen({ navigation, route }: Props) {
       </View>
 
       <View style={[styles.footer, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
-        <Button title={t('finding.cancelRideTitle')} onPress={handleCancel} variant="outline" />
+        <Button title={t('finding.cancelRideTitle')} onPress={handleCancel} variant="outline" loading={cancelling} />
       </View>
     </SafeAreaView>
   );
