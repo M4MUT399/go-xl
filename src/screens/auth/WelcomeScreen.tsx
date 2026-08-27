@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, Dimensions, Image, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, Dimensions, TouchableOpacity } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { Button } from '../../components/common/Button';
 import { LanguageSelector } from '../../components/common/LanguageSelector';
+import { BrandLockup } from '../../components/BrandLockup';
 import { useTheme } from '../../hooks/useTheme';
 import { useTranslation } from '../../i18n';
 
@@ -18,11 +19,13 @@ export function WelcomeScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.hero}>
-        <Image
-          source={require('../../../assets/icon.png')}
-          style={styles.logo}
-          resizeMode="contain"
-        />
+        {/* A marca COMPLETA — GX, lettering e assinatura —, a mesma que a
+            abertura animada mostra. Antes aqui vinha só `assets/icon.png`, a
+            marca isolada e com o navy embutido no arquivo: quem chegava pela
+            primeira vez nunca via o nome escrito. */}
+        <View style={styles.logo}>
+          <BrandLockup largura={240} />
+        </View>
         <Text style={styles.tagline}>{t('welcome.tagline')}</Text>
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{t('welcome.badge')}</Text>
@@ -71,10 +74,10 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
       justifyContent: 'center',
       paddingHorizontal: 32,
     },
+    // Sem largura/altura fixas: o lockup tem proporção própria (altura ≈ 0,95×
+    // a largura do lettering) e travar a caixa em 200×200, como era com o
+    // ícone quadrado, o espremeria.
     logo: {
-      width: 200,
-      height: 200,
-      borderRadius: 36,
       marginBottom: 24,
     },
     tagline: {

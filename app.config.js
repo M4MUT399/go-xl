@@ -25,14 +25,26 @@ module.exports = {
   expo: {
     name: 'Go XL',
     slug: 'go-xl',
-    version: '1.0.6',
+    version: '1.0.7',
     scheme: 'goxl',
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'automatic',
+    // O splash NATIVO é navy puro, sem imagem, de propósito.
+    //
+    // Ele cobre só o carregamento do bundle JS. Quem apresenta a marca é a
+    // abertura animada (src/components/BrandSplash.tsx), que monta em seguida
+    // e começa justamente com meio segundo de navy.
+    //
+    // Antes havia `image: './assets/icon.png'` aqui, e isso produzia um salto:
+    // um GX grande em `contain` desaparecia para o GX pequeno da animação
+    // reaparecer logo depois. Com navy puro nos dois lados, o fundo nunca sai
+    // da tela e a troca é invisível.
+    //
+    // Para voltar ao GX estático na tela nativa, basta devolver `image` e
+    // `resizeMode` — mas então vale ajustar a entrada da animação, senão a
+    // marca aparece duas vezes em tamanhos diferentes.
     splash: {
-      image: './assets/icon.png',
-      resizeMode: 'contain',
       backgroundColor: '#1A1A2E',
     },
     ios: {
@@ -156,7 +168,10 @@ module.exports = {
         },
       ],
       'expo-web-browser',
-      'expo-splash-screen',
+      // Os docs da SDK 54 dizem que o plugin é preferido à chave `splash` de
+      // cima, que segue suportada como legado. Configurado aqui para que a cor
+      // valha mesmo se a chave legada for removida um dia.
+      ['expo-splash-screen', { backgroundColor: '#1A1A2E' }],
       '@react-native-community/datetimepicker',
       'expo-audio',
       'expo-asset',

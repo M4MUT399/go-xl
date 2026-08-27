@@ -436,14 +436,32 @@ export async function notifyPassengerRideCompleted(passengerId: string, rideId: 
   await invokeRidePush({ kind: 'ride_completed', rideId });
 }
 
-// ── Tarifa GoXL — espelha a Uber XL (Orlando, FL) + 10% ─────────────────────
+// ── Tarifa GoXL — Uber XL (Orlando, FL) + $0,25/milha, tudo + 10% ───────────
 // Referência Uber XL Orlando: base $3,00 · $1,21/milha · $0,20/min · mínimo
-// $8,90 · booking fee $3,00. Decisão de produto: GoXL cobra exatamente 10%
-// acima da tarifa Uber equivalente. O surge (pico) incide sobre a parte
-// metrada (base + distância + tempo). A quantidade de motoristas GoXL online
-// NÃO entra no preço — só horário (pico) e local (taxas de aeroporto/porto, P6).
+// $8,90 · booking fee $3,00.
+//
+// Sobre essa referência incidem, nesta ordem:
+//   1. o PRÊMIO DE MILHA de $0,25, embutido na tarifa por milha (1,21 → 1,46);
+//   2. o surge de pico, sobre a parte metrada (base + distância + tempo);
+//   3. o markup de 10% da GoXL, sobre o total.
+//
+// ── O QUE O PASSAGEIRO PAGA A MAIS, DE FATO ────────────────────────────────
+//
+// O prêmio foi posto na tarifa BASE por decisão de produto (27/08/2026), então
+// ele é multiplicado pelas duas etapas seguintes. Na prática:
+//
+//   hora normal   +$0,25 × 1,10        = +$0,275 por milha
+//   pico (1,3×)   +$0,25 × 1,3 × 1,10  = +$0,3575 por milha
+//
+// Ou seja: NÃO são $0,25 líquidos na conta do passageiro. Se um dia a intenção
+// virar "exatamente $0,25 por milha, sempre", o lugar do acréscimo deixa de ser
+// aqui e passa a ser depois do markup, em `estimatePrice`.
+//
+// A quantidade de motoristas GoXL online NÃO entra no preço — só horário
+// (pico) e local (taxas de aeroporto/porto, P6).
 const UBER_XL_BASE_FARE   = 3.0;   // USD
-const UBER_XL_PER_MILE    = 1.21;  // USD por milha
+/** $1,21 da Uber XL + $0,25 de prêmio GoXL. Ver o bloco acima. */
+const UBER_XL_PER_MILE    = 1.46;  // USD por milha
 const UBER_XL_PER_MINUTE  = 0.2;   // USD por minuto
 const UBER_XL_BOOKING_FEE = 3.0;   // USD (taxa de serviço/booking)
 const UBER_XL_MIN_FARE    = 8.9;   // USD (piso da parte metrada)
