@@ -41,10 +41,24 @@ module.exports = {
     // reaparecer logo depois. Com navy puro nos dois lados, o fundo nunca sai
     // da tela e a troca é invisível.
     //
-    // Para voltar ao GX estático na tela nativa, basta devolver `image` e
-    // `resizeMode` — mas então vale ajustar a entrada da animação, senão a
-    // marca aparece duas vezes em tamanhos diferentes.
+    // Para voltar ao GX estático na tela nativa, troque a imagem transparente
+    // por './assets/icon.png' — mas então vale ajustar a entrada da animação,
+    // senão a marca aparece duas vezes em tamanhos diferentes.
+    //
+    // ── POR QUE UMA IMAGEM TRANSPARENTE E NÃO NENHUMA ──────────────────────
+    //
+    // Deixar `image` de fora QUEBRA A BUILD ANDROID. O plugin escreve, em
+    // styles.xml, `windowSplashScreenAnimatedIcon = @drawable/splashscreen_logo`
+    // sempre — mas só gera esse drawable quando há imagem. Sem ela o Gradle
+    // falha em recurso inexistente, e o erro que chega da EAS é só
+    // "Gradle build failed with unknown error". Foi o que derrubou a build
+    // 1.0.7 (c16e6112) em 27/08/2026.
+    //
+    // O PNG é 288×288 e 100% transparente: dá ao plugin o que ele precisa
+    // gerar, e o que o usuário vê continua sendo só o `backgroundColor`.
     splash: {
+      image: './assets/splash-transparente.png',
+      resizeMode: 'contain',
       backgroundColor: '#1A1A2E',
     },
     ios: {
@@ -171,7 +185,11 @@ module.exports = {
       // Os docs da SDK 54 dizem que o plugin é preferido à chave `splash` de
       // cima, que segue suportada como legado. Configurado aqui para que a cor
       // valha mesmo se a chave legada for removida um dia.
-      ['expo-splash-screen', { backgroundColor: '#1A1A2E' }],
+      ['expo-splash-screen', {
+        image: './assets/splash-transparente.png',
+        backgroundColor: '#1A1A2E',
+        resizeMode: 'contain',
+      }],
       '@react-native-community/datetimepicker',
       'expo-audio',
       'expo-asset',
