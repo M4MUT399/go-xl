@@ -42,11 +42,12 @@ import { useRoute as useRideRoute } from '../../hooks/useRoute';
 import { useDynamicEta } from '../../hooks/useDynamicEta';
 import { useChatAlert } from '../../hooks/useChatAlert';
 import { formatCurrency, formatDistance } from '../../lib/format';
-import { rideOrigin, rideDestination } from '../../lib/ride';
+import { rideOrigin, rideDestination, rideOriginOrNull, rideDestinationOrNull } from '../../lib/ride';
 import { buildRideCardModel } from '../../lib/nav/rideCard';
 import { requestServerRoute } from '../../lib/nav/sharedRouteClient';
 import { RouteStep } from '../../lib/routing';
 import { CarMarker } from '../../components/common/CarMarker';
+import { ExternalNavBar } from '../../components/driver/ExternalNavBar';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
 import { notifyInApp } from '../../lib/inAppNotify';
@@ -349,6 +350,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
   const origin = rideOrigin(ride);
   const dest   = rideDestination(ride);
   const target = phase === 'pickup' ? origin : dest;
+
+  // O alvo do app de FORA é lido sem o FALLBACK de src/lib/ride.ts. O `target`
+  // acima já teve um eventual nulo trocado pelo centro de Orlando, o que serve
+  // para desenhar o mapa e NÃO serve para navegar: o Waze não sabe que a
+  // coordenada é chute e guia o motorista até lá com voz e confiança. Com o
+  // valor cru, o guarda da barra pode de fato disparar e ela some.
+  const alvoBruto = phase === 'pickup' ? rideOriginOrNull(ride) : rideDestinationOrNull(ride);
+  const alvoExterno = { lat: alvoBruto.lat, lng: alvoBruto.lng, label: alvoBruto.address };
 
   // ── Bloco 4: card de corrida clicável/expansível ──────────────────────────
   const rideCardExpandable = useFeatureFlag('ride_card_expandable');
@@ -1328,6 +1337,14 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             </Text>
           </View>
         )}
+
+        {/* Navegação externa (Google Maps / Waze) até o ponto da FASE ATUAL:
+            no pickup é o passageiro, no dropoff é o destino — o mesmo `target`
+            que a navegação interna persegue. Nada aqui interrompe a corrida:
+            o motorista sai para o outro app e volta com o estado intacto. */}
+        <ExternalNavBar
+          target={alvoExterno}
+        />
 
         <Button
           title={buttonLabel}

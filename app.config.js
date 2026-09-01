@@ -21,11 +21,13 @@
 // campo fica undefined e o Expo simplesmente não builda a chave — o app roda
 // normal, só o mapa nativo não renderiza tiles do Google.
 
+const { IOS_QUERY_SCHEMES } = require('./plugins/externalNavSchemes');
+
 module.exports = {
   expo: {
     name: 'Go XL',
     slug: 'go-xl',
-    version: '1.0.7',
+    version: '1.0.8',
     scheme: 'goxl',
     orientation: 'portrait',
     icon: './assets/icon.png',
@@ -77,6 +79,18 @@ module.exports = {
           'O Go XL acessa suas fotos para você anexar a foto de perfil e as fotos do veículo.',
         UIBackgroundModes: ['remote-notification', 'location'],
         ITSAppUsesNonExemptEncryption: false,
+        // Sem esta lista, `Linking.canOpenURL('comgooglemaps://')` e
+        // `canOpenURL('waze://')` devolvem FALSE no iOS MESMO COM O APP
+        // INSTALADO — desde o iOS 9 o sistema só responde sobre esquemas que
+        // o app declarou de antemão aqui. É o que permite a barra "Google
+        // Maps / Waze" da tela de navegação do motorista
+        // (src/components/driver/ExternalNavBar.tsx) abrir o app de verdade
+        // em vez de sempre cair no https.
+        //
+        // Só vale em BUILD NOVA: é Info.plist, não chega por OTA update. O
+        // Android tem armadilha equivalente com OUTRA lista de esquemas — ver
+        // plugins/externalNavSchemes.js, que é quem guarda as duas.
+        LSApplicationQueriesSchemes: IOS_QUERY_SCHEMES,
       },
       config: {
         googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_KEY,
@@ -194,6 +208,12 @@ module.exports = {
       'expo-audio',
       'expo-asset',
       'expo-localization',
+      // Contraparte Android do LSApplicationQueriesSchemes acima: no Android 11+
+      // o sistema esconde os apps instalados, e sem <queries> o canOpenURL de
+      // `google.navigation:` e `waze://` mente dizendo que não dá para abrir.
+      // Os esquemas são os do Android, não os do iOS — `comgooglemaps://` só
+      // existe no iPhone.
+      './plugins/withExternalNavQueries',
     ],
     extra: {
       eas: {

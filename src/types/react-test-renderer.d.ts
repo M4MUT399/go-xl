@@ -25,7 +25,17 @@ declare module 'react-test-renderer' {
    */
   export interface ReactTestInstance {
     props: Record<string, unknown>;
-    findAll(predicate: (node: ReactTestInstance) => boolean): ReactTestInstance[];
+    /**
+     * `options.deep` existe na API de verdade e importa para asserção de
+     * unicidade: `testID`/`onPress` de um TouchableOpacity CASCATEIAM para os
+     * nós internos, então a busca profunda devolve o mesmo botão cinco vezes.
+     * Com `deep: false` a varredura para no nó mais externo que casa — é o que
+     * permite escrever "existe exatamente UM botão com este testID".
+     */
+    findAll(
+      predicate: (node: ReactTestInstance) => boolean,
+      options?: { deep: boolean },
+    ): ReactTestInstance[];
     findAllByType(type: unknown): ReactTestInstance[];
   }
 
