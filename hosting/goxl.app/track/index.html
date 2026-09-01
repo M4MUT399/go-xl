@@ -80,9 +80,11 @@
     var params = new URLSearchParams(window.location.search);
     var TOKEN = params.get('token') || '';
 
-    // Botões de loja conforme a plataforma.
+    // Botões de loja conforme a plataforma. iPadOS 13+ se apresenta como
+    // "Macintosh" no UA; sem o teste de toque, o iPad cairia na Play Store.
     var ua = navigator.userAgent || '';
-    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+    var isIOS = /iPhone|iPad|iPod/i.test(ua) ||
+      (/Macintosh/.test(ua) && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1);
     var storeUrl = isIOS ? APPSTORE_URL : PLAY_URL;
     document.getElementById('storeBtn').href = storeUrl;
     document.getElementById('endedStore').href = storeUrl;
@@ -144,7 +146,7 @@
       if (!destMk) destMk = L.marker([d.destination.lat, d.destination.lng]).addTo(map).bindPopup('Destino');
 
       if (d.position) {
-        var carIcon = L.divIcon({ className: '', html: '<div style="font-size:26px;line-height:26px">🚗</div>', iconSize: [26,26], iconAnchor: [13,13] });
+        var carIcon = L.divIcon({ className: '', html: '<img src="../assets/icons/svg/replace-emoji-car-vehicle-executive.svg" style="width:26px;height:26px;display:block" alt="">', iconSize: [26,26], iconAnchor: [13,13] });
         if (!driverMk) driverMk = L.marker([d.position.lat, d.position.lng], { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
         else driverMk.setLatLng([d.position.lat, d.position.lng]);
       }
