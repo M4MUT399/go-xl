@@ -17,6 +17,30 @@ import { updateCarActiveRide, updateCarRideOffer } from '../native/carRideBridge
 
 type UseDriverRideReturn = ReturnType<typeof useDriverRide>;
 
+/**
+ * Quanto tempo ONLINE sem NENHUMA posição publicada antes de acusar o problema.
+ *
+ * Não é um número de conforto: é a carência que separa "o GPS está morto" de "o
+ * GPS ainda está acordando". O heartbeat de abertura roda assim que o
+ * AsyncStorage responde, com `locationRef` ainda null por 1-2 s mesmo num
+ * aparelho perfeito (useLocation pede permissão e só então recebe o primeiro
+ * fix). Levantar o aviso ali seria ressuscitar o "banner que subia sozinho" com
+ * outro texto. Do outro lado, o watch entrega fix a cada 5 s
+ * (useLocation.ts:113-115), então 45 s sem um único fix não é lentidão — é
+ * permissão negada, GPS desligado ou aparelho sem sinal nenhum.
+ */
+const CARENCIA_PRIMEIRA_POSICAO_MS = 45_000;
+
+/**
+ * Quanto tempo sem publicar posição, JÁ TENDO publicado, antes de acusar.
+ *
+ * O despacho e o mapa do passageiro só enxergam quem tem `updated_at` dos
+ * últimos 10 min (dispatch-engine/index.ts:152-156 e 0069:646). Avisar em 8 min
+ * dá ao motorista dois minutos para religar o GPS ou sair da garagem ANTES de
+ * sumir do leque — avisar em 10 seria avisar depois de já ter perdido corrida.
+ */
+const LIMITE_FRESCOR_POSICAO_MS = 8 * 60_000;
+
 interface DriverRideContextValue extends UseDriverRideReturn {
   isOnline: boolean;
   /** true após carregar o valor persistido no AsyncStorage. */
@@ -34,16 +58,23 @@ interface DriverRideContextValue extends UseDriverRideReturn {
   /** Bloco 1: true quando o tracking de período (`period_tracking_v1_enabled`) está habilitado. */
   driverPeriodEnabled: boolean;
   /**
-   * true quando a última transição online↔offline foi RECUSADA pelo servidor e o
-   * estado local foi revertido. Sem isso a chave voltava sozinha e o motorista
-   * não tinha como saber por quê — ver o efeito de status mais abaixo.
+   * true quando o que a tela mostra sobre o status NÃO é o que o servidor tem.
+   *
+   * Nem sempre vem com reversão da chave: começou como "a transição foi recusada
+   * e o estado local voltou", mas hoje cobre também os casos em que a chave está
+   * certa e mesmo assim o motorista não recebe corrida — a publicação de posição
+   * parada e o motorista em serviço sem posição nenhuma no servidor. Sem isso a
+   * chave voltava sozinha (ou ficava verde à toa) e ele não tinha como saber por
+   * quê — ver os efeitos de status mais abaixo.
    */
   statusSyncFailed: boolean;
   /**
    * Por que o status não sincronizou. 'refused' = o servidor recusou (tipicamente
    * cadastro de repasse do Stripe incompleto — trigger da migration 0038, que
    * coage `is_online := false` em silêncio, SEM erro); 'transport' = a escrita
-   * não chegou. O banner escolhe o texto por aqui.
+   * não chegou; 'no_position' = não há posição fresca no servidor (sem linha, ou
+   * sem fix de GPS há tempo demais), e sem ela o despacho não enxerga o
+   * motorista. O banner escolhe o texto por aqui.
    */
   statusSyncReason: StatusRevertDecision['reason'];
 }
@@ -150,11 +181,30 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   const statusWriteSeqRef = useRef(0);
   // Fixes de GPS seguidos que não chegaram ao servidor — ver o efeito de posição.
   const posFailStreakRef = useRef(0);
-  // O banner aceso agora foi levantado pelo efeito de POSIÇÃO? Só quem levantou
-  // pode apagar: um `refused` do efeito de transição não é curado por um fix de
-  // GPS que deu certo, e apagá-lo mandaria o motorista de volta a esperar
-  // corrida que não vem.
-  const bannerDoPosRef = useRef(false);
+  /**
+   * QUEM levantou o banner que está na tela AGORA — `null` quando ela está limpa.
+   *
+   * A regra que esta ref serve continua a mesma: só quem levantou pode apagar.
+   * Um `refused` do efeito de transição não é curado por um fix de GPS que deu
+   * certo, e apagá-lo mandaria o motorista de volta a esperar corrida que não
+   * vem; o vigia não pode trocar o aviso de rede caída pelo de GPS.
+   *
+   * O que mudou é a FORMA: era uma booleana por escritor, e duas booleanas
+   * guardam a autoria do LEVANTAMENTO, não a do banner que está na tela. Bastava
+   * um escritor esquecer de zerar a booleana do outro para dois donos
+   * coexistirem — e o defeito que isso produziu foi o pior possível. Uma recusa
+   * do trigger 0038 chegando pelo efeito de POSIÇÃO levantava `refused` e
+   * derrubava a chave, mas deixava de pé a reivindicação do VIGIA; o vigia
+   * re-rodava no mesmo commit (a publicação e o `isOnline` acabaram de mudar),
+   * achava que o banner era dele e o apagava. A chave caía e o motorista ficava
+   * offline SEM UMA PALAVRA — exatamente o silêncio que o cabeçalho de
+   * driverOnlineStatus.ts existe para acabar.
+   *
+   * Com um dono só, esquecer deixa de ser possível: escrever a autoria É tirá-la
+   * de quem tinha, na mesma atribuição.
+   */
+  type DonoDoBanner = 'posicao' | 'transicao' | 'vigia';
+  const donoDoBannerRef = useRef<DonoDoBanner | null>(null);
   // Turno de serviço. Zerar contagem e autoria no early-return só alcança as
   // respostas que JÁ voltaram; as escritas EM VOO resolvem depois dele e, sem
   // este token, re-armavam as duas do outro lado do fim de turno. O desfecho:
@@ -196,6 +246,15 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   // re-disparar a cada fix de GPS, só quando o online/offline muda).
   const locationRef = useRef<Coordinates | null>(location);
   locationRef.current = location;
+  // QUANDO o último fix de GPS chegou ao app. É a identidade do objeto que marca
+  // fix novo (o mesmo critério de useDutyMovementTracker), e é ref porque o vigia
+  // precisa LER isto sem re-armar o prazo a cada fix — ver o comentário da lista
+  // de dependências dele. Serve a uma pergunta só: quando o prazo vencer, o
+  // aparelho estava produzindo posição e a publicação é que não passou?
+  const ultimoFixMsRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (location) ultimoFixMsRef.current = Date.now();
+  }, [location]);
 
   // Item 1: acompanha a ociosidade (veículo parado) do turno atual a partir da
   // velocidade do GPS. Vive aqui — global — para captar também o movimento
@@ -207,10 +266,13 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   // à trilha de auditoria). Roda em paralelo ao v1, mas é no-op enquanto a flag
   // `duty_movement_v2_enabled` estiver desligada (padrão) — não altera a regra
   // de descanso atual até o rollout por jurisdição.
+  // Recebe o FIX inteiro, não `location?.speed`: o hook precisa saber QUANDO a
+  // velocidade foi medida, e é a identidade do objeto que marca fix novo — ver o
+  // cabeçalho de useDutyMovementTracker.ts.
   const { enabled: dutyMovementEnabled, workedMinutes: dutyMovementMinutes } = useDutyMovementTracker(
     profile?.id,
     isOnline,
-    location?.speed,
+    location,
   );
 
   // Bloco 1 (compliance TNC F.S. 627.748): máquina de períodos P0-P3, dirigida
@@ -244,11 +306,17 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
       // do turno da manhã somavam com a primeira falha do turno da tarde e o
       // banner subia no primeiro pacote perdido do dia seguinte.
       posFailStreakRef.current = 0;
+      // O relógio de frescor morre com o turno. Sem isto, quem reabre o app já
+      // online cairia direto no prazo de 8 min contado a partir da publicação de
+      // ONTEM: prazo vencido, aviso na cara antes do primeiro fix ter chance de
+      // chegar. Zerado, o turno novo começa pela carência de abertura.
+      setUltimaPosOkMs(null);
       // A autoria morre junto. Sem isto, a reivindicação sobrevive ao turno: no
       // turno seguinte o primeiro fix bem-sucedido apagaria um banner que quem
       // levantou foi o efeito de TRANSIÇÃO ("seu toque não valeu") — exatamente
-      // a troca de dono que esta ref existe para impedir.
-      bannerDoPosRef.current = false;
+      // a troca de dono que esta ref existe para impedir. Só a autoria DESTE
+      // efeito é liberada: um banner da transição ou do vigia continua com dono.
+      if (donoDoBannerRef.current === 'posicao') donoDoBannerRef.current = null;
       turnoRef.current += 1;
       return;
     }
@@ -281,7 +349,16 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
       if (turno !== turnoRef.current) return;
 
       if (error) posFailStreakRef.current += 1;
-      else posFailStreakRef.current = 0;
+      else {
+        posFailStreakRef.current = 0;
+        // Este é o ÚNICO ponto do app em que uma posição nova chega de fato ao
+        // servidor com `updated_at` carimbado — ou seja, o único ponto em que o
+        // motorista volta a existir para o despacho. É daqui que o vigia conta o
+        // prazo de frescor. Fica ANTES do `cancelled` pelo mesmo motivo da
+        // contagem acima: a escrita chegou de verdade, e um fix mais novo não
+        // desmente isso.
+        setUltimaPosOkMs(Date.now());
+      }
 
       // O `error` era descartado e `failed` vinha `false` fixo — uma queda de
       // rede no MEIO do turno não levantava nada: o efeito de transição só roda
@@ -303,7 +380,7 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
           const falha = decideStatusRevert({
             requested: true, returned: null, failed: true, userInitiated: false,
           });
-          bannerDoPosRef.current = true;
+          donoDoBannerRef.current = 'posicao';
           setStatusSyncFailed(falha.syncFailed);
           setStatusSyncReason(falha.reason);
         }
@@ -315,13 +392,13 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
       // sem sinal deixava o aviso "sem conexão" preso na tela pelo resto do turno,
       // e o motorista que confia no aviso encosta e deixa de rodar por nada.
       //
-      // Duas travas antes de apagar. `bannerDoPosRef`: só apaga o banner que ESTE
+      // Duas travas antes de apagar. O DONO do banner: só apaga o que ESTE
       // efeito levantou — uma recusa do trigger (`refused`) não é curada por um
       // fix de GPS que deu certo, e apagá-la mandaria o motorista esperar corrida
       // que o dispatch não vai oferecer. `seq`: só a resposta mais recente pode
       // dizer que está tudo bem agora.
-      if (bannerDoPosRef.current && seq === statusWriteSeqRef.current) {
-        bannerDoPosRef.current = false;
+      if (donoDoBannerRef.current === 'posicao' && seq === statusWriteSeqRef.current) {
+        donoDoBannerRef.current = null;
         setStatusSyncFailed(false);
         setStatusSyncReason('ok');
       }
@@ -335,6 +412,18 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
         userInitiated: false,
       });
       if (decision.reason !== 'refused' || decision.revertTo === null) return;
+      // ASSUMIR A AUTORIA AQUI NÃO É SIMETRIA DECORATIVA. Este é o único ponto do
+      // app que derruba a chave e escreve o banner na mesma tacada, e enquanto
+      // ele não reivindicava a autoria o banner ficava com o dono ANTERIOR — na
+      // prática, o vigia, que é quem fala quando não há posição. Sequência real:
+      // motorista novo (o mesmo que esbarra no cadastro do Stripe) abre o app na
+      // garagem, toca em Online, passa dos 45 s sem fix e o vigia levanta
+      // `no_position`; o GPS acorda, o primeiro fix é publicado e volta RECUSADO
+      // pelo trigger 0038. No mesmo commit este ramo derruba a chave e o vigia
+      // re-roda — a publicação e o `isOnline` mudaram — vê a autoria dele ainda
+      // de pé e apaga o banner. Chave em Offline, tela limpa, nenhuma explicação:
+      // o defeito nomeado no cabeçalho de driverOnlineStatus.ts, de volta.
+      donoDoBannerRef.current = 'posicao';
       setStatusSyncFailed(true);
       setStatusSyncReason(decision.reason);
       aplicarReversao(decision.revertTo);
@@ -360,6 +449,28 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
   // opostos, e mandar o motorista checar a conexão quando o problema é o
   // cadastro do Stripe é o próprio defeito que este módulo persegue.
   const [statusSyncReason, setStatusSyncReason] = useState<StatusRevertDecision['reason']>('ok');
+  // Quando a última posição chegou ao servidor NESTE turno. `null` = nenhuma
+  // ainda. É estado (e não ref) porque o vigia precisa RE-ARMAR o prazo a cada
+  // publicação — num ref, o efeito não teria como saber que o relógio andou.
+  const [ultimaPosOkMs, setUltimaPosOkMs] = useState<number | null>(null);
+  // Espelho de `statusSyncFailed` para o temporizador do vigia, que dispara fora
+  // do render e leria um valor congelado da closure.
+  //
+  // Sincronizado em EFEITO, não no corpo do componente. Escrever ref durante o
+  // render funciona no renderer atual, mas sob render concorrente um render
+  // ABORTADO deixaria no espelho um valor que nunca foi comitado — e o vigia
+  // decide falar ou calar por ele: calaria por causa de um banner que não está
+  // na tela, devolvendo o silêncio. Em efeito, o espelho só registra o que de
+  // fato virou tela. O temporizador é sempre de outro tick, então não há janela
+  // em que ele leia antes do commit.
+  const statusSyncFailedRef = useRef(statusSyncFailed);
+  useEffect(() => {
+    statusSyncFailedRef.current = statusSyncFailed;
+  }, [statusSyncFailed]);
+  // Quando ESTE turno começou, para o vigia contar a carência da primeira
+  // posição. Ref, e não estado: escrevê-lo não pode disparar render nenhum —
+  // seria o próprio efeito se re-agendando e o prazo nunca venceria.
+  const inicioServicoRef = useRef<number | null>(null);
   useEffect(() => {
     if (!profile?.id || !onlineLoaded) return;
     if (revertingToRef.current !== null) {
@@ -379,26 +490,115 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
       // `is_online := false` para motorista sem Connect aprovado e deixa o
       // upsert retornar SUCESSO. Sem ler de volta, a recusa é invisível.
       const seq = (statusWriteSeqRef.current += 1);
-      const { data, error } = await supabase.from('driver_locations').upsert({
-        driver_id: profile.id,
-        is_online: isOnline,
-        updated_at: new Date().toISOString(),
-        ...(loc ? { lat: loc.lat, lng: loc.lng, heading: loc.heading ?? null } : {}),
-      }).select('is_online').maybeSingle();
+      // ─── POR QUE UPSERT SÓ COM FIX NA MÃO ───────────────────────────────────
+      //
+      // `driver_locations.lat` e `.lng` são `double precision NOT NULL` sem
+      // default (supabase/schema.sql:135-136), e o upsert do PostgREST é um
+      // `insert ... on conflict do update`. O Postgres valida NOT NULL sobre a
+      // tupla PROPOSTA do insert ANTES de resolver o conflito — então um upsert
+      // sem coordenada falha com 23502 mesmo quando a linha do motorista já
+      // existe e o caminho real seria o `do update`.
+      //
+      // Isso é o que acendia o banner sozinho: o heartbeat de abertura roda
+      // assim que o AsyncStorage responde, e `useLocation` ainda não tem fix
+      // nenhum (ele começa em `null` e só preenche depois da permissão + GPS —
+      // useLocation.ts:26,124). A escrita voltava com erro, `decideStatusRevert`
+      // lia `failed: true` e levantava `reason: 'transport'`. O motorista via
+      // "não foi possível atualizar o status" na tela inicial, OFFLINE e sem
+      // corrida nenhuma. Com a permissão de localização negada (ou o GPS
+      // desligado pelo Android), `location` nunca chega e o banner é permanente.
+      //
+      // Sem fix, o que temos a dizer ao servidor é só o status — e isso é um
+      // UPDATE, não um insert. Nunca inventamos coordenada para caber no schema:
+      // lat/lng falsos vazam para o mapa do passageiro.
+      //
+      // ─── E POR QUE O UPDATE NÃO TOCA EM `updated_at` ────────────────────────
+      //
+      // `updated_at` NÃO é "quando mexemos na linha": é a trava de FRESCOR DA
+      // POSIÇÃO. O despacho monta o leque com
+      // `.eq('is_online', true).gt('updated_at', agora - 10min)` e lê `lat, lng`
+      // dessas linhas (supabase/functions/dispatch-engine/index.ts:151-156), e o
+      // mapa do passageiro filtra igual
+      // (supabase/migrations/0069_driver_code_and_fleet_exposure.sql:646).
+      //
+      // Carimbar `updated_at` aqui ressuscitaria a coordenada da SESSÃO ANTERIOR
+      // como se fosse de agora — e o gatilho é o caminho comum, não um canto:
+      // `isOnline` é restaurado do AsyncStorage, então todo motorista que fechou
+      // o app com a chave ligada reabriria carimbando a posição de ontem. No
+      // cenário que esta própria correção persegue (GPS desligado, permissão
+      // negada) nenhum fix chega para corrigir, e ele receberia oferta onde não
+      // está. A coluna só é carimbada por quem tem coordenada nova para gravar —
+      // aqui e no efeito de posição acima. É o mesmo que o servidor já faz ao
+      // derrubar o motorista (supabase/functions/stripe-webhook/index.ts:681).
+      const semFix = !loc;
+      const resposta = loc
+        ? await supabase.from('driver_locations').upsert({
+            driver_id: profile.id,
+            lat: loc.lat,
+            lng: loc.lng,
+            heading: loc.heading ?? null,
+            is_online: isOnline,
+            updated_at: new Date().toISOString(),
+          }).select('is_online').maybeSingle()
+        : await supabase.from('driver_locations')
+            .update({ is_online: isOnline })
+            .eq('driver_id', profile.id)
+            .select('is_online').maybeSingle();
+      const { data, error } = resposta;
       if (cancelled) return;
 
       const decision = decideStatusRevert({
         requested: isOnline,
         returned: typeof data?.is_online === 'boolean' ? data.is_online : null,
         failed: !!error,
+        // UPDATE sem erro e sem linha = zero linhas casadas: este motorista não
+        // tem linha em `driver_locations` (conta que nunca ficou online com GPS,
+        // ou linha apagada por delete-account). Sem `lat`/`lng` não há como
+        // criá-la AQUI — quem a cria é o efeito de posição, no primeiro fix.
+        // Por isso a chave NÃO cai neste caso (ver o bloco correspondente em
+        // driverOnlineStatus.ts): derrubá-la desligaria o único caminho que
+        // ainda pode fazer a linha nascer.
+        noRow: semFix && !error && data === null,
+        // Sem coordenada, `updated_at` NÃO é carimbado (ver o bloco acima) — e é
+        // ele, não `is_online`, que põe o motorista no leque do despacho. O
+        // servidor devolver `true` aqui NÃO é sucesso do ponto de vista dele.
+        noPosition: semFix,
         userInitiated,
       });
 
+      // O aviso de "online sem posição" NÃO sobe por aqui, e isso é deliberado:
+      // neste instante o heartbeat de abertura ainda não teve tempo de receber
+      // fix nenhum, e levantar na hora seria o "banner que subia sozinho" com
+      // outro texto. Quem leva esse caso é o VIGIA (efeito logo abaixo), que dá
+      // a carência e reavalia. O que esta rodada não pode fazer é o oposto:
+      // APAGAR o aviso do vigia devolvendo um 'ok' que ignora a falta de posição
+      // — por isso `noPosition` entra na decisão, e por isso este caminho não
+      // LEVANTA banner nenhum.
+      const paraOVigia = decision.reason === 'no_position' && decision.revertTo === null;
       // Só apaga o banner se nenhuma outra gravação de status saiu depois desta
       // — ver `statusWriteSeqRef`. Levantar não passa pelo teste de frescor.
-      if (decision.syncFailed || seq === statusWriteSeqRef.current) {
+      if (!paraOVigia && (decision.syncFailed || seq === statusWriteSeqRef.current)) {
+        donoDoBannerRef.current = decision.syncFailed ? 'transicao' : null;
         setStatusSyncFailed(decision.syncFailed);
         setStatusSyncReason(decision.reason);
+      } else if (paraOVigia && seq === statusWriteSeqRef.current && donoDoBannerRef.current !== 'vigia') {
+        // NÃO LEVANTAR NÃO É NÃO TOCAR. Calar o bloco inteiro deixava um aviso
+        // velho preso na tela com o app funcionando: rede cai, o toque se perde,
+        // sobe 'transport' e a chave volta; a rede volta, o motorista toca em
+        // Online de novo e o UPDATE é ACEITO — mas o banner de conexão continua
+        // lá, porque o vigia é mudo enquanto houver aviso na tela e o efeito de
+        // posição só apaga o que ele mesmo levantou. O aviso sobrevivia ao turno
+        // inteiro, e o comentário do efeito de posição já diz o preço disso: o
+        // motorista que confia no aviso encosta e deixa de rodar por nada.
+        //
+        // Esta resposta DESMENTE o que 'transport' e 'refused' afirmam: a escrita
+        // chegou ao servidor e voltou aceita, com o valor pedido. O que ela NÃO
+        // desmente é a falta de posição — ela é a própria prova disso —, e por
+        // isso o banner do VIGIA fica de pé. Como 'no_position' só é levantado
+        // por ele, checar o dono é checar exatamente essa exceção.
+        donoDoBannerRef.current = null;
+        setStatusSyncFailed(false);
+        setStatusSyncReason('ok');
       }
       // A REVERSÃO não passa pelo teste de frescor de propósito: ela é a resposta
       // a ESTA escrita ("seu toque não valeu" / "o servidor recusou"), e um fix de
@@ -408,6 +608,134 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     })();
     return () => { cancelled = true; };
   }, [isOnline, profile?.id, onlineLoaded]);
+
+  // ─── VIGIA: ONLINE SEM POSIÇÃO NO SERVIDOR ────────────────────────────────
+  //
+  // O buraco que este efeito fecha: os dois efeitos acima só falam quando uma
+  // ESCRITA responde. Quem não tem fix de GPS não gera escrita de posição
+  // nenhuma — o efeito de posição começa com `if (!location ...) return` —, e a
+  // escrita de status que sobra é um UPDATE que o servidor ACEITA. Resultado
+  // antes disto: chave verde, nenhum erro, nenhum banner, `updated_at` velho e
+  // nenhuma corrida chegando, pelo turno inteiro. Era o silêncio descrito no
+  // cabeçalho de driverOnlineStatus.ts, entrando pela porta de trás.
+  //
+  // Por que um TEMPORIZADOR e não um `if` no efeito de transição: no instante em
+  // que a transição responde ainda não dá para distinguir "GPS morto" de "GPS
+  // acordando" — e chutar ali era o defeito de origem. O prazo é o que
+  // transforma ausência instantânea em ausência PROVADA, e cada publicação
+  // bem-sucedida o re-arma (é a reavaliação que faltava do lado sem fix).
+  //
+  // O aviso não derruba a chave de propósito, e isso vale para os DOIS casos
+  // sem coordenada: quando a linha existe (o `is_online` pedido está gravado, só
+  // falta `updated_at`) e quando ela não existe (nada foi gravado). Nos dois, a
+  // única cura é o primeiro fix de GPS chegar e o efeito de posição publicá-lo —
+  // carimbando a coluna ou criando a linha —, e esse efeito só roda com a chave
+  // ligada. Desligá-la aqui apaga o sintoma e mata a cura junto.
+  useEffect(() => {
+    // Offline não há promessa a cobrar: a posição só é publicada em serviço, e
+    // aviso de GPS com a chave cinza é ruído.
+    const emServico = !!profile?.id && onlineLoaded && isOnline;
+    if (donoDoBannerRef.current === 'vigia') {
+      // Re-armar é declarar que a situação mudou (publicou, ou saiu de serviço).
+      // Quem levantou apaga — e só o que levantou.
+      donoDoBannerRef.current = null;
+      setStatusSyncFailed(false);
+      setStatusSyncReason('ok');
+    }
+    if (!emServico) {
+      // Fora de serviço o relógio da carência não existe. Zerar aqui é o que
+      // faz o turno SEGUINTE começar pela carência inteira em vez de herdar um
+      // marco vencido do turno passado.
+      inicioServicoRef.current = null;
+      return;
+    }
+    const agora = Date.now();
+    // Marco do INÍCIO DO TURNO, não do último fix de GPS. A diferença importa: o
+    // que põe o motorista no leque é a POSIÇÃO CHEGAR AO SERVIDOR, não o GPS
+    // produzir fix. Ancorando a carência num fix, um aparelho que entrega fix a
+    // cada 5 s e cujas publicações ficam PENDURADAS (rede que não responde e
+    // também não erra) empurraria o prazo para sempre, e o vigia nunca falaria —
+    // que é exatamente o silêncio que ele existe para quebrar.
+    if (inicioServicoRef.current === null) inicioServicoRef.current = agora;
+    const prazo = ultimaPosOkMs === null
+      ? Math.max(0, inicioServicoRef.current + CARENCIA_PRIMEIRA_POSICAO_MS - agora)
+      : Math.max(0, ultimaPosOkMs + LIMITE_FRESCOR_POSICAO_MS - agora);
+    const id = setTimeout(() => {
+      // O VIGIA SÓ FALA NO SILÊNCIO. Um aviso já na tela veio de alguém que viu
+      // uma escrita falhar de verdade — rede caída, recusa do trigger — e isso é
+      // mais específico do que "faz tempo que não publico". Trocar aquele texto
+      // por este apagaria a pista melhor: é o mesmo erro de mandar checar a
+      // conexão quando o problema é o cadastro do Stripe.
+      if (statusSyncFailedRef.current) return;
+      // ─── DE QUE FALTA ESTAMOS FALANDO: GPS OU CONEXÃO ─────────────────────
+      //
+      // O prazo vence de um jeito só, mas as causas pedem remédios OPOSTOS, e
+      // mandar o motorista checar a coisa errada é o defeito que este módulo
+      // persegue. A evidência que separa as duas é uma só, e o app tem:
+      //
+      //   • CHEGOU fix depois do começo do turno (e depois da última publicação
+      //     confirmada) e mesmo assim não há posição no servidor. Então o GPS
+      //     está vivo — quem não passa é a PUBLICAÇÃO. É o vão de rede que
+      //     engole a requisição sem responder, e mandar checar o GPS ali aponta
+      //     para o único pedaço do aparelho que está funcionando. Texto de
+      //     conexão.
+      //   • NÃO chegou fix nenhum. Aí a falta é de posição mesmo: GPS desligado,
+      //     permissão negada, aparelho sem sinal. Texto de GPS.
+      //
+      // O QUE ESTA DISTINÇÃO NÃO RESOLVE, e é preciso dizer em vez de fingir:
+      // um motorista PARADO também para de emitir fix. O `distanceInterval: 15`
+      // (useLocation.ts:117) não dispara em carro parado e o `timeInterval` é
+      // ignorado no iOS (rubrica documentada em dispatch-engine/index.ts:145-148
+      // — não observada por nós). Para o app, "parado na fila do MCO" e "GPS
+      // morto" são o MESMO silêncio, e não há sinal no aparelho que os separe.
+      // Os dois vão levar o texto do GPS, e isso é escolha: no servidor o
+      // desfecho é idêntico (aos 10 min ele sai do leque dos dois jeitos), e
+      // calar para poupar o motorista parado devolveria o silêncio ao motorista
+      // com o GPS morto — que é o defeito de origem, não um alarme falso.
+      const fixSemPublicacao =
+        ultimoFixMsRef.current !== null
+        && ultimoFixMsRef.current > Math.max(inicioServicoRef.current ?? 0, ultimaPosOkMs ?? 0);
+      const falha = fixSemPublicacao
+        // A escrita de posição EXISTIU e não chegou: é falha de transporte
+        // mesmo. Sem `userInitiated` ela avisa sem mexer na chave, que é o que
+        // esta função quer — derrubá-la mataria a única cura (o efeito de
+        // posição só publica com a chave ligada).
+        ? decideStatusRevert({ requested: true, returned: null, failed: true, userInitiated: false })
+        : decideStatusRevert({
+            requested: true,
+            // Nenhuma divergência de VALOR a reportar: se o servidor tivesse
+            // coagido `is_online := false`, quem levantaria o banner (com o
+            // texto do Stripe, que é o certo) seria o efeito de transição, e o
+            // guarda acima já teria feito este temporizador calar. O que sobra é
+            // ausência de posição fresca — valha a linha sem `updated_at` novo
+            // ou a linha que não existe: `no_position` cobre as duas.
+            returned: true,
+            failed: false,
+            userInitiated: false,
+            noPosition: true,
+          });
+      donoDoBannerRef.current = 'vigia';
+      setStatusSyncFailed(falha.syncFailed);
+      setStatusSyncReason(falha.reason);
+    }, prazo);
+    return () => clearTimeout(id);
+    // `location` FICOU DE FORA da lista, e isso é a escolha do efeito.
+    //
+    // A versão anterior o listava, com o argumento de que "um fix novo é sinal
+    // de que o GPS voltou a viver". Só que um fix de GPS não põe ninguém no
+    // leque — quem põe é a PUBLICAÇÃO, e ela tem sua própria dependência aqui
+    // (`ultimaPosOkMs`, escrito só quando o servidor confirma). Com `location`
+    // na lista, cada fix desarmava e rearmava o temporizador do zero: um GPS
+    // vivo publicando num vão de rede que engole as requisições sem responder
+    // adiava o aviso indefinidamente.
+    //
+    // O caso que motivava listá-lo — GPS bom e rede caída, para não trocar o
+    // texto de conexão pelo de GPS — continua coberto, e por dois guardas mais
+    // diretos: o efeito de posição levanta o aviso de transporte em três fixes
+    // seguidos (~15 s, bem dentro da carência de 45 s), e o `if
+    // (statusSyncFailedRef.current) return` lá em cima impede o vigia de falar
+    // por cima de qualquer aviso já na tela.
+  }, [isOnline, onlineLoaded, profile?.id, ultimaPosOkMs]);
 
   const ride = useDriverRide(profile?.id, profile?.jurisdiction);
 

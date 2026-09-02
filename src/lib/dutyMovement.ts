@@ -45,6 +45,28 @@ export interface DutyMovementConfig {
   resetMs: number;
   /** Se a tolerância conta como trabalho (padrão true). */
   toleranceCountsAsWork: boolean;
+  /**
+   * Validade (ms) de uma leitura de velocidade como PROVA de movimento.
+   *
+   * `null` = sem validade: a última leitura vale para sempre. É o comportamento
+   * histórico e continua sendo o default da lib, para não mudar por baixo dos
+   * panos quem já a usa com samples esparsos.
+   *
+   * ─── POR QUE ISTO EXISTE ────────────────────────────────────────────────
+   * A máquina credita trabalho pelo INTERVALO entre samples ("determinística
+   * por timestamps"), e o estado só muda quando um sample diz que mudou. Se a
+   * fonte de velocidade CONGELA — app minimizado/tela bloqueada, o SO suspende
+   * os timers, o GPS para de entregar fix — o próximo sample chega horas depois
+   * repetindo a ÚLTIMA velocidade conhecida. Estando em MOVING, essas horas
+   * inteiras eram creditadas como jornada, sem uma única prova de que o carro
+   * andou. É o "descanso obrigatório" caindo sobre quem não dirigiu.
+   *
+   * Com um número aqui, o crédito para no horizonte da prova
+   * (`speedAtMs + speedMaxAgeMs`) e a leitura vencida passa a valer o mesmo que
+   * ausência de leitura: UNKNOWN, que CONGELA — a regra que a lib já escolheu
+   * para perda de GPS desde sempre.
+   */
+  speedMaxAgeMs: number | null;
 }
 
 export const DEFAULT_DUTY_MOVEMENT: DutyMovementConfig = {
@@ -54,6 +76,7 @@ export const DEFAULT_DUTY_MOVEMENT: DutyMovementConfig = {
   toleranceMs: 10 * 60_000,
   resetMs: 6 * 60 * 60_000,
   toleranceCountsAsWork: true,
+  speedMaxAgeMs: null,
 };
 
 const KMH_PER_MPS = 3.6;
@@ -99,6 +122,13 @@ export interface DutyMachine {
   // Congelamento (UNKNOWN):
   /** Estado de jornada anterior ao congelamento, para restaurar. */
   frozenState: DutyMovementState | null;
+  /**
+   * Epoch (ms) até quando o estado atual tem PROVA de GPS. `null` = sem
+   * horizonte (config com `speedMaxAgeMs: null`). Persistido junto: sem isso,
+   * um kill com a máquina em MOVING e um boot oito horas depois creditaria as
+   * oito horas antes de o primeiro fix chegar.
+   */
+  evidenceUntil: number | null;
 }
 
 export function initialDutyMachine(nowMs: number): DutyMachine {
@@ -111,22 +141,32 @@ export function initialDutyMachine(nowMs: number): DutyMachine {
     fastSince: null,
     slowSince: null,
     frozenState: null,
+    evidenceUntil: null,
   };
 }
 
 // ─── Crédito de trabalho (banking) ───────────────────────────────────────────
 
+/**
+ * Até que instante o estado atual pode creditar trabalho. Sem prova de GPS não
+ * se credita minuto nenhum: `evidenceUntil` é o teto, e `atMs` (o agora) o
+ * outro. Ver `speedMaxAgeMs`.
+ */
+function evidenceHorizon(m: DutyMachine, atMs: number): number {
+  return m.evidenceUntil == null ? atMs : Math.min(atMs, m.evidenceUntil);
+}
+
 /** ms de trabalho acumulados no intervalo [since, atMs] para o estado dado. */
 function accrual(m: DutyMachine, atMs: number, cfg: DutyMovementConfig): number {
-  const dt = Math.max(0, atMs - m.since);
+  const ate = evidenceHorizon(m, atMs);
   switch (m.state) {
     case 'MOVING':
-      return dt;
+      return Math.max(0, ate - m.since);
     case 'STOPPED_TOLERANCE': {
       if (!cfg.toleranceCountsAsWork) return 0;
       // Conta só até o teto de tolerância desde o início do episódio de parada.
       const stopStart = m.stopEpisodeStart ?? m.since;
-      const counted = Math.min(atMs, stopStart + cfg.toleranceMs) - m.since;
+      const counted = Math.min(ate, stopStart + cfg.toleranceMs) - m.since;
       return Math.max(0, counted);
     }
     default:
@@ -193,14 +233,34 @@ export interface DutySample {
   atMs: number;
   /** Velocidade instantânea (m/s); null/undefined = leitura de GPS ausente. */
   speedMps?: number | null;
+  /**
+   * Epoch (ms) do fix que produziu `speedMps` — NÃO é `atMs`. Ausente/null =
+   * "a leitura é deste instante". Só faz diferença com `speedMaxAgeMs` setado:
+   * é o que permite a máquina saber que a velocidade que ela recebeu é velha.
+   */
+  speedAtMs?: number | null;
   /** Motorista online (sessão de serviço aberta). */
   online: boolean;
 }
 
 export interface DutyStepResult {
   machine: DutyMachine;
-  /** Transição ocorrida neste passo (para emitir ao backend), ou null. */
-  transition: DutyTransition | null;
+  /**
+   * Transições ocorridas neste passo, em ORDEM CRONOLÓGICA (`atMs` crescente),
+   * para emitir à trilha de auditoria. Vazio quando nada mudou.
+   *
+   * É uma LISTA, e não uma transição só, porque um passo pode legitimamente
+   * produzir duas: o corte da prova vencida (o buraco, carimbado onde a prova
+   * acabou) e a mudança de estado que o sample novo provoca (carimbada agora).
+   * Enquanto isto era um campo único, a segunda apagava a primeira — e o caso
+   * comum era justamente esse: o app acorda depois de horas com o carro já
+   * parado, o passo transita MOVING→STOPPED_TOLERANCE e o buraco de três horas
+   * sumia da trilha. A migration 0053 declara essa tabela como o registro
+   * imutável de QUANDO cada mudança ocorreu; um `worked_minutes` que anda 1,5
+   * min num período MOVING de 3 h, sem uma linha explicando por quê, é
+   * exatamente o que ela existe para não deixar acontecer.
+   */
+  transitions: DutyTransition[];
 }
 
 /** Credita a acrual atual e devolve uma cópia com workedMs/since atualizados. */
@@ -218,12 +278,12 @@ function transitionTo(
 ): DutyStepResult {
   const banked = bank(m, atMs, cfg);
   const machine: DutyMachine = { ...banked, state: to, since: atMs, ...extra };
-  return { machine, transition: { from: m.state, to, atMs, reason } };
+  return { machine, transitions: [{ from: m.state, to, atMs, reason }] };
 }
 
 /**
  * Avança a máquina com um novo sample (velocidade + online + horário). Retorna o
- * novo estado persistível e a transição (se houve) para auditoria. Determinístico
+ * novo estado persistível e as transições (se houve) para auditoria. Determinístico
  * por timestamps: chamar com o horário atual após um kill reconstrói o resultado.
  */
 export function stepDuty(
@@ -252,9 +312,11 @@ export function stepDuty(
           frozenState: null,
         });
       }
-      return { machine: { ...prev, moving: null, fastSince: null, slowSince: null }, transition: null };
+      return { machine: { ...prev, moving: null, fastSince: null, slowSince: null }, transitions: [] };
     }
     // Vindo de um estado online → entra OFFLINE e inicia o episódio de descanso.
+    // O `bank` dentro de `transitionTo` usa o horizonte de prova ANTERIOR (o de
+    // `prev`), que é o certo: encerrar o turno não prova nada sobre o intervalo.
     return transitionTo(prev, 'OFFLINE', atMs, 'offline', cfg, {
       stopEpisodeStart: atMs,
       moving: null,
@@ -264,17 +326,109 @@ export function stepDuty(
     });
   }
 
+  // 2) CORTE DA PROVA VENCIDA — acontece ANTES de qualquer prova nova entrar.
+  const { maquina: atual, transicao: corte } = cortarSemProva(prev, atMs, cfg);
+  const passo = stepOnline(atual, sample, cfg);
+  // As DUAS saem, nesta ordem — o corte é carimbado onde a prova acabou, sempre
+  // antes do sample que provocou o resto. O corte já esteve condicionado a "o
+  // passo não transitou", e o caso comum era exatamente o que ele descartava: o
+  // app acorda depois de horas com o carro já parado, o passo transita
+  // MOVING→STOPPED_TOLERANCE, e o buraco de três horas não chegava à trilha.
+  // Sobrava um período MOVING de 3 h com 1,5 min de `worked_minutes` e nenhuma
+  // linha dizendo por quê — que é a pergunta que a auditoria vem fazer.
+  return { machine: passo.machine, transitions: corte ? [corte, ...passo.transitions] : passo.transitions };
+}
+
+/**
+ * Fecha o crédito no horizonte da prova ANTERIOR e recomeça a contar em `atMs`.
+ *
+ * ─── POR QUE ISTO É UM PASSO SEPARADO, E POR QUE VEM PRIMEIRO ────────────────
+ * `evidenceUntil` é recalculado a partir do fix NOVO. Se ele entrasse na máquina
+ * antes de o intervalo sem prova ser cortado, o horizonte saltaria para
+ * `agora + speedMaxAgeMs` enquanto `since` continuaria lá atrás — e `accrual`
+ * creditaria o buraco inteiro. É exatamente o caminho do app minimizado, da tela
+ * bloqueada e do kill/reboot: o SO suspende os timers, ninguém chama a máquina
+ * por horas, e o primeiro fix que chega ao acordar é FRESCO. A prova nova é
+ * legítima; o que ela não pode fazer é provar o passado.
+ *
+ * O corte credita até `horizonte` (onde a última prova valia), joga `since` para
+ * `atMs` — o intervalo [horizonte, atMs] não conta como nada — e deixa
+ * `evidenceUntil` no passado, para que um passo sem leitura válida logo em
+ * seguida também não credite nada.
+ *
+ * `stopEpisodeStart` sobrevive de propósito: os prazos de parada (tolerância,
+ * reset de 6 h) são de RELÓGIO DE PAREDE, não de prova — quem estacionou e
+ * minimizou o app por sete horas descansou de verdade e merece o reset.
+ *
+ * O preço, dito na cara: um trecho realmente dirigido com o app dormindo deixa
+ * de ser creditado. Sem fix não há prova, e a máquina erra para o lado de não
+ * inventar jornada — que é o defeito relatado (descanso obrigatório caindo sobre
+ * quem estava parado). Com o app em primeiro plano os fixes chegam a cada 5 s e
+ * o corte nunca dispara.
+ */
+function cortarSemProva(
+  prev: DutyMachine,
+  atMs: number,
+  cfg: DutyMovementConfig,
+): { maquina: DutyMachine; transicao: DutyTransition | null } {
+  if (cfg.speedMaxAgeMs == null) return { maquina: prev, transicao: null };
+  // Estado gravado por um build ANTERIOR não tem `evidenceUntil`. Contar o teto
+  // a partir da entrada no estado atual fecha o mesmo furo para quem atualiza o
+  // app com a máquina em MOVING — sem depender de zerar todo mundo em campo.
+  const horizonte = prev.evidenceUntil ?? prev.since + cfg.speedMaxAgeMs;
+  if (atMs <= horizonte) return { maquina: prev, transicao: null };
+  const creditado = bank(prev, horizonte, cfg);
+  return {
+    maquina: { ...creditado, since: atMs, evidenceUntil: horizonte },
+    // O evento marca um BURACO NO REGISTRO DE JORNADA — só existe se havia
+    // jornada correndo. Sem esta condição, uma máquina já congelada satisfaria o
+    // corte a cada tick de 60 s (o horizonte fica no passado até um fix válido
+    // chegar) e o app inseriria uma linha por minuto na trilha de auditoria
+    // durante toda a madrugada em que o motorista esqueceu o app aberto.
+    transicao:
+      creditado.workedMs !== prev.workedMs
+        ? { from: prev.state, to: prev.state, atMs: horizonte, reason: 'evidence_gap' }
+        : null,
+  };
+}
+
+/** O passo propriamente dito, já com o intervalo sem prova cortado e online. */
+function stepOnline(
+  prev: DutyMachine,
+  sample: DutySample,
+  cfg: DutyMovementConfig,
+): DutyStepResult {
+  const { atMs } = sample;
+
+  // Horizonte de PROVA. `speedAtMs` é quando a velocidade foi MEDIDA; `atMs` é
+  // quando estamos avaliando. Os dois só coincidem enquanto os fixes chegam.
+  // Passado `speedMaxAgeMs`, a leitura vence: vira ausência de leitura (o mesmo
+  // que perda de GPS → UNKNOWN, congela).
+  const speedAtMs = sample.speedAtMs ?? atMs;
+  const vencida = cfg.speedMaxAgeMs != null && atMs - speedAtMs > cfg.speedMaxAgeMs;
+  const speedMps = vencida ? null : sample.speedMps;
+  const leituraValida = speedMps != null && Number.isFinite(speedMps);
+  const evidenceUntil =
+    cfg.speedMaxAgeMs == null
+      ? null
+      : leituraValida
+        ? speedAtMs + cfg.speedMaxAgeMs
+        // SEM leitura válida o horizonte NÃO avança — ausência de fix não prova
+        // nada. Depois de um corte, `prev.evidenceUntil` já está no passado, e é
+        // isso que impede o passo seguinte de creditar o vazio.
+        : prev.evidenceUntil ?? prev.since + cfg.speedMaxAgeMs;
+
   // 2) Classifica movimento (histerese). Atualiza candidatos mesmo sem transição.
-  const motion = classifyMotion(prev, atMs, sample.speedMps, cfg);
-  const base: DutyMachine = { ...prev, ...motion };
+  const motion = classifyMotion(prev, atMs, speedMps, cfg);
+  const base: DutyMachine = { ...prev, ...motion, evidenceUntil };
 
   // 3) Perda de GPS → UNKNOWN (congela o estado atual, credita o que já correu).
   if (motion.moving === null) {
-    if (prev.state === 'UNKNOWN') return { machine: base, transition: null };
+    if (prev.state === 'UNKNOWN') return { machine: base, transitions: [] };
     const banked = bank(base, atMs, cfg);
     return {
       machine: { ...banked, state: 'UNKNOWN', since: atMs, frozenState: prev.state },
-      transition: { from: prev.state, to: 'UNKNOWN', atMs, reason: 'gps_lost' },
+      transitions: [{ from: prev.state, to: 'UNKNOWN', atMs, reason: 'gps_lost' }],
     };
   }
 
@@ -297,7 +451,7 @@ function stepFromKnown(
   moving: boolean,
   cfg: DutyMovementConfig,
 ): DutyStepResult {
-  const noop = (mm: DutyMachine): DutyStepResult => ({ machine: mm, transition: null });
+  const noop = (mm: DutyMachine): DutyStepResult => ({ machine: mm, transitions: [] });
 
   switch (m.state) {
     case 'OFFLINE': {
@@ -385,6 +539,11 @@ export function deserializeDuty(raw: string | null | undefined): DutyMachine | n
       fastSince: o.fastSince ?? null,
       slowSince: o.slowSince ?? null,
       frozenState: o.frozenState ?? null,
+      // Estado gravado por um build ANTERIOR não tem este campo. `null` NÃO
+      // significa "sem teto": `cortarSemProva` cai no teto derivado de `since`
+      // quando ele falta, então a máquina que atravessou a atualização do app em
+      // MOVING também não credita o intervalo sem prova.
+      evidenceUntil: typeof o.evidenceUntil === 'number' ? o.evidenceUntil : null,
     };
   } catch {
     return null;

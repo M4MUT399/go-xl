@@ -32,22 +32,36 @@ import { DriverRideProvider, useDriverRideContext } from '../DriverRideContext';
 
 type Resp = { data: { is_online: boolean } | null; error: unknown };
 
-const mockWrites: Array<{ payload: Record<string, unknown>; resolve: (r: Resp) => void }> = [];
+/**
+ * `op` distingue UPSERT de UPDATE. Não é detalhe de implementação: `lat`/`lng`
+ * são `not null` sem default em `driver_locations` (supabase/schema.sql:135-136)
+ * e o upsert do PostgREST é um insert — mandar upsert SEM coordenada é uma
+ * escrita que o banco recusa (23502), e era ela que acendia o banner de falha na
+ * abertura do app. O teste "todo upsert leva coordenada" mais abaixo é a rede.
+ */
+type Escrita = { op: 'upsert' | 'update'; payload: Record<string, unknown>; resolve: (r: Resp) => void };
+
+const mockWrites: Escrita[] = [];
 const mockStore: Record<string, string | null> = {};
 const mockSetItem = jest.fn();
 
 jest.mock('../../lib/supabase', () => ({
   supabase: {
-    from: () => ({
-      upsert: (payload: Record<string, unknown>) => ({
-        select: () => ({
-          maybeSingle: () =>
-            new Promise<Resp>((resolve) => {
-              mockWrites.push({ payload, resolve });
-            }),
+    from: () => {
+      const registrar = (op: 'upsert' | 'update', payload: Record<string, unknown>) =>
+        new Promise<Resp>((resolve) => {
+          mockWrites.push({ op, payload, resolve });
+        });
+      const devolve = (op: 'upsert' | 'update', payload: Record<string, unknown>) => ({
+        select: () => ({ maybeSingle: () => registrar(op, payload) }),
+      });
+      return {
+        upsert: (payload: Record<string, unknown>) => devolve('upsert', payload),
+        update: (payload: Record<string, unknown>) => ({
+          eq: () => devolve('update', payload),
         }),
-      }),
-    }),
+      };
+    },
   },
 }));
 
@@ -108,10 +122,19 @@ function Espiao() {
 const OK = (is_online: boolean): Resp => ({ data: { is_online }, error: null });
 const REDE_CAIU: Resp = { data: null, error: { message: 'network request failed' } };
 
+/**
+ * A árvore montada pelo teste corrente. Guardada para o `afterEach` DESMONTAR:
+ * o Provider arma um temporizador enquanto o motorista está em serviço (o vigia
+ * de posição), e uma árvore abandonada deixa esse temporizador de pé depois que
+ * o arquivo termina — disparando um `setState` num ambiente de teste já
+ * derrubado. Desmontar roda a limpeza do efeito e fecha isso.
+ */
+let arvore: ReturnType<typeof create> | null = null;
+
 async function montar(persistido: 'true' | 'false') {
   mockStore.driver_is_online = persistido;
   await act(async () => {
-    create(
+    arvore = create(
       <DriverRideProvider>
         <Espiao />
       </DriverRideProvider>,
@@ -167,6 +190,12 @@ beforeEach(() => {
   mockWrites.length = 0;
   resolvidas.clear();
   for (const k of Object.keys(mockStore)) delete mockStore[k];
+});
+
+afterEach(async () => {
+  const montada = arvore;
+  arvore = null;
+  if (montada) await act(async () => { montada.unmount(); });
 });
 
 describe('DriverRideProvider — sincronia do status online', () => {
@@ -260,6 +289,194 @@ describe('DriverRideProvider — sincronia do status online', () => {
     expect(ctx.isOnline).toBe(true); // ninguém tocou em nada; inverter seria inventar
     expect(ctx.statusSyncFailed).toBe(true);
     expect(ctx.statusSyncReason).toBe('transport');
+  });
+
+  describe('a escrita de status sem fix de GPS (o banner que subia sozinho)', () => {
+    // O defeito relatado: banner vermelho na tela INICIAL, motorista OFFLINE, sem
+    // corrida nenhuma, em dois aparelhos. A causa não era rede: o heartbeat de
+    // abertura roda assim que o AsyncStorage responde, MUITO antes do primeiro
+    // fix de GPS, e mandava um UPSERT sem `lat`/`lng` — colunas `not null` sem
+    // default. O Postgres valida NOT NULL na tupla proposta do insert antes de
+    // resolver o `on conflict`, então a escrita falhava com 23502 mesmo com a
+    // linha do motorista já existindo. `decideStatusRevert` lia `failed: true` e
+    // levantava o aviso de transporte. Com a permissão de localização negada o
+    // banner nunca mais saía da tela.
+    it('abertura SEM fix de GPS grava o status por UPDATE, não por upsert', async () => {
+      await montar('false');
+
+      expect(mockWrites).toHaveLength(1);
+      expect(mockWrites[0].op).toBe('update');
+      expect(mockWrites[0].payload.is_online).toBe(false);
+      // O UPDATE não pode carregar coordenada nenhuma — não temos nenhuma.
+      expect(mockWrites[0].payload).not.toHaveProperty('lat');
+      expect(mockWrites[0].payload).not.toHaveProperty('lng');
+      expect(mockWrites[0].payload).not.toHaveProperty('driver_id');
+    });
+
+    // ── A coordenada velha não pode voltar a valer ─────────────────────────
+    it('o UPDATE sem fix NÃO carimba updated_at', async () => {
+      // `updated_at` é a trava de FRESCOR DA POSIÇÃO, não "quando mexemos na
+      // linha": o despacho monta o leque com `is_online = true` E
+      // `updated_at > agora - 10min` e lê `lat, lng` dessas linhas
+      // (dispatch-engine/index.ts:151-156; a RPC do mapa faz igual, 0069:646).
+      // Carimbar aqui, sem coordenada nova, ressuscitaria a posição da sessão
+      // anterior como se fosse de agora — e `isOnline` vem do AsyncStorage, então
+      // isso pegaria TODO motorista que fechou o app com a chave ligada.
+      await montar('true');
+
+      expect(mockWrites[0].op).toBe('update');
+      expect(mockWrites[0].payload).not.toHaveProperty('updated_at');
+      expect(Object.keys(mockWrites[0].payload)).toEqual(['is_online']);
+    });
+
+    it('o UPSERT com fix carimba updated_at — ali a posição é nova de verdade', async () => {
+      await montar('false');
+      await responder(0, OK(false));
+      await fixDeGps(28.42);
+
+      await tocarNaChave(true);
+
+      expect(mockWrites[1].op).toBe('upsert');
+      expect(typeof mockWrites[1].payload.updated_at).toBe('string');
+    });
+
+    // ── Zero linhas casadas: o motorista NÃO pode ficar preso em Offline ──────
+    it('UPDATE que não casa linha nenhuma NÃO derruba a chave', async () => {
+      // Motorista sem linha em `driver_locations` — conta nova que nunca ficou
+      // online com GPS, ou linha apagada pelo delete-account. O PostgREST devolve
+      // `{ data: null, error: null }`: sem erro e sem linha.
+      //
+      // A rodada anterior desta correção revertia a chave aqui. É o defeito
+      // relatado por outro caminho: a ÚNICA coisa no app capaz de criar essa
+      // linha é o efeito de posição, e ele começa com `if (!isOnline) return`.
+      // Com a chave derrubada, o fix de GPS que chega em seguida não publica
+      // nada e o motorista não entra em serviço nunca mais.
+      await montar('false');
+      await responder(0, { data: null, error: null });
+      await tocarNaChave(true);
+
+      await responder(1, { data: null, error: null });
+
+      expect(ctx.isOnline).toBe(true);
+      expect(mockStore.driver_is_online).toBe('true');
+    });
+
+    it('sem linha e sem fix, o PRIMEIRO fix cria a linha por upsert', async () => {
+      // O desfecho que a reversão matava, encenado até o fim: é este upsert —
+      // com `lat`, `lng` e `updated_at` — que faz o motorista existir para o
+      // despacho. Ele só sai porque a chave continuou ligada.
+      await montar('false');
+      await responder(0, { data: null, error: null });
+      await tocarNaChave(true);
+      await responder(1, { data: null, error: null });
+
+      await fixDeGps(28.42);
+
+      const ultima = mockWrites[mockWrites.length - 1];
+      expect(ultima.op).toBe('upsert');
+      expect(ultima.payload.lat).toBe(28.42);
+      expect(ultima.payload.is_online).toBe(true);
+      expect(typeof ultima.payload.updated_at).toBe('string');
+    });
+
+    it('pedido de OFFLINE sem linha nenhuma não acusa falha', async () => {
+      // Não há o que desligar: o servidor já não tem esse motorista em lugar
+      // nenhum. Levantar banner aqui seria alarme falso — e o heartbeat de
+      // abertura de todo motorista offline cairia nele.
+      await montar('false');
+
+      await responder(0, { data: null, error: null });
+
+      expect(ctx.isOnline).toBe(false);
+      expect(ctx.statusSyncFailed).toBe(false);
+      expect(ctx.statusSyncReason).toBe('ok');
+    });
+
+    it('abrir o app JÁ ONLINE sem linha nenhuma mantém o turno', async () => {
+      // Reverter no heartbeat de abertura é pior ainda do que no toque: ninguém
+      // pediu nada, e o motorista que fechou o app em serviço reabriria fora
+      // dele — sem ter tocado na chave e sem que o app tivesse dado ao GPS um
+      // segundo sequer para responder. Quem cobra a ausência de posição é o
+      // vigia, com carência (bloco próprio mais abaixo).
+      await montar('true');
+
+      await responder(0, { data: null, error: null });
+
+      expect(ctx.isOnline).toBe(true);
+      expect(mockStore.driver_is_online).toBe('true');
+      expect(ctx.statusSyncFailed).toBe(false);
+    });
+
+    it('UPSERT que volta sem leitura continua sendo ignorância, não falha', async () => {
+      // A marca `noRow` só vale para o UPDATE. Um upsert sem representação de
+      // volta não prova ausência de linha — e inventar falha a partir disso
+      // reacenderia o banner sozinho, que é o defeito de origem.
+      await montar('false');
+      await responder(0, OK(false));
+      await fixDeGps(28.42);
+      await tocarNaChave(true);
+
+      await responderUltima({ data: null, error: null });
+
+      expect(ctx.statusSyncFailed).toBe(false);
+      expect(ctx.isOnline).toBe(true);
+    });
+
+    it('UPDATE que dá certo não acende banner nenhum', async () => {
+      await montar('false');
+      await responder(0, OK(false));
+
+      expect(ctx.statusSyncFailed).toBe(false);
+      expect(ctx.statusSyncReason).toBe('ok');
+    });
+
+    it('toque na chave SEM fix de GPS também vai por UPDATE', async () => {
+      // Este teste cobre só a FORMA da escrita. A CONSEQUÊNCIA de o servidor
+      // aceitá-la (linha existente + `updated_at` velho = motorista fora do
+      // leque) é cobrada no bloco do vigia, mais abaixo.
+      await montar('false');
+      await responder(0, OK(false));
+
+      await tocarNaChave(true);
+
+      expect(mockWrites).toHaveLength(2);
+      expect(mockWrites[1].op).toBe('update');
+      expect(mockWrites[1].payload.is_online).toBe(true);
+    });
+
+    it('com fix na mão a transição volta a ser UPSERT, com coordenada', async () => {
+      await montar('false');
+      await responder(0, OK(false));
+      await fixDeGps(28.42);
+      // Offline o efeito de posição não publica nada — o fix só abastece o ref.
+      expect(mockWrites).toHaveLength(1);
+
+      await tocarNaChave(true);
+
+      expect(mockWrites[1].op).toBe('upsert');
+      expect(mockWrites[1].payload.lat).toBe(28.42);
+      expect(mockWrites[1].payload.lng).toBe(-81.3);
+      expect(mockWrites[1].payload.driver_id).toBe('motorista-1');
+    });
+
+    // A invariante do schema, valendo para TODA escrita que este Provider emite.
+    it('todo UPSERT enviado carrega lat e lng (lat/lng são NOT NULL no banco)', async () => {
+      await montar('true');
+      await responderPendentes(OK(true));
+      await fixDeGps(28.43);
+      await responderPendentes(OK(true));
+      await tocarNaChave(false);
+      await responderPendentes(OK(false));
+      await tocarNaChave(true);
+      await responderPendentes(OK(true));
+
+      const upserts = mockWrites.filter((w) => w.op === 'upsert');
+      expect(upserts.length).toBeGreaterThan(0);
+      for (const w of upserts) {
+        expect(typeof w.payload.lat).toBe('number');
+        expect(typeof w.payload.lng).toBe('number');
+      }
+    });
   });
 
   describe('efeito de POSIÇÃO (roda a cada fix de GPS)', () => {
@@ -527,6 +744,320 @@ describe('DriverRideProvider — sincronia do status online', () => {
 
       expect(ctx.statusSyncFailed).toBe(false);
       expect(ctx.statusSyncReason).toBe('ok');
+    });
+  });
+
+  describe('o VIGIA: em serviço sem posição no servidor', () => {
+    // O caso que nenhum dos dois efeitos enxergava. Sem fix de GPS não há
+    // escrita de posição (o efeito começa com `if (!location) return`), e a
+    // escrita de status que sobra é um UPDATE que o servidor ACEITA e devolve
+    // `true`. Só que ela não carimba `updated_at`, e é o carimbo que põe o
+    // motorista no leque do despacho (dispatch-engine/index.ts:152-156) e no mapa
+    // do passageiro (0069:646). Antes do vigia: chave verde, zero erro, zero
+    // banner, zero corrida — pelo turno inteiro, sem uma pista na tela.
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    /** Avança o relógio (e os temporizadores) deixando o React assentar. */
+    async function passar(ms: number) {
+      await act(async () => {
+        jest.advanceTimersByTime(ms);
+      });
+    }
+
+    it('abrir o app JÁ ONLINE sem GPS: silêncio na carência, aviso depois dela', async () => {
+      await montar('true');
+      await responder(0, OK(true)); // o servidor ACEITA o UPDATE sem coordenada
+
+      // Durante a carência não se acusa nada: aqui um aparelho perfeito ainda
+      // está pedindo permissão e esperando o primeiro fix.
+      await passar(44_000);
+      expect(ctx.statusSyncFailed).toBe(false);
+
+      await passar(2_000);
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('no_position');
+      // A chave NÃO cai: o `is_online` pedido está gravado, e derrubá-la faria o
+      // efeito de posição parar de publicar — matando a cura.
+      expect(ctx.isOnline).toBe(true);
+    });
+
+    it('motorista SEM LINHA fica em serviço e é cobrado pelo vigia, não pela chave', async () => {
+      // O outro lado da mesma moeda: aqui o UPDATE não casa linha nenhuma
+      // (`{ data: null, error: null }`). A chave continua ligada — é ela que
+      // deixa o efeito de posição vivo para criar a linha no primeiro fix — e
+      // quem cobra a ausência é o vigia, com carência e com o texto do GPS.
+      await montar('false');
+      await responder(0, { data: null, error: null });
+      await tocarNaChave(true);
+      await responder(1, { data: null, error: null });
+
+      await passar(44_000);
+      expect(ctx.statusSyncFailed).toBe(false);
+
+      await passar(2_000);
+      expect(ctx.isOnline).toBe(true);
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('no_position');
+    });
+
+    it('fixes de GPS sozinhos NÃO adiam o prazo do vigia, e o texto é o de conexão', async () => {
+      // O vão de rede que ENGOLE a requisição sem responder: o GPS está vivo e
+      // entrega fix a cada 5 s, cada fix dispara uma publicação, e nenhuma delas
+      // volta — nem sucesso nem erro. Nada muda na tela e nada chega ao
+      // servidor.
+      //
+      // Enquanto `location` era dependência do vigia, cada fix desarmava e
+      // rearmava o temporizador do zero: o prazo nunca vencia e o motorista
+      // ficava com a chave verde, invisível ao despacho, sem uma palavra — o
+      // mesmo silêncio que o vigia existe para quebrar. O prazo é contado do
+      // início do TURNO, e só uma publicação CONFIRMADA o re-arma.
+      await montar('true');
+      // A escrita de status (índice 0) fica pendurada de propósito.
+
+      await passar(10_000);
+      await fixDeGps(28.41);
+      await passar(10_000);
+      await fixDeGps(28.42);
+      await passar(10_000);
+      await fixDeGps(28.43);
+      await passar(10_000);
+      await fixDeGps(28.44);
+      expect(ctx.statusSyncFailed).toBe(false); // 40 s: ainda na carência
+
+      await passar(6_000);
+
+      expect(ctx.statusSyncFailed).toBe(true);
+      // E o texto é o de CONEXÃO, não o do GPS. Quatro fixes chegaram nos 46 s:
+      // o GPS é a única peça que está comprovadamente funcionando, e mandar
+      // checá-lo é o mesmo erro de mandar checar a conexão quando o problema é
+      // o cadastro do Stripe — apontar para o lugar errado.
+      expect(ctx.statusSyncReason).toBe('transport');
+    });
+
+    it('sair e voltar ao serviço recomeça a carência do zero', async () => {
+      // O marco é do TURNO. Sem zerá-lo ao sair de serviço, o motorista que
+      // encerra às 14h e volta às 20h reentraria com o prazo já vencido: aviso
+      // de GPS na cara antes de o primeiro fix da noite ter chance de chegar —
+      // o "banner que sobe sozinho" de novo, só que com outro texto.
+      await montar('true');
+      await responder(0, OK(true));
+      await passar(30_000);
+
+      await tocarNaChave(false);
+      await responderUltima(OK(false));
+      await passar(5 * 60_000);
+      expect(ctx.statusSyncFailed).toBe(false); // offline o vigia é mudo
+
+      await tocarNaChave(true);
+      await responderUltima(OK(true));
+
+      await passar(44_000);
+      expect(ctx.statusSyncFailed).toBe(false);
+      await passar(2_000);
+      expect(ctx.statusSyncReason).toBe('no_position');
+    });
+
+    it('toque em ONLINE sem fix: a resposta ACEITA não passa por sucesso', async () => {
+      // A reprodução em campo: motorista que já ficou online com GPS um dia
+      // (linha existente), desliga o GPS, abre o app e toca em Online. O UPDATE
+      // casa a linha e devolve `{ is_online: true }` — nenhum erro em lugar
+      // nenhum. É por isso que a decisão olha `noPosition` e não só o retorno.
+      await montar('false');
+      await responder(0, OK(false));
+      await tocarNaChave(true);
+      await responder(1, OK(true));
+
+      expect(ctx.statusSyncFailed).toBe(false); // ainda na carência
+
+      await passar(46_000);
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('no_position');
+    });
+
+    it('o primeiro fix publicado apaga o aviso — o vigia não fica preso', async () => {
+      await montar('true');
+      await responder(0, OK(true));
+      await passar(46_000);
+      expect(ctx.statusSyncFailed).toBe(true);
+
+      // O motorista religa o GPS. O fix vira publicação com `updated_at` novo, e
+      // é isso — não o fix em si — que o devolve ao leque.
+      await fixDeGps(28.42);
+      await responderUltima(OK(true));
+
+      expect(ctx.statusSyncFailed).toBe(false);
+      expect(ctx.statusSyncReason).toBe('ok');
+    });
+
+    it('GPS apenas lento não vira alarme falso', async () => {
+      // A trava contra o "banner que subia sozinho": um fix chegando dentro da
+      // carência tem de deixar a tela limpa para sempre depois disso.
+      await montar('true');
+      await responder(0, OK(true));
+      await passar(10_000);
+      await fixDeGps(28.42);
+      await responderUltima(OK(true));
+
+      await passar(120_000);
+
+      expect(ctx.statusSyncFailed).toBe(false);
+    });
+
+    it('fora de serviço o vigia não abre a boca', async () => {
+      // Offline a posição não é publicada de propósito (privacidade do motorista
+      // fora de serviço). Cobrar frescor aqui seria alarme falso em todo mundo.
+      await montar('false');
+      await responder(0, OK(false));
+
+      await passar(10 * 60_000);
+
+      expect(ctx.statusSyncFailed).toBe(false);
+    });
+
+    it('publicação que PARA no meio do turno avisa antes de o motorista sumir do leque', async () => {
+      // O Android mata o GPS com o app em segundo plano: os fixes simplesmente
+      // param. `useLocation` nunca zera a posição, então nada na tela muda e
+      // nenhuma escrita nova sai. Aos 10 min o `updated_at` vence e o despacho
+      // para de considerá-lo; o aviso sai aos 8, com margem para reagir.
+      await montar('true');
+      await responder(0, OK(true));
+      await fixDeGps(28.42);
+      await responderUltima(OK(true));
+
+      await passar(7 * 60_000);
+      expect(ctx.statusSyncFailed).toBe(false);
+
+      await passar(90_000);
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('no_position');
+    });
+
+    it('a resposta ACEITA do status não apaga o aviso do vigia', async () => {
+      // A escrita de status pendurada num servidor lento resolve DEPOIS de o
+      // prazo vencer. Ela volta `{ is_online: true }`, sem erro — e se isso
+      // contasse como sucesso, o aviso sumiria da tela sem que uma única
+      // coordenada tivesse chegado ao servidor. O motorista voltaria ao silêncio
+      // com a chave verde, que é o defeito inteiro.
+      await montar('true');
+      expect(mockWrites).toHaveLength(1); // pendurada de propósito
+
+      await passar(46_000);
+      expect(ctx.statusSyncReason).toBe('no_position');
+
+      await responder(0, OK(true));
+
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('no_position');
+    });
+
+    it('o aviso de rede caída ganha do vigia — quem levantou é quem apaga', async () => {
+      // Os fixes estão chegando (o GPS está vivo), mas nenhum chega ao servidor.
+      // O texto certo aí é o de conexão, e o vigia não pode trocá-lo pelo de GPS
+      // nem apagá-lo quando o prazo dele vencer.
+      await montar('true');
+      await responder(0, OK(true));
+      await fixDeGps(28.41);
+      await responder(1, REDE_CAIU);
+      await fixDeGps(28.42);
+      await responder(2, REDE_CAIU);
+      await fixDeGps(28.43);
+      await responder(3, REDE_CAIU);
+      expect(ctx.statusSyncReason).toBe('transport');
+
+      await passar(10 * 60_000);
+
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('transport');
+    });
+
+    it('recusa do trigger DEPOIS do aviso do vigia não deixa a chave cair calada', async () => {
+      // O pior desfecho possível, e ele nasceu de uma ref de autoria duplicada.
+      // Enquanto o levantamento e o banner na tela tinham donos separados, esta
+      // sequência derrubava a chave e APAGAVA a explicação no mesmo commit:
+      //
+      //   motorista novo (o mesmo que esbarra no cadastro do Stripe) abre o app
+      //   na garagem → 45 s sem fix, o vigia levanta 'no_position' → o GPS
+      //   acorda → a publicação volta RECUSADA pelo trigger 0038 → a chave cai
+      //   → o vigia re-roda (publicação e `isOnline` mudaram), acha que o banner
+      //   ainda é dele e limpa a tela.
+      //
+      // Resultado em campo: Offline, tela limpa, nenhuma palavra — o silêncio
+      // que o cabeçalho de driverOnlineStatus.ts existe para acabar. E o banner
+      // apagado era justamente o que mandaria o motorista ao cadastro de repasse,
+      // que é a única coisa capaz de destravar a conta dele.
+      await montar('true');
+      await responder(0, OK(true));
+
+      await passar(46_000);
+      expect(ctx.statusSyncReason).toBe('no_position');
+      expect(ctx.isOnline).toBe(true);
+
+      await fixDeGps(28.42);
+      await responderUltima(OK(false)); // o trigger coage `is_online := false`
+
+      expect(ctx.isOnline).toBe(false);
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('refused');
+    });
+
+    it('o toque que dá certo apaga o aviso de rede que já não vale', async () => {
+      // Não LEVANTAR o aviso de falta de posição na escrita de status é certo —
+      // quem faz isso é o vigia, depois da carência. Calar a escrita INTEIRA não
+      // era: ela também é quem apaga um aviso velho que a própria resposta
+      // desmente. Sem isso, o motorista que perdeu o toque numa queda de rede
+      // tocava de novo com a rede boa, FICAVA online — e o banner vermelho de
+      // conexão seguia na tela o turno inteiro, porque o vigia é mudo enquanto
+      // houver aviso e o efeito de posição só apaga o que ele mesmo levantou.
+      await montar('false');
+      await responder(0, OK(false));
+
+      await tocarNaChave(true);
+      await responderUltima(REDE_CAIU);
+      expect(ctx.isOnline).toBe(false); // o toque não valeu, a chave voltou
+      expect(ctx.statusSyncReason).toBe('transport');
+
+      // A rede voltou. O UPDATE sem fix é ACEITO: a escrita chegou e voltou com
+      // o valor pedido, o que desmente o aviso de conexão que está na tela.
+      await tocarNaChave(true);
+      await responderUltima(OK(true));
+
+      expect(ctx.isOnline).toBe(true);
+      expect(ctx.statusSyncFailed).toBe(false);
+      expect(ctx.statusSyncReason).toBe('ok');
+
+      // E apagar não é calar: a falta de posição continua sendo cobrada por quem
+      // tem competência para isso, depois da carência.
+      await passar(46_000);
+      expect(ctx.statusSyncReason).toBe('no_position');
+    });
+
+    it('publicação que trava com o GPS VIVO manda checar a conexão, não o GPS', async () => {
+      // A outra metade da distinção. Aqui a posição já publicou uma vez (o prazo
+      // é o de frescor, 8 min), o GPS continua entregando fix — e a publicação
+      // desse fix fica pendurada num vão de rede que não responde e também não
+      // erra, então a contagem de falhas do efeito de posição nunca dispara.
+      //
+      // O prazo vence do mesmo jeito, mas mandar checar o GPS aqui aponta para o
+      // único pedaço do aparelho que está comprovadamente funcionando.
+      await montar('true');
+      await responder(0, OK(true));
+      await fixDeGps(28.42);
+      await responderUltima(OK(true)); // publicou: o relógio de frescor arma
+
+      await passar(4 * 60_000);
+      await fixDeGps(28.43); // sai a publicação, e ela nunca volta
+      await passar(4 * 60_000 + 1_000);
+
+      expect(ctx.statusSyncFailed).toBe(true);
+      expect(ctx.statusSyncReason).toBe('transport');
+      // A chave não cai: derrubá-la desligaria o efeito de posição, que é o
+      // único capaz de curar isto quando a rede voltar.
+      expect(ctx.isOnline).toBe(true);
     });
   });
 });

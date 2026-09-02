@@ -34,6 +34,8 @@ import {
 } from '../../lib/nav/courseUp';
 import { zoomForSpeed } from '../../lib/nav/follow';
 import { supabase } from '../../lib/supabase';
+import { statusBannerText } from '../../lib/driverOnlineStatus';
+import { MapKeyNotice } from '../../components/common/MapKeyNotice';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -423,6 +425,12 @@ export function DriverHomeScreen({ navigation }: Props) {
         )}
       </MapView>
 
+      {/* Mapa branco no Android tem várias causas; esta é a única que o app
+          consegue provar de dentro (chave do Maps ausente no build). Sem isto o
+          motorista fica olhando um retângulo branco sem nenhuma pista — ver
+          src/lib/mapsDiagnostics.ts. Não renderiza nada quando a chave está lá. */}
+      <MapKeyNotice />
+
       {location && (
         <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
           <CrosshairIcon size={27.5} color={colors.primary} />
@@ -456,19 +464,20 @@ export function DriverHomeScreen({ navigation }: Props) {
           e antes disso a chave voltava sozinha, sem uma palavra. O motorista via
           "Online" virar "Offline" do nada e não tinha como saber se era bug do
           app ou recusa do servidor. Este banner é o "por quê" que faltava.
-          PENDÊNCIA DE PRODUTO: o texto ideal seria uma chave própria, algo como
-          `driver.goOnlineFailed` = "Não foi possível alterar seu status. Verifique
-          sua conexão e se sua conta de pagamentos está aprovada." Reusamos
-          `driverNav.statusUpdateFailed` ("não foi possível atualizar o status")
-          porque é verdadeiro nos dois modos de falha e já existe em en/es/pt —
-          src/i18n/translations.ts está sob edição do dono e não pode receber chaves.
+
+          O QUE MUDOU: o texto era `driverNav.statusUpdateFailed` — "não foi
+          possível atualizar o status DA CORRIDA". Ele MENTIA sobre o que
+          falhou: aqui não há corrida nenhuma, o que não foi gravado é o
+          ONLINE/OFFLINE do motorista. O dono leu o banner na tela inicial, sem
+          corrida em andamento, e foi procurar uma corrida que não existia.
+          `translations.ts` continua travado, então o texto certo é COMPOSTO de
+          chaves que já existem nos três idiomas — ver `statusBannerText` em
+          src/lib/driverOnlineStatus.ts, que é onde isso é testado.
         */}
         {statusSyncFailed && (
           <View style={styles.statusFailBanner}>
             <Text style={styles.statusFailBannerText}>
-              {statusSyncReason === 'refused'
-                ? t('driver.payoutSetupRequiredBody')
-                : t('driverNav.statusUpdateFailed')}
+              {statusBannerText(statusSyncReason, t)}
             </Text>
           </View>
         )}
