@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { cabecalhosDeVersao } from './appVersion';
 
 /**
  * Credenciais públicas do projeto Supabase.
@@ -42,6 +43,18 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
+  },
+  // O carimbo de versão vai em TODA requisição PostgREST e de Edge Function.
+  //
+  // É o que permite ao servidor recusar uma build velha (trigger da migration
+  // 0081) — e é a única metade da trava que tem dentes, porque o cliente velho
+  // que já está em campo nunca vai receber a metade do cliente.
+  //
+  // Resolvido UMA vez, na criação do cliente. Isso é aceitável porque a versão
+  // de um binário não muda enquanto o processo vive; se um dia a fonte passar a
+  // ser algo mutável (OTA update), isto vira função por request.
+  global: {
+    headers: cabecalhosDeVersao(),
   },
 });
 

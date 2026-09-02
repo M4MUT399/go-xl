@@ -61,6 +61,7 @@ import {
   type TripRequest,
 } from '../_shared/dispatchEngine.ts';
 import { isServiceRoleCaller } from '../_shared/serviceAuth.ts';
+import { cortePorFrescorIso } from '../_shared/driverFreshness.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -128,32 +129,17 @@ async function loadConfig(admin: Admin): Promise<{ enabled: boolean; config: Dis
 
 // ─── Carregamento do pool de motoristas ──────────────────────────────────────
 
-// Idade máxima de um fix para o motorista continuar elegível a receber oferta.
-//
-// `is_online` sozinho NÃO prova que o motorista está lá: ninguém desliga a flag
-// quando o app morre. Ela só cai por trigger de escrita (0038:29, 0059:337) ou
-// pelo webhook do Stripe (stripe-webhook:658) — matar o app não escreve nada. E
-// o publicador de fundo (nav/backgroundLocationTask.ts:92) sai cedo quando não
-// há corrida ativa, então um motorista OCIOSO com o app em segundo plano para de
-// publicar. Sem este filtro, esse fantasma consome o TTL inteiro de uma oferta
-// (15 s) mais o intervalo do tick a cada rodada, e segura a expansão de raio
-// enquanto um motorista real espera.
-//
-// POR QUE 10 MINUTOS E NÃO 2. É a mesma janela que `nearby_online_drivers` já
-// usa (0069:627) — divergir faria o mapa do passageiro e o despacho discordarem
-// sobre quem existe. E 2 min derrubaria motorista VIVO: `useLocation` observa
-// com `distanceInterval: 15` e `timeInterval: 5000` (useLocation.ts:106-107),
-// mas o `timeInterval` é ignorado no iOS, então um motorista PARADO — na fila do
-// MCO, exatamente o caso premium — pode passar minutos sem emitir fix. Errar
-// para o lado do fantasma custa latência; errar para o outro custa a corrida.
-const DRIVER_FIX_MAX_AGE_MS = 10 * 60 * 1000;
+// A janela de frescor do fix mora em _shared/driverFreshness.ts — junto com o
+// motivo de ela ser 10 min e não 2, e com a lista de quem mais precisa
+// concordar com ela. Estava declarada aqui e o `send-ride-push` não tinha
+// filtro nenhum; era divergência esperando para acontecer.
 
 async function loadPool(admin: Admin): Promise<DriverPosition[]> {
   const { data: online } = await admin
     .from('driver_locations')
     .select('driver_id, lat, lng')
     .eq('is_online', true)
-    .gt('updated_at', new Date(Date.now() - DRIVER_FIX_MAX_AGE_MS).toISOString());
+    .gt('updated_at', cortePorFrescorIso());
   const rows = (online as { driver_id: string; lat: number; lng: number }[] | null) ?? [];
   if (rows.length === 0) return [];
 

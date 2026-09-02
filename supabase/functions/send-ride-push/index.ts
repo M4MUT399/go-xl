@@ -37,6 +37,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { driversFreeForOffer, type BusyRideRow } from '../_shared/rideDispatch.ts';
+import { cortePorFrescorIso } from '../_shared/driverFreshness.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -136,8 +137,10 @@ type OnlineDriverReader = {
   from(table: string): {
     select(columns: string): {
       eq(column: string, value: boolean): {
-        order(column: string, options: { ascending: boolean }): {
-          limit(count: number): PromiseLike<{ data: { driver_id: string | null }[] | null; error: PgError }>;
+        gt(column: string, value: string): {
+          order(column: string, options: { ascending: boolean }): {
+            limit(count: number): PromiseLike<{ data: { driver_id: string | null }[] | null; error: PgError }>;
+          };
         };
       };
     };
@@ -185,12 +188,28 @@ async function tokensFor(admin: ProfileTokenReader, ids: string[]): Promise<stri
  * A ordenação por `updated_at` desc não é enfeite: se houver mais motoristas
  * online que `MAX_BROADCAST_TARGETS`, o corte precisa cair sobre as linhas mais
  * velhas (app morto sem desligar o espelho), não sobre um conjunto arbitrário.
+ *
+ * ── O FILTRO DE FRESCOR ────────────────────────────────────────────────────
+ *
+ * Ordenar não bastava. Com menos motoristas que o teto — o caso real, hoje são
+ * oito — nenhuma linha era cortada, e o leque incluía TODO mundo que um dia
+ * ficou online e nunca desligou o espelho. Em 02/09/2026 isso eram seis
+ * telefones parados havia entre 8 e 55 dias tocando a cada corrida pedida.
+ *
+ * `cortePorFrescorIso()` é a MESMA janela do `dispatch-engine` e da
+ * `nearby_online_drivers` — ver _shared/driverFreshness.ts para por que 10 min.
+ *
+ * Isto vale também para o `silent_revoke`, e está certo: quem não estava fresco
+ * o bastante para receber a oferta não tem o que dispensar. A oferta expira em
+ * ~30 s (`ride_offer_timeout_seconds`), muito dentro da janela, então um
+ * motorista que recebeu o toque continua alcançável pela revogação.
  */
 async function onlineDriverIds(admin: OnlineDriverReader): Promise<string[]> {
   const { data, error } = await admin
     .from('driver_locations')
     .select('driver_id')
     .eq('is_online', true)
+    .gt('updated_at', cortePorFrescorIso())
     .order('updated_at', { ascending: false })
     .limit(MAX_BROADCAST_TARGETS);
 

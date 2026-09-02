@@ -10,6 +10,7 @@ import { I18nProvider } from './src/i18n';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { AppErrorBoundary } from './src/components/common/AppErrorBoundary';
 import { BrandSplash } from './src/components/BrandSplash';
+import { UpdateRequiredScreen } from './src/components/common/UpdateRequiredScreen';
 import { useAuth } from './src/hooks/useAuth';
 import { installNetworkErrorGuard } from './src/lib/networkErrorGuard';
 import { preloadDriverMarkerAssets } from './src/lib/preloadAssets';
@@ -91,6 +92,16 @@ export default function App() {
             <AuthProvider>
               <StatusBar style="light" />
               <AppNavigator />
+              {/*
+                A trava de versão fica ACIMA do navegador e ABAIXO da abertura
+                de marca: a ordem dos irmãos é a ordem de pintura. Assim a
+                animação de abertura ainda roda inteira, e o bloqueio aparece
+                quando ela sai — em vez de brigar com ela por cima.
+
+                Ela se auto-oculta (devolve null) enquanto não há motivo para
+                bloquear, que é o estado normal.
+              */}
+              <UpdateRequiredScreen />
               <AberturaDeMarca />
             </AuthProvider>
           </I18nProvider>
