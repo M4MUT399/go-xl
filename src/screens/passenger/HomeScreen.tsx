@@ -12,7 +12,6 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList, Location } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
 import { useTranslation } from '../../i18n';
-import { MapKeyNotice } from '../../components/common/MapKeyNotice';
 import { AppTheme } from '../../constants/theme';
 import { useLocation } from '../../hooks/useLocation';
 import { useCameraController } from '../../hooks/useCameraController';
@@ -211,9 +210,8 @@ export function HomeScreen({ navigation }: Props) {
           ))}
         </MapView>
       )}
-      {/* Mesmo aviso do app do motorista: mapa branco no Android com a chave do
-          Google Maps ausente no build. Ver src/lib/mapsDiagnostics.ts. */}
-      <MapKeyNotice />
+      {/* Mapa branco no Android: roteiro de investigação em
+          docs/mapa-branco-android.md (mesma situação do app do motorista). */}
       {status === 'error' && (
         <View style={styles.mapErrorOverlay} pointerEvents="box-none">
           <View style={styles.mapError}>

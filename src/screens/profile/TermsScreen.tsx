@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView } fr
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { BackButton } from '../../components/common/BackButton';
 import { useTranslation } from '../../i18n';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Terms'> };
@@ -17,9 +18,7 @@ export function TermsScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← {t('common.back')}</Text>
-        </TouchableOpacity>
+        <BackButton onPress={() => navigation.goBack()} />
 
         <Text style={styles.title}>{t('terms.title')}</Text>
         <Text style={styles.updated}>{t('terms.updated')}</Text>
@@ -39,8 +38,6 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     scroll: { padding: 24 },
-    back: { marginBottom: 20, alignSelf: 'flex-start' },
-    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
     title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 6 },
     updated: { fontSize: 13, color: colors.gray[400], marginBottom: 24 },
     section: { marginBottom: 20 },

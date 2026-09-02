@@ -56,6 +56,25 @@ begin
     alice, 28.4, -81.3, 'Casa da Alice', 28.43, -81.31, 'MCO', 'requesting'
   ) returning id into corrida;
 
+  -- Posição REAL do Dave, ONLINE. É o alvo do ataque nº 5, e sem esta linha
+  -- aquele ataque seria vazio: uma tabela sem linha devolve zero por si só e a
+  -- asserção passaria num banco sem RLS nenhuma.
+  --
+  -- O `is_online = true` é o caso adversarial mais forte de propósito: era
+  -- exatamente esta a condição da policy ampla que a 0069:711 removeu. Para
+  -- gravá-lo é preciso passar pelo gate da 0038, que coage `is_online := false`
+  -- para motorista sem Connect — daí as flags irem a true e VOLTAREM logo em
+  -- seguida, deixando o perfil do Dave como o resto deste arquivo o espera. O
+  -- claim de service_role é o que faz o guarda de dinheiro da 0065 deixar
+  -- escrever as flags.
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+  update public.profiles set stripe_charges_enabled = true, stripe_payouts_enabled = true where id = dave;
+  insert into public.driver_locations (driver_id, lat, lng, heading, is_online, updated_at)
+  values (dave, 28.5383, -81.3792, 90, true, now())
+  on conflict (driver_id) do update set lat = 28.5383, lng = -81.3792, is_online = true;
+  update public.profiles set stripe_charges_enabled = false, stripe_payouts_enabled = false where id = dave;
+  perform set_config('request.jwt.claims', '', true);
+
   -- ── Bob entra. Conta comum de passageiro, nada de especial. ──────────────
   perform set_config('request.jwt.claims',
     json_build_object('sub', bob, 'role', 'authenticated')::text, true);
@@ -128,18 +147,36 @@ begin
     raise exception 'rls: um PASSAGEIRO aceitou corrida alheia (% linhas) — a policy de UPDATE de rides depende de is_driver() na policy de SELECT; alguém afrouxou uma das duas', v_n;
   end if;
 
-  -- 5. Coordenada de motorista sem corrida ativa. A 0069 tirou lat/lng/heading
-  --    do grant de coluna, então isto tem de morrer no privilégio.
-  v_erro := null;
+  -- 5. Coordenada de motorista ONLINE, sem corrida ativa com o Bob. O que se
+  --    exige aqui é o DESFECHO — Bob não obtém a coordenada —, não o mecanismo.
+  --
+  --    A distinção não é acadêmica, e foi esta asserção que a produziu. Ela
+  --    nasceu exigindo o erro 42501: entre a 0069 e a 0080, quem barrava era o
+  --    privilégio de coluna. Só que esse mesmo privilégio barrava também o
+  --    `on conflict do update set lat = excluded.lat` do upsert do PostgREST, e
+  --    nenhum motorista conseguia publicar posição (ver o cabeçalho da 0080).
+  --    Com o privilégio devolvido, quem barra é a POLICY: a 0069:711 removeu o
+  --    ramo amplo `is_online = true` e sobraram duas policies de SELECT, ambas
+  --    ancoradas em auth.uid(). Bob não casa nenhuma das duas.
+  --
+  --    Escrita em cima do erro, a asserção teria falhado num banco SEGURO e
+  --    empurrado o conserto de volta. Escrita em cima do desfecho, ela sobrevive
+  --    à troca de mecanismo e continua pegando o que importa. A FORMA (nenhuma
+  --    policy de leitura sem auth.uid()) é guardada à parte, na 99 §9b.
+  --
+  --    Nota sobre erro vs. zero linhas: se o privilégio for revogado de novo,
+  --    isto levanta `insufficient_privilege` em vez de devolver zero — e o
+  --    desfecho de segurança é o mesmo, então os dois passam. O que NÃO passa é
+  --    Bob receber a coordenada.
   begin
-    perform lat, lng from public.driver_locations where driver_id = dave;
-    v_erro := 'passou';
+    select count(*) into v_n from public.driver_locations
+     where driver_id = dave and lat is not null;
+    if v_n <> 0 then
+      raise exception 'rls: Bob leu lat/lng de motorista online sem corrida ativa (% linhas) — a policy ampla `is_online = true` voltou a driver_locations', v_n;
+    end if;
   exception
-    when insufficient_privilege then null;
+    when insufficient_privilege then null;  -- barrado pelo privilégio: mesmo desfecho
   end;
-  if v_erro is not null then
-    raise exception 'rls: Bob leu lat/lng de um motorista sem corrida ativa — o grant de coluna da 0069 caiu';
-  end if;
 
   -- ── Dave entra. É motorista de verdade; o pool aberto é para ele. ─────────
   reset role;
@@ -383,6 +420,7 @@ begin
   delete from public.ride_offers      where trip_request_id = pedido;
   delete from public.trip_requests    where id = pedido;
   delete from public.driver_period_daily_mileage where driver_id = dave;
+  delete from public.driver_locations where driver_id = dave;
   delete from public.rides    where passenger_id = alice;
   delete from public.profiles where id in (alice, bob, dave);
   delete from auth.users      where id in (alice, bob, dave);

@@ -217,11 +217,15 @@ async function main() {
 
   // 5) Verificação do estado final. Só roda se tudo acima aplicou: asseverar
   //    sobre um banco construído pela metade produz erro sem significado.
-  //    São duas, e elas provam coisas diferentes: a 98 ataca o banco com um
+  //    São três, e elas provam coisas diferentes: a 97 grava como o motorista
+  //    grava (o privilégio e a RLS de ESCRITA), a 98 ataca o banco com um
   //    usuário de verdade (o EFEITO das regras), a 99 confere a FORMA delas.
   const tudoOk = resultados.every((r) => r.ok);
   if (tudoOk) {
-    for (const verificacao of ['98_rls_comportamento.sql', '99_verificacao.sql']) {
+    // A 97 prova a ESCRITA (o motorista consegue publicar posição sob os grants
+    // reais?), a 98 prova o EFEITO das regras sob ataque, a 99 confere a FORMA
+    // delas. As três provam coisas diferentes e nenhuma cobre a outra.
+    for (const verificacao of ['97_escrita_driver_locations.sql', '98_rls_comportamento.sql', '99_verificacao.sql']) {
       resultados.push(await aplicar(cliente, verificacao, readFileSync(join(AQUI, verificacao), 'utf8')));
     }
   }

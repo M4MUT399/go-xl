@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { BackButton } from '../../components/common/BackButton';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { AvatarPicker } from '../../components/common/AvatarPicker';
@@ -174,9 +175,7 @@ export function EditProfileScreen({ navigation }: Props) {
         enableOnAndroid
         extraScrollHeight={20}
       >
-          <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-            <Text style={styles.backText}>← {t('common.back')}</Text>
-          </TouchableOpacity>
+          <BackButton onPress={() => navigation.goBack()} />
 
           <Text style={styles.title}>{t('edit.title')}</Text>
           <Text style={styles.subtitle}>{t('edit.subtitle')}</Text>
@@ -235,8 +234,6 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     scroll: { flexGrow: 1, padding: 24 },
-    back: { marginBottom: 20, alignSelf: 'flex-start' },
-    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
     title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 6 },
     subtitle: { fontSize: 14, color: colors.gray[500], marginBottom: 28 },
     avatarWrap: { alignItems: 'center', marginBottom: 24 },

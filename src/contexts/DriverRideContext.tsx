@@ -324,6 +324,23 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     (async () => {
       const turno = turnoRef.current;
       const seq = (statusWriteSeqRef.current += 1);
+      // ─── ESTE UPSERT EXIGE A MIGRATION 0080 NO SERVIDOR ─────────────────────
+      //
+      // O `.upsert()` do supabase-js vira, no PostgREST, um `insert ... on
+      // conflict (driver_id) do update set "lat" = excluded."lat", "lng" =
+      // excluded."lng", ...` — uma cláusula que não está escrita aqui e que
+      // nenhuma leitura deste arquivo revela. O Postgres exige SELECT sobre toda
+      // coluna LIDA numa expressão do `do update`, e ler `excluded."lat"` é ler
+      // `lat`. Entre a 0069 e a 0080 o papel `authenticated` não tinha esse
+      // SELECT (0069:164 e :182 revogaram lat/lng/heading), e ESTA linha — o
+      // único ponto do app que cria a linha do motorista e carimba `updated_at`
+      // — morria em `42501 permission denied` para todo mundo, sempre, com GPS
+      // perfeito. Sem `updated_at` fresco não há leque de despacho.
+      //
+      // Não é dedução: está medido contra um Postgres de verdade, com o schema e
+      // todas as migrations aplicadas, em
+      // `supabase/localdb/97_escrita_driver_locations.sql` — que revoga o grant
+      // dentro da transação para o 42501 voltar, e restaura em seguida.
       const { data, error } = await supabase.from('driver_locations').upsert({
         driver_id: profile.id,
         lat: location.lat,
@@ -498,6 +515,15 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
       // tupla PROPOSTA do insert ANTES de resolver o conflito — então um upsert
       // sem coordenada falha com 23502 mesmo quando a linha do motorista já
       // existe e o caminho real seria o `do update`.
+      //
+      // ATENÇÃO — o 23502 explica o ramo SEM coordenada, e só ele. O ramo COM
+      // coordenada, logo abaixo, tinha uma falha própria e maior: `42501
+      // permission denied`, porque o `do update set lat = excluded.lat` do
+      // PostgREST lê `lat` e a 0069 tinha tirado esse SELECT de `authenticated`.
+      // Quem devolve é a migration 0080; o porquê inteiro está no comentário do
+      // efeito de posição, mais acima neste arquivo. Sem a 0080 no servidor, os
+      // dois ramos falham — um por NOT NULL, o outro por privilégio — e nenhuma
+      // mudança neste arquivo conserta o segundo.
       //
       // Isso é o que acendia o banner sozinho: o heartbeat de abertura roda
       // assim que o AsyncStorage responde, e `useLocation` ainda não tem fix

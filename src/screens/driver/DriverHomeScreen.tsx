@@ -35,7 +35,6 @@ import {
 import { zoomForSpeed } from '../../lib/nav/follow';
 import { supabase } from '../../lib/supabase';
 import { statusBannerText } from '../../lib/driverOnlineStatus';
-import { MapKeyNotice } from '../../components/common/MapKeyNotice';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -425,11 +424,11 @@ export function DriverHomeScreen({ navigation }: Props) {
         )}
       </MapView>
 
-      {/* Mapa branco no Android tem várias causas; esta é a única que o app
-          consegue provar de dentro (chave do Maps ausente no build). Sem isto o
-          motorista fica olhando um retângulo branco sem nenhuma pista — ver
-          src/lib/mapsDiagnostics.ts. Não renderiza nada quando a chave está lá. */}
-      <MapKeyNotice />
+      {/* Se este mapa aparecer BRANCO no Android, o roteiro de investigação está
+          em docs/mapa-branco-android.md. Não há aviso na tela de propósito:
+          nenhuma das causas é observável de dentro do app, e o aviso que existia
+          aqui acusava "chave ausente" em 100% dos aparelhos Android, inclusive
+          nos que estavam com o mapa desenhando ruas. */}
 
       {location && (
         <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>

@@ -151,6 +151,27 @@ begin
     raise exception 'verificação: guarda que se auto-desliga com uid nulo em: %', v_bad;
   end if;
 
+  -- ── 9b. driver_locations: a policy é a ÚNICA trava da frota ─────────────
+  -- Desde a 0080 o papel `authenticated` voltou a ter SELECT em lat/lng/heading
+  -- — sem isso o `on conflict do update set lat = excluded.lat` do upsert do
+  -- PostgREST morria em 42501 e nenhum motorista publicava posição. O preço
+  -- declarado ali é este: o privilégio de coluna deixou de segurar a colheita
+  -- da frota, e quem segura passou a ser a policy. Uma policy de leitura em
+  -- driver_locations que não dependa de auth.uid() vale para toda conta logada
+  -- e, com o grant devolvido, entrega lat/lng de todo mundo. A 97 mede o efeito
+  -- (Bob colhe zero linhas); esta asserção guarda a FORMA, que é o que sobrevive
+  -- a alguém recriar o ramo amplo `is_online = true` numa migration futura.
+  select string_agg(p.policyname, ', ') into v_bad
+    from pg_policies p
+   where p.schemaname = 'public'
+     and p.tablename  = 'driver_locations'
+     and p.cmd in ('SELECT', 'ALL')
+     and coalesce(p.qual, '') not like '%auth.uid()%';
+
+  if v_bad is not null then
+    raise exception 'verificação: policy de leitura em driver_locations sem auth.uid(): %. Com o grant de coluna da 0080, ela entrega a posição de TODA a frota a qualquer conta logada.', v_bad;
+  end if;
+
   -- ── 10. Os agendamentos foram REGISTRADOS (não: disparam) ───────────────
   select count(*) into v_n from cron.job;
   if v_n = 0 then
