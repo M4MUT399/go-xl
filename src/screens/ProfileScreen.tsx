@@ -17,6 +17,7 @@ import { useUserStats } from '../hooks/useUserStats';
 import { supabase } from '../lib/supabase';
 import { useTranslation } from '../i18n';
 import { LanguageSelector } from '../components/common/LanguageSelector';
+import { versaoDoApp } from '../lib/appVersion';
 import type { RootStackParamList } from '../types';
 import type { UserStats } from '../hooks/useUserStats';
 import type { Profile } from '../types';
@@ -305,7 +306,22 @@ export function ProfileScreen() {
 
         <Button title={t('profile.signOut')} onPress={handleSignOut} variant="outline" style={styles.signOut} />
 
-        <Text style={styles.version}>Go XL • v1.0.0</Text>
+        {/*
+          A VERSÃO AQUI PRECISA SER A VERDADEIRA. Não é enfeite de rodapé.
+
+          Isto era o literal `Go XL • v1.0.0`, e dizia "v1.0.0" em TODA build
+          que já existiu. Em 03/09/2026 essa string custou um diagnóstico
+          inteiro: um Motorola em campo estava sem mapa, o dono leu "v1.0.0"
+          nesta tela, e a conclusão — build antiga com a chave do Maps
+          revogada — foi construída sobre um número que nunca mudou. Ele
+          desinstalou e reinstalou o app por nada.
+
+          `versaoDoApp()` lê `Constants.expoConfig.version`, que é gravado no
+          bundle a partir de app.config.js no momento da build. Devolve `null`
+          se o manifesto não trouxer nada legível — e aí a tela mostra "?",
+          porque "não sei" é uma resposta honesta e "v1.0.0" não era.
+        */}
+        <Text style={styles.version}>Go XL • v{versaoDoApp() ?? '?'}</Text>
       </ScrollView>
     </SafeAreaView>
   );
