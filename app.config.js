@@ -27,7 +27,7 @@ module.exports = {
   expo: {
     name: 'Go XL',
     slug: 'go-xl',
-    version: '1.0.11',
+    version: '1.0.12',
     scheme: 'goxl',
     orientation: 'portrait',
     icon: './assets/icon.png',
@@ -164,6 +164,59 @@ module.exports = {
     },
     web: {
       favicon: './assets/favicon.png',
+    },
+    // ── ATUALIZAÇÃO POR OTA (EAS Update) ──────────────────────────────────
+    //
+    // POR QUE ISTO EXISTE. Em 03/09/2026 o Cadastro Expresso por QR estava
+    // quebrado em todo iPhone: a App Store servia a 1.0.5, que consultava
+    // `profiles_public.driver_code`, coluna que a migration 0069 removeu. O
+    // conserto era UMA LINHA de JavaScript. Ele já estava pronto no HEAD havia
+    // uma semana e não tinha como chegar ao usuário: sem OTA, correção de JS
+    // depende de revisão da Apple. Cinco minutos de trabalho viraram dias de
+    // app quebrado.
+    //
+    // ⚠️ ISTO NÃO CONSERTA NADA DO QUE JÁ ESTÁ INSTALADO. Só binários que
+    // EMBARCAM o expo-updates recebem update — ou seja, da próxima build em
+    // diante. TODAS as builds anteriores estão condenadas a nunca receber OTA:
+    // 1.0.5, 1.0.6, 1.0.7, 1.0.8, 1.0.9, 1.0.10 e 1.0.11, sem exceção.
+    //
+    // ── ONDE MORA O RISCO ─────────────────────────────────────────────────
+    //
+    // O que decide se um update chega é o `runtimeVersion`, e a política
+    // `fingerprint` o calcula por hash do projeto. As regras de o que entra
+    // nesse hash estão em `fingerprint.config.js`, com as medições — leia esse
+    // arquivo ANTES de publicar o primeiro update. O modo de falha aqui não
+    // levanta erro: um runtimeVersion que build nenhuma tem simplesmente não
+    // alcança ninguém, calado.
+    //
+    // Publique sempre por `npm run update:producao` (que força
+    // `--environment production`, para a EAS injetar as mesmas variáveis da
+    // build) e confira com `npm run update:confere`.
+    updates: {
+      url: 'https://u.expo.dev/96c80736-799c-4980-af78-ca091e87d3d3',
+      enabled: true,
+      // NUNCA segurar a inicialização: o app sobe na hora com o bundle que já
+      // tem, baixa o novo em segundo plano e aplica na abertura seguinte.
+      //
+      // Os dois valores abaixo são os DEFAULTS da biblioteca — estão escritos
+      // por serem requisito, não por mudarem algo hoje. A abertura de marca
+      // (src/lib/splashTimeline.ts) tem piso de 3,45 s medido contra o tempo de
+      // carregar o bundle; um `fallbackToCacheTimeout` maior que zero entraria
+      // por baixo desse orçamento e o motorista veria a marca parada esperando
+      // rede — pior no estacionamento do MCO, sinal ruim, que é onde ele mais
+      // abre o app. Um teste tranca esse zero: ver
+      // plugins/__tests__/otaNaoBloqueiaAberturaDeMarca.test.ts.
+      checkAutomatically: 'ON_LOAD',
+      fallbackToCacheTimeout: 0,
+      // ⚠️ CONSEQUÊNCIA OPERACIONAL de ON_LOAD: a verificação só acontece no
+      // COLD START, e o update baixado só entra no cold start SEGUINTE. Nada
+      // no app chama a API de `expo-updates` hoje. Motorista que deixa o app
+      // residente o turno inteiro pode passar horas sem receber o conserto.
+      // Trocar isso exige decidir o que fazer com uma corrida EM ANDAMENTO —
+      // recarregar o bundle no meio de uma navegação seria pior que o atraso.
+    },
+    runtimeVersion: {
+      policy: 'fingerprint',
     },
     plugins: [
       [

@@ -100,11 +100,121 @@ describe('lado B — a chave NÃO chega ao artefato que vai dentro do APK', () =
   });
 
   it('portanto Constants.expoConfig NUNCA vê a chave: qualquer aviso decidido por esse campo é falso', () => {
-    // Este é o desfecho que interessa. O caminho de leitura no aparelho é
-    // ConstantsService.kt → asset `app.config` → este JSON. `expo-updates` não
-    // é dependência deste projeto, então não há outro caminho em produção.
     const comoOAvisoAntigoLia = (config as any).android?.config?.googleMaps?.apiKey;
     expect(comoOAvisoAntigoLia).toBeUndefined();
-    expect(require(path.join(RAIZ, 'package.json')).dependencies['expo-updates']).toBeUndefined();
+  });
+});
+
+/**
+ * ── O SEGUNDO CAMINHO, ABERTO EM 03/09/2026 ────────────────────────────────
+ *
+ * Até aqui este arquivo afirmava que `Constants.expoConfig` tem UMA origem no
+ * aparelho — o asset `app.config` gerado com `isPublicConfig: true` — e travava
+ * essa premissa com `expect(dependencies['expo-updates']).toBeUndefined()`.
+ *
+ * O `expo-updates` foi instalado (ver o bloco `updates` em app.config.js: sem
+ * OTA, um conserto de uma linha em JS dependia de revisão da Apple, e o QR
+ * ficou quebrado no iPhone por dias). Agora existe um segundo caminho: o
+ * manifesto do update, servido pela rede.
+ *
+ * A asserção antiga foi REMOVIDA em vez de ajustada, porque ela protegia a
+ * premissa errada. O risco que o OTA realmente cria não é o asset — é o BUNDLE
+ * JAVASCRIPT, que viaja a cada update: o Metro inlina qualquer variável
+ * `EXPO_PUBLIC_*` que apareça em código empacotado. É esse vetor que o teste
+ * abaixo tranca.
+ *
+ * ── O QUE FOI MEDIDO, E O QUE NÃO FOI ─────────────────────────────────────
+ *
+ * MEDIDO em 03/09/2026: `expo export --platform android` com a chave falsa no
+ * ambiente produziu 0 arquivos contendo `AIzaSy` — com controle positivo (um
+ * arquivo plantado com a chave foi encontrado pelo mesmo grep, provando que a
+ * varredura enxergava). O payload que sobe no OTA não carrega a chave.
+ *
+ * NÃO MEDIDO: o conteúdo de `extra.expoClient` no manifesto que a EAS monta ao
+ * publicar. Isso exigiria publicar um update de verdade.
+ *
+ * ⚠️ CORREÇÃO DE UMA AFIRMAÇÃO ANTERIOR DESTE ARQUIVO. Uma versão anterior deste
+ * comentário dizia que "expo-updates resolve runtimeVersion e fingerprint com
+ * `isPublicConfig: true`", citando resolveRuntimeVersionAsync.js:10. Aquelas
+ * linhas existem, mas servem só para LER a política de runtimeVersion; o
+ * fingerprint em si é calculado logo abaixo por `createFingerprintAsync`, e o
+ * @expo/fingerprint carrega a config num subprocesso com `getConfig(projectRoot,
+ * { skipSDKVersionRequirement: true })` — SEM `isPublicConfig`, isto é, a config
+ * PRIVADA. As chaves do Maps estão dentro do fingerprint; está medido em
+ * plugins/__tests__/fingerprintDoRuntime.test.ts.
+ *
+ * Portanto NÃO há indício aqui sobre o manifesto, e a conclusão prática é a
+ * mesma de antes, só que sem apoio falso: quem publicar o primeiro update deve
+ * conferir o manifesto servido por u.expo.dev antes de dar isto por fechado.
+ */
+describe('o OTA não pode virar um vetor novo para segredo nenhum', () => {
+  /**
+   * O Metro inlina TODA variável `EXPO_PUBLIC_*` que apareça em código
+   * empacotado, e o bundle viaja pela rede a cada update publicado. Antes do
+   * OTA, um segredo inlinado ficava dentro do binário da loja; agora ele passa
+   * a trafegar.
+   *
+   * Duas correções sobre a primeira versão deste teste, ambas apontadas na
+   * auditoria de 03/09/2026:
+   *
+   *   1. Ele varria só `src/`. Os pontos de entrada que o Metro empacota
+   *      PRIMEIRO — `index.ts` e `App.tsx` — moram na raiz, e uma referência
+   *      colocada ali passava verde.
+   *   2. Ele casava apenas as duas chaves do Maps, enquanto o texto do próprio
+   *      teste falava de "qualquer EXPO_PUBLIC_*". Uma variável nova e
+   *      sensível passava sem ser vista.
+   *
+   * Agora a regra é inversa e por lista de permissão: NENHUMA `EXPO_PUBLIC_*`
+   * pode aparecer em código empacotado, exceto as que são públicas por
+   * desenho e estão listadas aqui com o motivo.
+   */
+  const PERMITIDAS = new Set([
+    // URL do projeto Supabase. Pública por definição — está no eas.json e em
+    // toda requisição que sai do app.
+    'EXPO_PUBLIC_SUPABASE_URL',
+    // Chave `sb_publishable_…`. Pública por desenho: quem protege os dados é a
+    // RLS, não o sigilo dela (ver o cabeçalho de src/lib/supabase.ts).
+    'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+  ]);
+
+  /** Exatamente o que o Metro empacota: src/ mais os pontos de entrada da raiz. */
+  function arquivosEmpacotados(): string[] {
+    const achados: string[] = [];
+    const anda = (dir: string) => {
+      for (const nome of fs.readdirSync(dir)) {
+        if (nome === 'node_modules' || nome === '__tests__') continue;
+        const caminho = path.join(dir, nome);
+        if (fs.statSync(caminho).isDirectory()) anda(caminho);
+        else if (/\.(ts|tsx|js|jsx)$/.test(nome) && !/\.test\./.test(nome)) achados.push(caminho);
+      }
+    };
+    anda(path.join(RAIZ, 'src'));
+    for (const entrada of ['App.tsx', 'index.ts']) {
+      const caminho = path.join(RAIZ, entrada);
+      if (fs.existsSync(caminho)) achados.push(caminho);
+    }
+    return achados;
+  }
+
+  const arquivos = arquivosEmpacotados();
+
+  it('encontrou o código empacotado, incluindo os pontos de entrada da raiz', () => {
+    // Sem isto, um erro de caminho faria o teste passar por vacuidade.
+    expect(arquivos.length).toBeGreaterThan(50);
+    expect(arquivos.some((f) => f.endsWith('App.tsx'))).toBe(true);
+    expect(arquivos.some((f) => f.endsWith('index.ts'))).toBe(true);
+  });
+
+  it('nenhuma EXPO_PUBLIC_* fora da lista de permissão aparece no bundle', () => {
+    const ofensas: string[] = [];
+    for (const caminho of arquivos) {
+      const conteudo = fs.readFileSync(caminho, 'utf8');
+      for (const achado of conteudo.match(/EXPO_PUBLIC_[A-Z0-9_]+/g) ?? []) {
+        if (!PERMITIDAS.has(achado)) {
+          ofensas.push(`${caminho.replace(RAIZ, '')} → ${achado}`);
+        }
+      }
+    }
+    expect([...new Set(ofensas)]).toEqual([]);
   });
 });
