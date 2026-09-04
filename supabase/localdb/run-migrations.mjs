@@ -225,7 +225,7 @@ async function main() {
     // A 97 prova a ESCRITA (o motorista consegue publicar posição sob os grants
     // reais?), a 98 prova o EFEITO das regras sob ataque, a 99 confere a FORMA
     // delas. As três provam coisas diferentes e nenhuma cobre a outra.
-    for (const verificacao of ['96_trava_versao_minima.sql', '97_escrita_driver_locations.sql', '98_rls_comportamento.sql', '99_verificacao.sql']) {
+    for (const verificacao of ['95_passageiro_nao_comeca_viagem.sql', '96_trava_versao_minima.sql', '97_escrita_driver_locations.sql', '98_rls_comportamento.sql', '99_verificacao.sql']) {
       resultados.push(await aplicar(cliente, verificacao, readFileSync(join(AQUI, verificacao), 'utf8')));
     }
   }

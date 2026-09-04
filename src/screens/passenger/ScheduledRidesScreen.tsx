@@ -34,7 +34,10 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { rides, loading, loadFailed, refresh, activate, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
+  // `activate` NÃO é desestruturado de propósito: o passageiro não começa a
+  // viagem (ver a nota abaixo e a migration 0082). Deixá-lo no escopo sem uso
+  // seria convite para religarem o botão sem ler o motivo.
+  const { rides, loading, loadFailed, refresh, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
   // Id do agendamento com uma ação em voo. `activate` COBRA O CARTÃO e `cancel`
   // pode cobrar a multa da janela de 60 min — as duas passam bem dos 400 ms e
@@ -143,29 +146,33 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [profile?.id, refresh, t]);
 
-  async function handleActivate(ride: RideRecord) {
-    if (busyRideId) return;
-    setBusyRideId(ride.id);
-    const activated = await activate(ride.id);
-    setBusyRideId(null);
-    // Cartão recusado na cobrança da tarifa: a corrida NÃO começa (mesma regra
-    // do aceite imediato). Sem este ramo, 'payment_error' seria truthy e a tela
-    // navegaria para a corrida ativa com uma string no lugar do objeto.
-    if (activated === 'payment_error') {
-      Alert.alert(t('scheduled.oops'), t('scheduled.paymentError'));
-      return;
-    }
-    if (!activated) {
-      Alert.alert(t('scheduled.oops'), t('scheduled.activateError'));
-      return;
-    }
-    if ((activated as Ride).driver_id) {
-      // Motorista já confirmado → vai direto para corrida ativa
-      navigation.navigate('ActiveRide', { ride: activated as Ride });
-    } else {
-      navigation.navigate('FindingDriver', { ride: activated as Ride });
-    }
-  }
+  /*
+   * ── O PASSAGEIRO NÃO COMEÇA A VIAGEM ──────────────────────────────────
+   *
+   * Aqui existia `handleActivate`, ligado a um botão neste card. Ele chamava
+   * `activate(ride.id)`, que COBRAVA O CARTÃO e virava o status de
+   * 'scheduled' para 'accepted' — no primeiro toque, sem confirmação alguma,
+   * enquanto o botão de cancelar ao lado pedia confirmação em duas variantes.
+   *
+   * Em 04/09/2026 um passageiro encostou nele sem querer. A corrida agendada
+   * para a noite seguinte foi cobrada e sumiu da lista dele. Ele escreveu ao
+   * motorista: "I accidentally hit start trip lol and it looks like it
+   * canceled the trip for tonight. It looks like it already will probably
+   * bill it. I'm not sure what to do."
+   *
+   * Quem começa a corrida é o MOTORISTA — `confirmScheduledRide` /
+   * `confirmQrScheduledRide` e o banner `scheduledBanner.startRoute`, em
+   * DriverHomeScreen. Agendamento sem motorista continua no leque pelas
+   * políticas do servidor (0041, 0074). Nada ficou sem caminho: o que sumiu
+   * foi um atalho que só existia no lado errado do balcão.
+   *
+   * ⚠️ TIRAR O BOTÃO DAQUI NÃO BASTA, e é por isso que existe a migration
+   * 0082: todo app já instalado continua com ele. A proibição de verdade mora
+   * no servidor.
+   *
+   * `activate` continua exportado por useRide.ts (arquivo travado) — esta tela
+   * simplesmente parou de chamá-lo.
+   */
 
   /**
    * Antes: `onPress: () => cancel(ride.id)` — dispara e esquece. O `cancel` não
@@ -257,7 +264,6 @@ export function ScheduledRidesScreen({ navigation }: Props) {
               <ScheduledCard
                 ride={item}
                 driverInfo={driverInfo}
-                onActivate={handleActivate}
                 onCancel={handleCancel}
                 busy={busyRideId === item.id}
                 onChat={item.driver_id ? () => handleChat(item, driverInfo) : undefined}
@@ -273,11 +279,10 @@ export function ScheduledRidesScreen({ navigation }: Props) {
 }
 
 function ScheduledCard({
-  ride, driverInfo, onActivate, onCancel, onChat, busy, styles, colors,
+  ride, driverInfo, onCancel, onChat, busy, styles, colors,
 }: {
   ride: RideRecord;
   driverInfo?: DriverInfo;
-  onActivate: (r: RideRecord) => void;
   onCancel: (r: RideRecord) => void;
   onChat?: () => void;
   /** true enquanto ativar/cancelar deste card está em voo — ver `busyRideId`. */
@@ -389,32 +394,22 @@ function ScheduledCard({
       )}
 
       {/* ── Ações ── */}
+      {/*
+        Só CANCELAR. O botão de ativar/começar saiu — ver a nota no topo do
+        arquivo. Ele ficava aqui, à direita, colado neste; era o vizinho errado
+        para uma ação que cobra o cartão sem perguntar.
+      */}
       <View style={styles.cardActions}>
-        {/*
-          Os dois botões ficam desabilitados enquanto QUALQUER das duas ações
-          deste card está em voo, e o que foi tocado mostra o spinner. Antes
-          ambos seguiam ativos durante a chamada (que cobra o cartão, no caso do
-          "pedir agora") — um segundo toque duplicava a cobrança.
-        */}
         <TouchableOpacity
-          style={[styles.cancelBtn, !canCancel && styles.cancelBtnCharged, busy && styles.btnBusy]}
+          style={[styles.cancelBtn, styles.cancelBtnUnico, !canCancel && styles.cancelBtnCharged, busy && styles.btnBusy]}
           onPress={() => onCancel(ride)}
-          disabled={busy}
-        >
-          <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
-            {canCancel ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.activateBtn, busy && styles.btnBusy]}
-          onPress={() => onActivate(ride)}
           disabled={busy}
         >
           {busy ? (
             <ActivityIndicator size="small" color={colors.primary} />
           ) : (
-            <Text style={styles.activateBtnText}>
-              {hasDriver ? t('scheduled.startRide') : t('scheduled.requestNow')}
+            <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
+              {canCancel ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
             </Text>
           )}
         </TouchableOpacity>
@@ -427,6 +422,9 @@ function ScheduledCard({
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
+    // Cancelar era metade da linha porque dividia espaço com o botão de
+    // ativar. Sozinho, ocupa a linha inteira.
+    cancelBtnUnico: { flex: 1 },
     header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
     back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     backText: { fontSize: 24, color: colors.text },
@@ -536,8 +534,6 @@ function makeStyles(colors: AppTheme) {
     cancelBtnText: { color: colors.gray[600], fontSize: 14, fontWeight: '700' },
     cancelBtnCharged: { borderColor: 'rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)' },
     cancelBtnTextCharged: { color: '#ef4444', fontSize: 13 },
-    activateBtn: { flex: 2, height: 44, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-    activateBtnText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
     // Opacidade é o sinal de "está desabilitado" — sem ela o botão travado
     // ficava idêntico ao ativo e o toque simplesmente não fazia nada.
     btnBusy: { opacity: 0.5 },
