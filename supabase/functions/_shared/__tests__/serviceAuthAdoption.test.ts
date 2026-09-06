@@ -9,14 +9,19 @@
 // src/lib/__tests__/dispatchCronGate.test.ts (que lê a migration em vez de
 // transcrever o SQL à mão).
 //
-// PENDÊNCIA CONHECIDA E DECLARADA: `run-weekly-payouts` ainda decodifica o
-// claim. O arquivo está sob edição do dono neste momento e não pode ser tocado
-// por aqui, então ele entra na lista abaixo como exceção EXPLÍCITA em vez de
-// virar um teste vermelho permanente (que todo mundo aprende a ignorar). O
-// teste falha nos dois sentidos, de propósito:
+// A PENDÊNCIA FOI FECHADA EM 06/09/2026, e o mecanismo funcionou como escrito.
+// `run-weekly-payouts` era a última função a decodificar o claim; ao trocá-la
+// por `isServiceRoleCaller`, a lista encolheu e ESTE teste ficou vermelho
+// sozinho, pedindo para ser atualizado — que é metade do desenho:
 //   • alguém adiciona um `atob` de claim novo   → a lista cresce, falha;
-//   • alguém conserta o run-weekly-payouts      → a lista encolhe, falha
+//   • alguém conserta a última pendência        → a lista encolhe, falha
 //                                                 pedindo pra tirar daqui.
+//
+// A lista está VAZIA e é assim que ela deve permanecer. Não volte a preenchê-la
+// para "destravar" um teste: cada nome aqui é uma função em que qualquer pessoa
+// dispara a operação sem credencial nenhuma quando `verify_jwt = false` — no
+// caso do run-weekly-payouts, o REPASSE SEMANAL INTEIRO, que era o estado em
+// produção até esta data.
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -24,8 +29,8 @@ import { join } from 'path';
 const FUNCTIONS_DIR = join(__dirname, '..', '..');
 
 /** Funções que AINDA autorizam lendo o claim `role` do JWT sem verificar
- *  assinatura. Meta: lista vazia. */
-const PENDENCIAS_CONHECIDAS = ['run-weekly-payouts'];
+ *  assinatura. Meta atingida em 06/09/2026: lista vazia. */
+const PENDENCIAS_CONHECIDAS: string[] = [];
 
 function edgeFunctionDirs(): string[] {
   return readdirSync(FUNCTIONS_DIR, { withFileTypes: true })
