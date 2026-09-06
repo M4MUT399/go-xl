@@ -491,6 +491,7 @@ export const translations: Record<Lang, Dict> = {
     'requestRide.viewScheduled': 'View scheduled rides',
     'requestRide.errorTitle': 'Error',
     'requestRide.scheduleErrorMessage': 'We could not schedule your ride. Please try again.',
+    'requestRide.scheduleConflictMessage': 'You already have a ride scheduled for that time. Pick another time — you can have as many scheduled rides as you like, as long as they do not overlap.',
 
     'activeRide.driverFallback': 'Driver',
     'activeRide.shareTripTitle': 'Share trip',
@@ -1409,6 +1410,7 @@ export const translations: Record<Lang, Dict> = {
     'requestRide.viewScheduled': 'Ver viajes programados',
     'requestRide.errorTitle': 'Error',
     'requestRide.scheduleErrorMessage': 'No se pudo programar tu viaje. Inténtalo de nuevo.',
+    'requestRide.scheduleConflictMessage': 'Ya tienes un viaje programado para ese horario. Elige otro horario — puedes tener todos los viajes programados que quieras, siempre que no se superpongan.',
 
     'activeRide.driverFallback': 'Conductor',
     'activeRide.shareTripTitle': 'Compartir viaje',
@@ -2326,6 +2328,7 @@ export const translations: Record<Lang, Dict> = {
     'requestRide.viewScheduled': 'Ver corridas agendadas',
     'requestRide.errorTitle': 'Erro',
     'requestRide.scheduleErrorMessage': 'Não foi possível agendar sua corrida. Tente novamente.',
+    'requestRide.scheduleConflictMessage': 'Você já tem uma corrida agendada para esse horário. Escolha outro horário — pode ter quantos agendamentos quiser, desde que não se sobreponham.',
 
     'activeRide.driverFallback': 'Motorista',
     'activeRide.shareTripTitle': 'Compartilhar viagem',

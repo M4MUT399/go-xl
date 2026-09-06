@@ -325,6 +325,13 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     );
     setLoading(false);
     setShowPicker(false);
+    // Sobreposição com um agendamento que ele já tem. NÃO é "não foi possível
+    // agendar": vários agendamentos são permitidos, e dizer o motivo é a
+    // diferença entre o passageiro trocar o horário e concluir que o app quebrou.
+    if (ride === 'conflict') {
+      Alert.alert(t('requestRide.attentionTitle'), t('requestRide.scheduleConflictMessage'));
+      return;
+    }
     if (ride) {
       Alert.alert(
         t('requestRide.scheduleSuccessTitle'),

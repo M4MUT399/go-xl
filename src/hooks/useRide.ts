@@ -15,6 +15,7 @@ import { offerAlertManager } from '../lib/offerAlertManager';
 import { arriveOffer, resolveOffer, queueHasOffer } from '../lib/offerQueue';
 import { decideOfferAction, livePendingOffers, type OfferRow } from '../lib/dispatchClientBridge';
 import { getConfig } from '../lib/systemConfig';
+import { passengerScheduleConflict } from '../lib/scheduleConflict';
 import { useFeatureFlag } from './useFeatureFlag';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
@@ -677,7 +678,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
     scheduledFor: Date,
     routeInfo?: { distanceKm: number; durationMin: number },
     options?: { lockedDriverId?: string }
-  ): Promise<Ride | null> => {
+  ): Promise<Ride | null | 'conflict'> => {
     if (!passengerId) return null;
 
     const distanceKm = routeInfo?.distanceKm ?? haversineDistance(
@@ -722,6 +723,36 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       // QR: pré-vincula o motorista; ele ainda precisa aceitar/recusar o agendamento
       ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
     };
+
+    // ── Vários agendamentos, sim; dois no mesmo horário, não ─────────────────
+    //
+    // Regra de produto: o passageiro pode ter quantas corridas marcadas quiser,
+    // desde que não se sobreponham no tempo. A regra do MOTORISTA
+    // (`checkScheduleConflict`) não serve aqui — ela soma deslocamento entre
+    // corridas e 20 min de folga porque é o mesmo carro atendendo as duas, e
+    // recusaria coisa legítima do passageiro. Ver `passengerScheduleConflict`.
+    //
+    // FALHA DE LEITURA NÃO BARRA O AGENDAMENTO. Se esta consulta cair (rede,
+    // RLS), seguimos e criamos a corrida. Os dois erros possíveis não têm o
+    // mesmo tamanho: uma sobreposição que escapa é reversível — o passageiro
+    // cancela um dos dois, de graça até 60 min antes (ScheduledRidesScreen) —,
+    // enquanto recusar por falha de rede transforma instabilidade em "o app não
+    // me deixa mais agendar", que é exatamente o defeito relatado.
+    const { data: jaMarcadas, error: conflitoErr } = await supabase
+      .from('rides')
+      .select('id, scheduled_for, duration_min')
+      .eq('passenger_id', passengerId)
+      .eq('status', 'scheduled');
+
+    if (conflitoErr) {
+      reportError(conflitoErr, { op: 'scheduleRide.conflictCheck', passengerId });
+    } else {
+      const conflito = passengerScheduleConflict(
+        { scheduled_for: scheduledFor.toISOString(), duration_min: duration },
+        (jaMarcadas ?? []) as { id: string; scheduled_for: string | null; duration_min: number | null }[],
+      );
+      if (conflito.conflict) return 'conflict';
+    }
 
     const { error: insertError } = await supabase
       .from('rides')
