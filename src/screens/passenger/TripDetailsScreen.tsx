@@ -13,7 +13,7 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 import { useAuth } from '../../hooks/useAuth';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { generateAndShareWaybill } from '../../lib/waybillExport';
-import { tipRide, cancelScheduledRide } from '../../hooks/useRide';
+import { tipRide, cancelScheduledRideWithPolicy } from '../../hooks/useRide';
 import {
   TIP_PRESETS, isTipAmountValid, parseTipInput, tipEligibility, toTipCents,
 } from '../../lib/tip';
@@ -120,10 +120,21 @@ export function TripDetailsScreen({ navigation, route }: Props) {
   async function confirmarCancelamento() {
     if (cancelando) return;
     setCancelando(true);
-    const ok = await cancelScheduledRide(ride.id);
+    const r = await cancelScheduledRideWithPolicy(ride);
     setCancelando(false);
-    if (ok) {
+    if (r.ok) {
       setCancelado(true);
+      // A corrida foi cancelada nos três casos abaixo. O que muda é o que o
+      // passageiro precisa saber sobre o dinheiro — e o silêncio, aqui, seria a
+      // pior das opções: ele descobriria a multa pela fatura.
+      if (r.charged) {
+        Alert.alert(
+          t('scheduled.cancelChargedTitle'),
+          `${t('scheduled.policyChargedBody2')} ${formatCurrency(r.amountDollars)} ${t('scheduled.policyChargedBody3')}`,
+        );
+      } else if ('chargeError' in r) {
+        Alert.alert(t('scheduled.oops'), r.chargeError);
+      }
       return;
     }
     // PENDÊNCIA DE PRODUTO: falta uma chave `scheduled.cancelError`. Reusamos

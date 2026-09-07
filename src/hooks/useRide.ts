@@ -16,6 +16,7 @@ import { arriveOffer, resolveOffer, queueHasOffer } from '../lib/offerQueue';
 import { decideOfferAction, livePendingOffers, type OfferRow } from '../lib/dispatchClientBridge';
 import { getConfig } from '../lib/systemConfig';
 import { passengerScheduleConflict } from '../lib/scheduleConflict';
+import { cancellationPolicy } from '../lib/cancellation';
 import { useFeatureFlag } from './useFeatureFlag';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
@@ -135,10 +136,14 @@ export async function tipRide(rideId: string, amountCents: number): Promise<{ ok
  * (`src/lib/cancellation.ts`) e não executada em lugar nenhum — está escrito lá
  * por quê.
  */
-export async function cancelScheduledRide(rideId: string): Promise<boolean> {
+export async function cancelScheduledRide(rideId: string, reason?: string): Promise<boolean> {
   const { data: updated, error } = await supabase
     .from('rides')
-    .update({ status: 'cancelled' as RideStatus, cancelled_at: new Date().toISOString() })
+    .update({
+      status: 'cancelled' as RideStatus,
+      cancelled_at: new Date().toISOString(),
+      ...(reason ? { cancellation_reason: reason } : {}),
+    })
     .eq('id', rideId)
     .not('status', 'in', '(completed,cancelled)')
     .select('id')
@@ -155,6 +160,86 @@ export async function cancelScheduledRide(rideId: string): Promise<boolean> {
   // `updated == null` sem erro = já estava finalizada/cancelada; do ponto de
   // vista do passageiro o agendamento não está mais ativo, então é sucesso.
   return true;
+}
+
+/** Motivo gravado na linha quando o passageiro cancela dentro da última hora. */
+export const LATE_CANCEL_REASON = 'passenger_late_cancel';
+
+/** O que aconteceu num cancelamento — a tela precisa dizer a verdade ao passageiro. */
+export type CancelScheduleOutcome =
+  /** Cancelado dentro da janela grátis. Nada foi cobrado. */
+  | { ok: true; charged: false }
+  /** Cancelado na última hora e a tarifa FOI cobrada. */
+  | { ok: true; charged: true; amountDollars: number }
+  /** Cancelado na última hora e a cobrança FALHOU — a corrida foi cancelada assim mesmo. */
+  | { ok: true; charged: false; chargeError: string }
+  /** O servidor recusou o cancelamento. A corrida continua de pé. */
+  | { ok: false };
+
+/**
+ * Cancela um agendamento APLICANDO A POLÍTICA: grátis com mais de 1h de
+ * antecedência, tarifa integral dentro da última hora (`src/lib/cancellation.ts`).
+ *
+ * ── A ORDEM É CANCELAR PRIMEIRO, COBRAR DEPOIS. E ISSO É DELIBERADO ─────────
+ *
+ * O instinto é o contrário — cobrar antes, como `activate` faz. Lá está certo:
+ * se o cartão recusa, a corrida NÃO começa, e o pior desfecho é ninguém sair do
+ * lugar. Aqui os desfechos não são simétricos:
+ *
+ *   • cobrar primeiro e o cancelamento falhar → passageiro COBRADO com a
+ *     corrida ainda de pé e o motorista a caminho. Dinheiro tirado por um
+ *     serviço que segue agendado;
+ *   • cancelar primeiro e a cobrança falhar → a plataforma perde a multa. O
+ *     motorista fica sabendo cedo, que é o que mais importa para ele.
+ *
+ * O segundo é o erro reversível, e é o mesmo raciocínio já escrito em
+ * `cancelRide` sobre o estorno: trocar dinheiro retido por passageiro trancado
+ * não é conserto, é mudar de vítima.
+ *
+ * ── FALHA DE COBRANÇA NÃO TRANCA O CANCELAMENTO ────────────────────────────
+ *
+ * Se a cobrança falhar, a corrida JÁ FOI cancelada e assim fica. Bloquear o
+ * cancelamento porque o cartão recusou produziria o pior desfecho possível para
+ * o motorista: o passageiro não consegue cancelar, não avisa ninguém, e
+ * simplesmente não aparece — viagem perdida E sem multa. A falha volta no
+ * retorno para a tela poder dizê-la.
+ *
+ * ⚠️ COBRA MESMO SEM MOTORISTA DESIGNADO. A regra do produto é por RELÓGIO, não
+ * por motorista: dentro da última hora, cobra. Vale registrar que o texto que a
+ * tela mostra (`scheduled.policyChargedBody1`) diz "um motorista já confirmou
+ * esta corrida" — quando não há motorista, a multa é receita da plataforma sem
+ * ninguém para compensar, e o rótulo mente. É candidato natural a disputa de
+ * cartão. Se o produto quiser restringir a multa aos agendamentos JÁ
+ * CONFIRMADOS, o lugar de mudar é aqui e em `cancellation.ts`, não na cópia.
+ */
+export async function cancelScheduledRideWithPolicy(
+  ride: { id: string; scheduled_for?: string | null; price?: number | null },
+  nowMs: number = Date.now(),
+): Promise<CancelScheduleOutcome> {
+  const politica = cancellationPolicy(ride, nowMs);
+
+  const cancelou = await cancelScheduledRide(
+    ride.id,
+    politica.free ? undefined : LATE_CANCEL_REASON,
+  );
+  if (!cancelou) return { ok: false };
+
+  if (politica.free) return { ok: true, charged: false };
+
+  // Multa. `charge-ride` cobra `rides.price` — a tarifa integral, que é
+  // exatamente o que a política anuncia — e é idempotente pelos dois lados
+  // (flag `paid` no banco + idempotencyKey no Stripe), então um duplo-toque não
+  // cobra duas vezes.
+  const charge = await chargeRide(ride.id);
+  if (!charge.ok) {
+    reportError(charge.error, { op: 'lateCancel.charge', rideId: ride.id });
+    return { ok: true, charged: false, chargeError: charge.error ?? 'falha na cobrança' };
+  }
+  // A corrida fica `cancelled` com `paid = true`: é a multa retida de propósito,
+  // e é `cancellation_reason` que distingue isso de uma corrida cobrada e
+  // abandonada. O repasse semanal leva o `driver_amount` ao motorista quando há
+  // um designado — que é a compensação que a política promete.
+  return { ok: true, charged: true, amountDollars: politica.chargeDollars };
 }
 
 /** Extorna o pagamento de uma corrida via Edge Function. */

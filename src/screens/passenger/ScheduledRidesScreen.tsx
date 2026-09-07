@@ -10,7 +10,7 @@ import { RootStackParamList, RideRecord, Ride } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
-import { useScheduledRides } from '../../hooks/useRide';
+import { useScheduledRides, cancelScheduledRideWithPolicy } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
@@ -36,7 +36,11 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   // `activate` NÃO é desestruturado de propósito: o passageiro não começa a
   // viagem (ver a nota abaixo e a migration 0082). Deixá-lo no escopo sem uso
   // seria convite para religarem o botão sem ler o motivo.
-  const { rides, loading, loadFailed, refresh, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
+  // `cancel` NÃO é desestruturado: ele é o cancelamento CRU, sem política. Quem
+  // cancela aqui é `cancelScheduledRideWithPolicy`, a mesma chamada da tela de
+  // detalhes — duas portas do passageiro para o mesmo agendamento não podem
+  // cobrar diferente.
+  const { rides, loading, loadFailed, refresh } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
   // Id do agendamento com uma ação em voo. `activate` COBRA O CARTÃO e `cancel`
   // pode cobrar a multa da janela de 60 min — as duas passam bem dos 400 ms e
@@ -184,8 +188,24 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   async function runCancel(ride: RideRecord) {
     if (busyRideId) return;
     setBusyRideId(ride.id);
-    const ok = await cancel(ride.id);
+    // Aplica a POLÍTICA (grátis até 1h antes; tarifa integral depois) em vez do
+    // cancelamento cru — a mesma chamada que a tela de detalhes usa, para as
+    // duas portas do passageiro cobrarem igual.
+    const r = await cancelScheduledRideWithPolicy(ride);
+    await refresh();
     setBusyRideId(null);
+    if (r.ok && r.charged) {
+      Alert.alert(
+        t('scheduled.cancelChargedTitle'),
+        `${t('scheduled.policyChargedBody2')} ${formatCurrency(r.amountDollars)} ${t('scheduled.policyChargedBody3')}`,
+      );
+      return;
+    }
+    if (r.ok && 'chargeError' in r) {
+      Alert.alert(t('scheduled.oops'), r.chargeError);
+      return;
+    }
+    const ok = r.ok;
     if (!ok) {
       // PENDÊNCIA DE PRODUTO: falta uma chave `scheduled.cancelError` = "Não foi
       // possível cancelar seu agendamento. Ele continua ativo — verifique sua
