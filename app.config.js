@@ -27,7 +27,7 @@ module.exports = {
   expo: {
     name: 'Go XL',
     slug: 'go-xl',
-    version: '1.0.12',
+    version: '1.0.13',
     scheme: 'goxl',
     orientation: 'portrait',
     icon: './assets/icon.png',
