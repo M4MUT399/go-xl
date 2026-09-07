@@ -14,13 +14,12 @@ import { useScheduledRides } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
+// A regra de cancelamento saiu daqui para src/lib/cancellation.ts: ela vale
+// igual nesta tela e na de detalhes da viagem, e enquanto morou inline aqui a
+// outra tela ficou sem cancelamento nenhum.
+import { cancellationPolicy } from '../../lib/cancellation';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'ScheduledRides'> };
-
-function isCancellationFree(scheduledFor?: string): boolean {
-  if (!scheduledFor) return true;
-  return new Date(scheduledFor).getTime() - Date.now() > 60 * 60 * 1000;
-}
 
 interface DriverInfo {
   name: string;
@@ -198,7 +197,7 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   }
 
   function handleCancel(ride: RideRecord) {
-    if (!isCancellationFree(ride.scheduled_for)) {
+    if (!cancellationPolicy(ride, Date.now()).free) {
       Alert.alert(
         t('scheduled.cancelChargedTitle'),
         t('scheduled.cancelChargedMessage'),
@@ -302,7 +301,9 @@ function ScheduledCard({
   const when = ride.scheduled_for ? new Date(ride.scheduled_for) : null;
   const hasDriver = !!ride.driver_id;
   const minsLeft = when ? Math.floor((when.getTime() - now) / 60_000) : null;
-  const canCancel = minsLeft === null || minsLeft > 60;
+  // Mesma regra do handleCancel e da tela de detalhes — `now` do relógio interno
+  // do card para o aviso virar sozinho ao cruzar a janela, sem sair e voltar.
+  const canCancel = cancellationPolicy(ride, now).free;
 
   return (
     <View style={[styles.card, hasDriver && styles.cardConfirmed, !canCancel && styles.cardWarning]}>

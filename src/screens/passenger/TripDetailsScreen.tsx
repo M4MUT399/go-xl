@@ -13,10 +13,11 @@ import { formatCurrency, formatDistance } from '../../lib/format';
 import { useAuth } from '../../hooks/useAuth';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import { generateAndShareWaybill } from '../../lib/waybillExport';
-import { tipRide } from '../../hooks/useRide';
+import { tipRide, cancelScheduledRide } from '../../hooks/useRide';
 import {
   TIP_PRESETS, isTipAmountValid, parseTipInput, tipEligibility, toTipCents,
 } from '../../lib/tip';
+import { canCancelSchedule, cancellationPolicy } from '../../lib/cancellation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripDetails'>;
 
@@ -101,6 +102,55 @@ export function TripDetailsScreen({ navigation, route }: Props) {
     { ...ride, tip_amount: tipPago ?? ride.tip_amount },
     Date.now(),
   );
+
+  // ── CANCELAR O AGENDAMENTO ────────────────────────────────────────────────
+  //
+  // Esta tela é o outro caminho do passageiro até o MESMO agendamento (aba de
+  // histórico → filtro "Agendadas" → toque no card). Até aqui ela só oferecia
+  // "Falar com o suporte": quem chegasse por este caminho não tinha como
+  // cancelar, e concluía que não dava. A regra é a mesma da lista de
+  // agendamentos, e agora mora num lugar só (src/lib/cancellation.ts).
+  const [cancelado, setCancelado] = useState(false);
+  const [cancelando, setCancelando] = useState(false);
+  // `cancelado` entra aqui para a tela mudar NA HORA: `ride` vem por parâmetro
+  // de navegação e não é reconsultado.
+  const podeCancelar = canCancelSchedule(ride) && !cancelado;
+  const politica = cancellationPolicy(ride, Date.now());
+
+  async function confirmarCancelamento() {
+    if (cancelando) return;
+    setCancelando(true);
+    const ok = await cancelScheduledRide(ride.id);
+    setCancelando(false);
+    if (ok) {
+      setCancelado(true);
+      return;
+    }
+    // PENDÊNCIA DE PRODUTO: falta uma chave `scheduled.cancelError`. Reusamos
+    // `scheduled.activateError`, o texto genérico de falha do fluxo de
+    // agendamento, para não inventar chave nova numa tela de detalhes.
+    Alert.alert(t('scheduled.oops'), t('scheduled.activateError'));
+  }
+
+  function handleCancelar() {
+    // Dentro da última hora a tarifa é cobrada integralmente — o aviso tem que
+    // vir ANTES, com o valor, e a confirmação tem que ser destrutiva.
+    if (!politica.free) {
+      Alert.alert(
+        t('scheduled.cancelChargedTitle'),
+        t('scheduled.cancelChargedMessage'),
+        [
+          { text: t('scheduled.noKeep'), style: 'cancel' },
+          { text: t('scheduled.cancelAnyway'), style: 'destructive', onPress: () => { confirmarCancelamento(); } },
+        ],
+      );
+      return;
+    }
+    Alert.alert(t('scheduled.cancelScheduleTitle'), t('scheduled.cancelScheduleMessage'), [
+      { text: t('scheduled.no'), style: 'cancel' },
+      { text: t('scheduled.yesCancel'), style: 'destructive', onPress: () => { confirmarCancelamento(); } },
+    ]);
+  }
 
   async function handleTip() {
     if (tipEnviando || !isTipAmountValid(tipValor)) return;
@@ -328,6 +378,45 @@ export function TripDetailsScreen({ navigation, route }: Props) {
           <Text style={styles.idValue}>#{ride.id.slice(0, 8).toUpperCase()}</Text>
         </View>
 
+        {/* ── Cancelar agendamento ──
+            Só para corrida ainda agendada. A política aparece SEMPRE junto do
+            botão, com o valor quando houver cobrança: descobrir o custo depois
+            de tocar é o que faz alguém desistir de cancelar e simplesmente não
+            aparecer, que é o pior desfecho para o motorista. */}
+        {podeCancelar && (
+          <View style={styles.cancelBox}>
+            {politica.free ? (
+              <Text style={styles.cancelPolicyFree}>{t('scheduled.policyFree')}</Text>
+            ) : (
+              <Text style={styles.cancelPolicyCharged}>
+                {t('scheduled.policyChargedBody2')}{' '}
+                <Text style={styles.cancelPolicyValue}>{formatCurrency(politica.chargeDollars)}</Text>
+                {' '}{t('scheduled.policyChargedBody3')}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={[styles.cancelBtn, !politica.free && styles.cancelBtnCharged, cancelando && styles.cancelBtnBusy]}
+              onPress={handleCancelar}
+              disabled={cancelando}
+              accessibilityRole="button"
+            >
+              {cancelando
+                ? <ActivityIndicator size="small" color={colors.error} />
+                : (
+                  <Text style={[styles.cancelBtnText, !politica.free && styles.cancelBtnTextCharged]}>
+                    {politica.free ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
+                  </Text>
+                )}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {cancelado && (
+          <View style={styles.cancelBox}>
+            <Text style={styles.cancelDone}>{t('history.statusCancelled')}</Text>
+          </View>
+        )}
+
         <TouchableOpacity style={styles.supportBtn} onPress={() => navigation.navigate('Support')}>
           <Text style={styles.supportBtnText}>{t('tripDetails.contactSupport')}</Text>
         </TouchableOpacity>
@@ -339,6 +428,20 @@ export function TripDetailsScreen({ navigation, route }: Props) {
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
+
+    cancelBox: { marginTop: 4, marginBottom: 12 },
+    cancelPolicyFree: { fontSize: 13, color: colors.gray[500], marginBottom: 10, lineHeight: 18 },
+    cancelPolicyCharged: { fontSize: 13, color: colors.error, marginBottom: 10, lineHeight: 18 },
+    cancelPolicyValue: { fontWeight: '800' },
+    cancelBtn: {
+      borderRadius: 14, paddingVertical: 15, alignItems: 'center',
+      borderWidth: 1, borderColor: colors.error, backgroundColor: 'transparent',
+    },
+    cancelBtnCharged: { backgroundColor: 'rgba(239,68,68,0.08)' },
+    cancelBtnBusy: { opacity: 0.6 },
+    cancelBtnText: { color: colors.error, fontSize: 15, fontWeight: '700' },
+    cancelBtnTextCharged: { fontWeight: '800' },
+    cancelDone: { fontSize: 14, fontWeight: '700', color: colors.error, textAlign: 'center' },
     header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 },
     back: { alignSelf: 'flex-start', marginBottom: 10 },
     backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },

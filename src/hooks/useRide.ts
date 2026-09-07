@@ -120,6 +120,43 @@ export async function tipRide(rideId: string, amountCents: number): Promise<{ ok
   }
 }
 
+/**
+ * Cancela uma corrida AGENDADA. Autônoma (fora de hook) porque DUAS telas
+ * precisam dela: a lista de agendamentos e a de detalhes da viagem, aberta pelo
+ * histórico. Enquanto ela morava só dentro de `useScheduledRides`, a segunda
+ * tela simplesmente não oferecia cancelamento — o defeito relatado com print.
+ *
+ * Cancelamento ATÔMICO: o `.not('status','in',...)` garante que só cancelamos o
+ * que ainda está em pé, e o `.select().maybeSingle()` diz se o UPDATE bateu de
+ * fato. Sem isso, um UPDATE que não afeta linha nenhuma volta como sucesso e
+ * emitiríamos revogação de uma corrida que já tinha acabado.
+ *
+ * NÃO cobra nada. A tarifa do cancelamento tardio é anunciada pela tela
+ * (`src/lib/cancellation.ts`) e não executada em lugar nenhum — está escrito lá
+ * por quê.
+ */
+export async function cancelScheduledRide(rideId: string): Promise<boolean> {
+  const { data: updated, error } = await supabase
+    .from('rides')
+    .update({ status: 'cancelled' as RideStatus, cancelled_at: new Date().toISOString() })
+    .eq('id', rideId)
+    .not('status', 'in', '(completed,cancelled)')
+    .select('id')
+    .maybeSingle();
+
+  // Erro explícito: o agendamento NÃO foi cancelado. Devolvemos a falha para a
+  // tela poder dizê-la ao passageiro, em vez de sumir com o card e mentir.
+  if (error) {
+    reportError(error, { op: 'scheduled.cancel', rideId });
+    return false;
+  }
+  // Para o alarme de TODOS os motoristas que tenham esse agendamento como oferta.
+  if (updated) broadcastRideRevoked(rideId, 'cancelled');
+  // `updated == null` sem erro = já estava finalizada/cancelada; do ponto de
+  // vista do passageiro o agendamento não está mais ativo, então é sucesso.
+  return true;
+}
+
 /** Extorna o pagamento de uma corrida via Edge Function. */
 async function refundRide(rideId: string): Promise<{ ok: boolean; error?: string }> {
   try {
@@ -1054,29 +1091,11 @@ export function useScheduledRides(passengerId: string | undefined, jurisdiction:
    * saber se ia ser cobrado uma vez, duas ou nenhuma.
    */
   const cancel = useCallback(async (rideId: string): Promise<boolean> => {
-    // Cancelamento atômico: só cancela se a corrida ainda não terminou/cancelou.
-    // `.select().maybeSingle()` retorna a linha só quando o UPDATE realmente bateu,
-    // então detectamos "cancelei agora" vs. "já estava finalizada" — sem isso um
-    // UPDATE que não afeta nada volta como sucesso e emitiríamos revogação à toa.
-    const { data: updated, error } = await supabase
-      .from('rides')
-      .update({ status: 'cancelled' as RideStatus })
-      .eq('id', rideId)
-      .not('status', 'in', '(completed,cancelled)')
-      .select('id')
-      .maybeSingle();
-    // Erro explícito: o agendamento NÃO foi cancelado. Não damos refresh (nada
-    // mudou) e devolvemos a falha para a tela poder dizê-la ao passageiro.
-    if (error) {
-      reportError(error, { op: 'scheduled.cancel', rideId });
-      return false;
-    }
-    await refresh();
-    // Para o alarme de TODOS os motoristas que tenham esse agendamento como oferta.
-    if (updated) broadcastRideRevoked(rideId, 'cancelled');
-    // `updated == null` sem erro = já estava finalizada/cancelada; do ponto de
-    // vista do passageiro o agendamento não está mais ativo, então é sucesso.
-    return true;
+    const ok = await cancelScheduledRide(rideId);
+    // Só relemos a lista quando o servidor confirmou: num erro nada mudou, e um
+    // refresh à toa só pisca a tela.
+    if (ok) await refresh();
+    return ok;
   }, [refresh]);
 
   return { rides, loading, loadFailed, refresh, activate, cancel, claimScheduledRide };
