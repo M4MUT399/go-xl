@@ -81,7 +81,15 @@ beforeEach(() => {
   });
 });
 
-const corrida = (minutos: number) => ({ id: 'corrida-1', scheduled_for: daquiA(minutos), price: 41.49 });
+// `accepted_at` preenchido = motorista COMPROMETIDO. Sem ele não há multa
+// nenhuma, por mais em cima da hora que seja (src/lib/cancellation.ts) — então
+// toda corrida destes testes de cobrança precisa tê-lo.
+const corrida = (minutos: number) => ({
+  id: 'corrida-1',
+  scheduled_for: daquiA(minutos),
+  price: 41.49,
+  accepted_at: '2026-09-06T10:00:00Z',
+});
 
 describe('janela grátis', () => {
   it('cancela e NÃO tenta cobrar nada', async () => {
@@ -137,5 +145,17 @@ describe('quando o servidor recusa o cancelamento', () => {
     mockUpdateAfetaLinha = false;
     const r = await cancelScheduledRideWithPolicy(corrida(30), AGORA);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe('sem motorista comprometido não há cobrança', () => {
+  // A porta de entrada da multa é a política, e ela exige `accepted_at`. Aqui se
+  // prova que a SEQUÊNCIA respeita isso: em cima da hora, sem aceite, nenhuma
+  // ida ao charge-ride.
+  it('30 min antes, ninguém aceitou → cancela e não cobra', async () => {
+    const semAceite = { id: 'corrida-1', scheduled_for: daquiA(30), price: 41.49, accepted_at: null };
+    const r = await cancelScheduledRideWithPolicy(semAceite, AGORA);
+    expect(r).toEqual({ ok: true, charged: false });
+    expect(mockChamadas).toEqual(['update:cancelled']);
   });
 });
