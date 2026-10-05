@@ -688,6 +688,11 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       driver_heading: location.heading ?? null,
       driver_eta_min: etaMin,
       driver_eta_km: etaKm,
+      // QUANDO isto foi publicado. Sem este carimbo a tela do passageiro não
+      // consegue separar "parado no semáforo" de "parou de publicar há seis
+      // minutos" — e apresenta o ETA velho com a mesma confiança do fresco.
+      // Foi o que quase custou um voo em 26/09 (ver migração 0086).
+      driver_telemetry_at: new Date().toISOString(),
     }).eq('id', ride.id).then(({ error }) => {
       console.log(error ? '[GOXL tel] write ERROR: ' + error.message : '[GOXL tel] write OK');
     });

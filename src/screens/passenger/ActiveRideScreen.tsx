@@ -19,6 +19,7 @@ import { useTripShare } from '../../hooks/useTripShare';
 import { useDriverBoardingConfirmation } from '../../hooks/useDriverBoardingConfirmation';
 import { useCameraController } from '../../hooks/useCameraController';
 import { KM_TO_MILES, formatCurrency } from '../../lib/format';
+import { telemetryFreshness, staleMinutes } from '../../lib/telemetryFreshness';
 import { CarMarker } from '../../components/common/CarMarker';
 import { SmoothMarker } from '../../components/common/SmoothMarker';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
@@ -169,6 +170,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   const [cancelling, setCancelling] = useState(false);
   /** true quando o último polling de telemetria falhou — ver `fetchTelemetry`. */
   const [telemetryStale, setTelemetryStale] = useState(false);
+  // Há quanto tempo estamos olhando para a MESMA coordenada. É o reserva de
+  // `driver_telemetry_at` enquanto houver motorista com build anterior à 0086:
+  // sem carimbo não dá para medir idade, então medimos imobilidade.
+  const posicaoParadaDesde = useRef<{ lat: number; lng: number; desdeMs: number } | null>(null);
+  const [staleMin, setStaleMin] = useState(0);
 
   function handleCancel() {
     if (cancelling) return;
@@ -255,7 +261,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     async function fetchTelemetry() {
       const { data, error } = await supabase
         .from('rides')
-        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,status,driver_id,route_polyline,route_version,route_eta_min,route_distance_km')
+        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,driver_telemetry_at,status,driver_id,route_polyline,route_version,route_eta_min,route_distance_km')
         .eq('id', ride.id)
         .maybeSingle();
       // O erro era descartado: com o polling falhando, o carro parava no mapa e o
@@ -264,8 +270,27 @@ export function ActiveRideScreen({ navigation, route }: Props) {
       // passageiro esperava na calçada por um horário que já tinha passado.
       // Não temos como esconder o número (é o único que existe), então marcamos
       // que ele está velho e deixamos a própria tela dizer isso.
-      if (error) { setTelemetryStale(true); return; }
-      setTelemetryStale(false);
+      // A FRESCURA agora é decidida pela regra, não pela ausência de erro. Antes
+      // bastava a consulta responder 200 para a tela tratar o número como atual
+      // — e uma linha CONGELADA responde 200 igualzinho. Foi assim que um ETA de
+      // minutos atrás foi mostrado como "chega às 11:30" para um passageiro cujo
+      // voo embarcava às 12:30 (26/09/2026). Ver src/lib/telemetryFreshness.ts.
+      const agora = Date.now();
+      if (data) {
+        const anterior = posicaoParadaDesde.current;
+        const mudou = !anterior || anterior.lat !== data.driver_lat || anterior.lng !== data.driver_lng;
+        if (mudou && data.driver_lat != null && data.driver_lng != null) {
+          posicaoParadaDesde.current = { lat: data.driver_lat, lng: data.driver_lng, desdeMs: agora };
+        }
+      }
+      const veredito = telemetryFreshness(
+        { driver_telemetry_at: data?.driver_telemetry_at, driver_lat: data?.driver_lat, driver_lng: data?.driver_lng },
+        agora,
+        { queryFailed: !!error, unchangedSinceMs: posicaoParadaDesde.current?.desdeMs ?? null },
+      );
+      setTelemetryStale(veredito.stale);
+      setStaleMin(veredito.stale ? staleMinutes(veredito.ageMs) : 0);
+      if (error) return;
       if (data) setRide((prev) => ({ ...prev, ...data }));
     }
 
@@ -637,7 +662,7 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           </View>
           <Text style={styles.etaArrival}>
             {telemetryStale
-              ? t('payment.connectError')
+              ? t('activeRide.etaStale').replace('{min}', String(staleMin || 1))
               : etaArrival
               ? `${ride.status === 'in_progress' ? t('activeRide.estimatedArrival') : t('activeRide.arrivalAtPickup')}: ${etaArrival.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
               : ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress'

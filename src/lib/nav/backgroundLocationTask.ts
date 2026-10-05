@@ -114,6 +114,8 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
           driver_lat: next.lat,
           driver_lng: next.lng,
           driver_heading: heading,
+          // Mesmo carimbo do publicador de primeiro plano — ver migração 0086.
+          driver_telemetry_at: new Date().toISOString(),
         })
         .eq('id', ctx.rideId),
     ]);
