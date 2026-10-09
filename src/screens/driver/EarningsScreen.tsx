@@ -10,7 +10,7 @@ import { useConnectAccount } from '../../hooks/useConnectAccount';
 import { useWaybillConfig } from '../../hooks/useWaybillConfig';
 import { generateAndShareWaybill } from '../../lib/waybillExport';
 import { formatCurrency, formatDistance, kmToMiles } from '../../lib/format';
-import { DRIVER_SHARE } from '../../lib/split';
+import { driverEarning, totalDriverEarnings } from '../../lib/driverEarning';
 import { useTranslation } from '../../i18n';
 
 type Period = 'today' | 'week' | 'month' | 'all';
@@ -79,16 +79,10 @@ export function EarningsScreen() {
     // A LISTA abaixo continua mostrando a corrida: sumir com ela seria pior.
     const paidRides = filtered.filter((r) => r.paid === true);
     const gross = paidRides.reduce((s, r) => s + (Number(r.price) || 0), 0);
-    // Usa driver_amount se disponível, fallback para gross * DRIVER_SHARE
-    const fare = paidRides.reduce((s, r) => {
-      const da = r.driver_amount;
-      return s + (da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE);
-    }, 0);
-    // Gorjeta é somada FORA do split: vai inteira ao motorista, e por isso não
-    // entra no cálculo da comissão (senão a plataforma apareceria descontando
-    // uma comissão que não existe sobre a gorjeta).
-    const tips = paidRides.reduce((s, r) => s + (Number(r.tip_amount) || 0), 0);
-    const net = fare + tips;
+    // A conta mora em src/lib/driverEarning.ts e é a MESMA que a linha da lista
+    // usa. Enquanto estava escrita aqui, a lista não a usava e mostrava `price`
+    // — a tela se contradizia sozinha.
+    const { fare, tips, total: net } = totalDriverEarnings(paidRides);
     const distance = paidRides.reduce((s, r) => s + (Number(r.distance_km) || 0), 0);
     return {
       gross: Math.round(gross * 100) / 100,
@@ -152,11 +146,7 @@ export function EarningsScreen() {
           const t = new Date(r.completed_at).getTime();
           return t >= d.getTime() && t < next;
         })
-        .reduce((s, r) => {
-          const da = r.driver_amount;
-          const fare = da != null ? Number(da) : (Number(r.price) || 0) * DRIVER_SHARE;
-          return s + fare + (Number(r.tip_amount) || 0);
-        }, 0);
+        .reduce((s, r) => s + driverEarning(r).total, 0);
       days.push({ label: d.toLocaleDateString('en-US', { weekday: 'short' })[0], value });
     }
     return days;
@@ -371,6 +361,7 @@ function EarningRow({
   const { t } = useTranslation();
   const date = new Date(ride.completed_at);
   const [generating, setGenerating] = useState(false);
+  const ganho = driverEarning(ride);
 
   async function handleWaybill() {
     if (generating) return;
@@ -392,9 +383,24 @@ function EarningRow({
         <Text style={styles.rowDate}>
           {date.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })} • {formatDistance(ride.distance_km)}
         </Text>
+        {/* QUEM pagou. Sem isto o motorista via "+US$ 15" de gorjeta sem saber
+            a quem agradecer — era o pedido que originou esta mudança. */}
+        {ride.passenger_name ? (
+          <Text style={styles.rowPax} numberOfLines={1}>{ride.passenger_name.trim()}</Text>
+        ) : null}
       </View>
       <View style={styles.rowRight}>
-        <Text style={styles.rowPrice}>+ {formatCurrency(ride.price)}</Text>
+        {/* O ganho DELE, não a tarifa do passageiro. Antes esta linha mostrava
+            `ride.price`: na corrida de 08/10 isso era US$ 62,73 contra os
+            US$ 48,06 que ele recebe — e o card de cima já dizia 48,06. */}
+        <Text style={styles.rowPrice}>
+          {ganho.estimated ? '~ ' : ''}+ {formatCurrency(ganho.total)}
+        </Text>
+        {/* A gorjeta ganha linha própria: ela é o dado que o motorista quer
+            conferir por passageiro, e somada em silêncio ao total ela some. */}
+        {ganho.tip > 0 ? (
+          <Text style={styles.rowTip}>{t('earnings.tipLine').replace('{amount}', formatCurrency(ganho.tip))}</Text>
+        ) : null}
         {showWaybill && (
           <TouchableOpacity
             style={styles.waybillBtn}
@@ -417,6 +423,8 @@ function EarningRow({
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
+    rowPax: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+    rowTip: { fontSize: 12, fontWeight: '700', color: colors.success, marginTop: 2 },
     scroll: { padding: 16, paddingTop: 12, paddingBottom: 24 },
     title: { fontSize: 28, fontWeight: '800', color: colors.text, marginBottom: 16 },
     tabs: { flexDirection: 'row', backgroundColor: colors.card, borderRadius: 12, padding: 4, marginBottom: 16 },
