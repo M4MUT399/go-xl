@@ -35,10 +35,12 @@
 //
 // Deploy:  npx supabase functions deploy send-ride-receipt
 // Segredos: RESEND_API_KEY, RECEIPT_FROM (+ SUPABASE_URL/SERVICE_ROLE_KEY automáticos)
+// Opcionais: RECEIPT_SUPPORT_EMAIL (reply-to e rodapé), RECEIPT_BCC (cópia à operação)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { receiptHtml, receiptSubject, type ReceiptRide } from '../_shared/rideReceipt.ts';
+import { receiptHtml, receiptLang, receiptSubject, type ReceiptRide } from '../_shared/rideReceipt.ts';
 import { isServiceRoleCaller } from '../_shared/serviceAuth.ts';
+import { GOXL_LOGO_CID, GOXL_LOGO_PNG_BASE64 } from '../_shared/receiptLogo.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -47,6 +49,9 @@ const RECEIPT_FROM         = Deno.env.get('RECEIPT_FROM')              ?? '';
 const COMPANY_NAME         = Deno.env.get('RECEIPT_COMPANY_NAME')      ?? 'Go XL';
 const COMPANY_LICENSE      = Deno.env.get('RECEIPT_COMPANY_LICENSE')   ?? '';
 const SUPPORT_EMAIL        = Deno.env.get('RECEIPT_SUPPORT_EMAIL')     ?? '';
+// Cópia oculta de cada recibo para a operação (ex.: o e-mail do Edson). Serve de
+// arquivo e de prova de entrega quando o passageiro diz que "não chegou".
+const RECEIPT_BCC          = Deno.env.get('RECEIPT_BCC')               ?? '';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -96,8 +101,8 @@ Deno.serve(async (req) => {
   if (r.receipt_sent_at && !force) return json({ skipped: 'already_sent', at: r.receipt_sent_at });
 
   const { data: pax } = await admin
-    .from('profiles').select('full_name, email').eq('id', r.passenger_id).single();
-  const p = pax as { full_name: string | null; email: string | null } | null;
+    .from('profiles').select('full_name, email, language').eq('id', r.passenger_id).single();
+  const p = pax as { full_name: string | null; email: string | null; language: string | null } | null;
   const email = p?.email?.trim();
   if (!email) return json({ skipped: 'no_email' });
 
@@ -112,13 +117,28 @@ Deno.serve(async (req) => {
     vehicle = v?.model ? `${v.model}${v.color ? ` · ${v.color}` : ''}` : null;
   }
 
-  const empresa = { legalName: COMPANY_NAME, licenseNumber: COMPANY_LICENSE || null, supportEmail: SUPPORT_EMAIL || null };
-  const html = receiptHtml(r, { passengerName: p?.full_name, driverName, vehicle }, empresa);
+  const empresa = {
+    legalName: COMPANY_NAME, licenseNumber: COMPANY_LICENSE || null, supportEmail: SUPPORT_EMAIL || null,
+    logoSrc: `cid:${GOXL_LOGO_CID}`,
+  };
+  // O idioma é o que o passageiro escolheu no app (cadastro/Perfil); sem escolha, inglês.
+  const idioma = receiptLang(p?.language);
+  const html = receiptHtml(r, { passengerName: p?.full_name, driverName, vehicle }, empresa, idioma);
 
   const resposta = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: RECEIPT_FROM, to: [email], subject: receiptSubject(r, empresa), html }),
+    body: JSON.stringify({
+      from: RECEIPT_FROM,
+      to: [email],
+      ...(RECEIPT_BCC ? { bcc: RECEIPT_BCC.split(',').map((s) => s.trim()).filter(Boolean) } : {}),
+      // Resposta ao recibo vai para o suporte, não para um remetente que ninguém lê.
+      ...(SUPPORT_EMAIL ? { reply_to: SUPPORT_EMAIL } : {}),
+      subject: receiptSubject(r, empresa, idioma),
+      html,
+      // A logo vai EMBUTIDA (content_id ↔ `cid:` no HTML), não como URL remota.
+      attachments: [{ filename: 'goxl.png', content: GOXL_LOGO_PNG_BASE64, content_id: GOXL_LOGO_CID }],
+    }),
   });
 
   if (!resposta.ok) {

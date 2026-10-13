@@ -48,7 +48,17 @@ export interface ReceiptCompany {
   legalName: string;
   licenseNumber?: string | null;
   supportEmail?: string | null;
+  /**
+   * `src` da logo no topo. No e-mail é `cid:goxl-logo` (anexo inline — ver
+   * `receiptLogo.ts`); num PDF gerado localmente pode ser um `data:` URI.
+   * Nunca uma URL remota: recibo que depende de imagem carregar chega quebrado.
+   * Sem ela, o cabeçalho cai para o nome da empresa em texto.
+   */
+  logoSrc?: string | null;
 }
+
+/** Fuso em que as viagens acontecem — a data do recibo sai nele. */
+export const RECEIPT_TIME_ZONE = 'America/New_York';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0);
@@ -78,10 +88,56 @@ export function receiptFareLines(ride: ReceiptRide): { lines: ReceiptLine[]; tot
   return { lines, total: round2(price + tip) };
 }
 
+// ── IDIOMA ─────────────────────────────────────────────────────────────────
+//
+// O recibo sai no idioma que o passageiro escolheu para operar o app —
+// `profiles.language`, gravado no cadastro (RegisterScreen) e trocado no
+// Perfil. Os mesmos três do app (`src/i18n/translations.ts`). Qualquer outro
+// valor, ou nulo, cai para inglês, que é o padrão do app.
+//
+// A MATEMÁTICA não muda com o idioma: `receiptFareLines` segue devolvendo os
+// rótulos em inglês (é o que o teste compara com o `buildWaybill`), e a
+// tradução acontece só na hora de desenhar.
+
+export type ReceiptLang = 'en' | 'es' | 'pt';
+
+const TEXTOS = {
+  en: {
+    locale: 'en-US', subject: 'receipt for your ride', title: 'Receipt for your ride',
+    hi: 'Hi', hiAnon: 'Hi,', thanks: 'thanks for riding with us. Here is the receipt for your trip.',
+    ride: 'Ride', date: 'Date', from: 'From', to: 'To', distance: 'Distance', duration: 'Duration',
+    driver: 'Driver', vehicle: 'Vehicle', total: 'Total', license: 'License',
+    support: 'Questions about this ride? Reply to this email or write to',
+    'Base fare': 'Base fare', Tolls: 'Tolls', 'Airport/Port fee': 'Airport/Port fee', Tip: 'Tip',
+  },
+  es: {
+    locale: 'es-US', subject: 'recibo de tu viaje', title: 'Recibo de tu viaje',
+    hi: 'Hola', hiAnon: 'Hola,', thanks: 'gracias por viajar con nosotros. Aquí está el recibo de tu viaje.',
+    ride: 'Viaje', date: 'Fecha', from: 'Origen', to: 'Destino', distance: 'Distancia', duration: 'Duración',
+    driver: 'Conductor', vehicle: 'Vehículo', total: 'Total', license: 'Licencia',
+    support: '¿Preguntas sobre este viaje? Responde a este correo o escribe a',
+    'Base fare': 'Tarifa base', Tolls: 'Peajes', 'Airport/Port fee': 'Tasa de aeropuerto/puerto', Tip: 'Propina',
+  },
+  pt: {
+    locale: 'pt-BR', subject: 'recibo da sua corrida', title: 'Recibo da sua corrida',
+    hi: 'Olá', hiAnon: 'Olá,', thanks: 'obrigado por viajar com a gente. Aqui está o recibo da sua corrida.',
+    ride: 'Corrida', date: 'Data', from: 'Origem', to: 'Destino', distance: 'Distância', duration: 'Duração',
+    driver: 'Motorista', vehicle: 'Veículo', total: 'Total', license: 'Licença',
+    support: 'Dúvidas sobre esta corrida? Responda este e-mail ou escreva para',
+    'Base fare': 'Tarifa base', Tolls: 'Pedágios', 'Airport/Port fee': 'Taxa de aeroporto/porto', Tip: 'Gorjeta',
+  },
+} as const;
+
+/** Normaliza o que vem do banco (`'pt'`, `'PT'`, `'pt-BR'`, nulo…) para um dos três. */
+export function receiptLang(v: unknown): ReceiptLang {
+  const c = String(v ?? '').trim().toLowerCase().slice(0, 2);
+  return c === 'pt' || c === 'es' ? c : 'en';
+}
+
 /** Assunto do e-mail. Curto, com o valor — é o que se lê na lista sem abrir. */
-export function receiptSubject(ride: ReceiptRide, company: ReceiptCompany): string {
+export function receiptSubject(ride: ReceiptRide, company: ReceiptCompany, lang: ReceiptLang = 'en'): string {
   const { total } = receiptFareLines(ride);
-  return `${company.legalName} — receipt for your ride (${money(total)})`;
+  return `${company.legalName} — ${TEXTOS[lang].subject} (${money(total)})`;
 }
 
 const esc = (s: unknown) =>
@@ -106,50 +162,72 @@ export function receiptHtml(
   ride: ReceiptRide,
   parties: ReceiptParties,
   company: ReceiptCompany,
+  lang: ReceiptLang = 'en',
 ): string {
+  const T = TEXTOS[lang];
   const { lines, total } = receiptFareLines(ride);
   const quando = ride.completed_at ?? ride.created_at ?? null;
-  const dataLegivel = quando ? new Date(quando).toUTCString().replace(' GMT', ' UTC') : '';
+  // Hora de Orlando, que é onde a viagem aconteceu. Em UTC o passageiro via
+  // "19:33" numa corrida que ele lembra como 15:33 — e confere contra a fatura.
+  const dataLegivel = quando
+    ? new Date(quando).toLocaleString(T.locale, {
+      timeZone: RECEIPT_TIME_ZONE, weekday: 'short', month: 'short', day: 'numeric',
+      year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    })
+    : '';
 
   const infos = [
-    linha('Ride', ride.id.slice(0, 8).toUpperCase()),
-    linha('Date', dataLegivel),
-    linha('From', ride.origin_address ?? ''),
-    linha('To', ride.destination_address ?? ''),
-    ride.distance_km != null ? linha('Distance', `${(Number(ride.distance_km) * 0.621371).toFixed(1)} mi`) : '',
-    ride.duration_min != null ? linha('Duration', `${ride.duration_min} min`) : '',
-    parties.driverName ? linha('Driver', parties.driverName) : '',
-    parties.vehicle ? linha('Vehicle', parties.vehicle) : '',
+    linha(T.ride, ride.id.slice(0, 8).toUpperCase()),
+    linha(T.date, dataLegivel),
+    linha(T.from, ride.origin_address ?? ''),
+    linha(T.to, ride.destination_address ?? ''),
+    ride.distance_km != null ? linha(T.distance, `${(Number(ride.distance_km) * 0.621371).toFixed(1)} mi`) : '',
+    ride.duration_min != null ? linha(T.duration, `${ride.duration_min} min`) : '',
+    parties.driverName ? linha(T.driver, parties.driverName) : '',
+    parties.vehicle ? linha(T.vehicle, parties.vehicle) : '',
   ].join('');
 
   const tarifa = lines
-    .map((l) => `<tr><td style="padding:6px 0;font-size:13px;color:#666">${esc(l.label)}</td>` +
+    .map((l) => `<tr><td style="padding:6px 0;font-size:13px;color:#666">${esc((T as Record<string, string>)[l.label] ?? l.label)}</td>` +
       `<td style="padding:6px 0;font-size:13px;color:#111;text-align:right;font-weight:600">${money(l.amount)}</td></tr>`)
     .join('');
 
   const licenca = company.licenseNumber
-    ? `${esc(company.legalName)} — License: ${esc(company.licenseNumber)}`
+    ? `${esc(company.legalName)} — ${T.license}: ${esc(company.licenseNumber)}`
     : esc(company.legalName);
 
-  const saudacao = parties.passengerName ? `Hi ${esc(parties.passengerName.trim().split(' ')[0])},` : 'Hi,';
+  // Logo dourada sobre a faixa escura — o mesmo par de cores do app. Largura
+  // fixa em atributo E em estilo: o Outlook ignora o CSS e usa o atributo.
+  const cabecalho = company.logoSrc
+    ? `<img src="${esc(company.logoSrc)}" alt="${esc(company.legalName)}" width="146" height="40" ` +
+      `style="display:block;width:146px;height:40px;border:0" />`
+    : `<span style="font-size:22px;font-weight:700;letter-spacing:2px;color:#c9a54c">${esc(company.legalName)}</span>`;
+
+  const saudacao = parties.passengerName ? `${T.hi} ${esc(parties.passengerName.trim().split(' ')[0])},` : T.hiAnon;
   const suporte = company.supportEmail
-    ? `<p style="font-size:12px;color:#666;margin:16px 0 0">Questions about this ride? Reply to this email or write to ${esc(company.supportEmail)}.</p>`
+    ? `<p style="font-size:12px;color:#666;margin:16px 0 0">${T.support} ${esc(company.supportEmail)}.</p>`
     : '';
 
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" />
+  return `<!DOCTYPE html><html lang="${lang}"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" /></head>
 <body style="margin:0;padding:24px;background:#f5f5f7;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111">
-<div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:28px">
-  <h1 style="font-size:18px;margin:0 0 4px">Receipt for your ride</h1>
+<div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden">
+  <table style="width:100%;border-collapse:collapse;background:#0e0e1a"><tr>
+    <td style="padding:22px 28px">${cabecalho}</td>
+    <td style="padding:22px 28px;text-align:right;font-size:11px;letter-spacing:1.5px;color:#c9a54c;text-transform:uppercase">Executive XL</td>
+  </tr></table>
+<div style="padding:28px">
+  <h1 style="font-size:18px;margin:0 0 4px">${T.title}</h1>
   <p style="font-size:12px;color:#444;margin:0 0 18px">${licenca}</p>
-  <p style="font-size:14px;margin:0 0 18px">${saudacao} thanks for riding with us. Here is the receipt for your trip.</p>
+  <p style="font-size:14px;margin:0 0 18px">${saudacao} ${T.thanks}</p>
   <table style="width:100%;border-collapse:collapse;margin-bottom:18px">${infos}</table>
   <table style="width:100%;border-collapse:collapse">
     ${tarifa}
-    <tr><td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700">Total</td>
+    <tr><td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700">${T.total}</td>
         <td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700;text-align:right">${money(total)}</td></tr>
   </table>
   ${suporte}
+</div>
 </div>
 </body></html>`;
 }

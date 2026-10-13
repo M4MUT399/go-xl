@@ -18,7 +18,7 @@ jest.mock('../../../../src/lib/systemConfig', () => ({
   getConfigValue: () => Promise.resolve(null),
 }));
 
-import { receiptFareLines, receiptHtml, receiptSubject } from '../rideReceipt';
+import { receiptFareLines, receiptHtml, receiptLang, receiptSubject } from '../rideReceipt';
 import { buildWaybill } from '../../../../src/lib/waybill';
 
 const EMPRESA = { legalName: 'Go XL', licenseNumber: 'MCO-123', supportEmail: 'support@goxl.app' };
@@ -99,9 +99,22 @@ describe('o HTML do e-mail', () => {
   });
 
   // Recibo que depende de imagem carregar chega quebrado, atrás de
-  // "exibir imagens?".
+  // "exibir imagens?". A logo só entra embutida (cid:/data:), nunca por URL.
   it('não carrega imagem remota', () => {
     expect(html).not.toMatch(/<img/i);
+    const comLogo = receiptHtml(corrida(CASOS[0]), {}, { ...EMPRESA, logoSrc: 'cid:goxl-logo' });
+    expect(comLogo).toContain('src="cid:goxl-logo"');
+    expect(comLogo).not.toMatch(/<img[^>]+src="https?:/i);
+  });
+
+  it('sem logo, o cabeçalho cai para o nome da empresa', () => {
+    expect(html).toContain('>Go XL</span>');
+  });
+
+  it('a data sai na hora de Orlando, não em UTC', () => {
+    // 2026-09-19T14:00Z = 10:00 AM EDT
+    expect(html).toContain('10:00 AM EDT');
+    expect(html).not.toContain('UTC');
   });
 
   it('mostra o total e trata o passageiro pelo primeiro nome', () => {
@@ -121,5 +134,45 @@ describe('o HTML do e-mail', () => {
 
   it('o assunto leva o valor, que é o que se lê sem abrir', () => {
     expect(receiptSubject(corrida(CASOS[1]), EMPRESA)).toBe('Go XL — receipt for your ride ($61.53)');
+  });
+});
+
+describe('o idioma do recibo é o que o passageiro escolheu no app', () => {
+  const r = corrida(CASOS[4]); // tem pedágio, taxa e gorjeta: todas as linhas aparecem
+
+  it('português', () => {
+    const html = receiptHtml(r, { passengerName: 'Edson Luiz', driverName: 'Fabricio' }, EMPRESA, 'pt');
+    expect(html).toContain('Recibo da sua corrida');
+    expect(html).toContain('Olá Edson,');
+    for (const rotulo of ['Origem', 'Destino', 'Motorista', 'Tarifa base', 'Pedágios', 'Gorjeta']) {
+      expect(html).toContain(rotulo);
+    }
+    expect(html).not.toContain('Base fare');
+    expect(receiptSubject(r, EMPRESA, 'pt')).toBe('Go XL — recibo da sua corrida ($100.90)');
+  });
+
+  it('espanhol', () => {
+    const html = receiptHtml(r, { passengerName: 'Jesus Mora' }, EMPRESA, 'es');
+    expect(html).toContain('Recibo de tu viaje');
+    expect(html).toContain('Hola Jesus,');
+    expect(html).toContain('Propina');
+    expect(html).toContain('Peajes');
+    expect(receiptSubject(r, EMPRESA, 'es')).toBe('Go XL — recibo de tu viaje ($100.90)');
+  });
+
+  it('o valor é o mesmo em qualquer idioma — só o texto muda', () => {
+    const total = (h: string) => h.match(/\$\d+\.\d{2}(?=<\/td><\/tr>\s*<\/table>)/)?.[0];
+    const en = receiptHtml(r, {}, EMPRESA, 'en');
+    expect(total(receiptHtml(r, {}, EMPRESA, 'pt'))).toBe(total(en));
+    expect(total(receiptHtml(r, {}, EMPRESA, 'es'))).toBe(total(en));
+  });
+
+  it('valor estranho ou ausente no banco cai para inglês', () => {
+    expect(receiptLang('pt')).toBe('pt');
+    expect(receiptLang('PT-BR')).toBe('pt');
+    expect(receiptLang('es')).toBe('es');
+    expect(receiptLang('fr')).toBe('en');
+    expect(receiptLang(null)).toBe('en');
+    expect(receiptLang(undefined)).toBe('en');
   });
 });
