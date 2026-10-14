@@ -18,7 +18,7 @@ jest.mock('../../../../src/lib/systemConfig', () => ({
   getConfigValue: () => Promise.resolve(null),
 }));
 
-import { receiptFareLines, receiptHtml, receiptLang, receiptSubject } from '../rideReceipt';
+import { receiptFareLines, receiptHtml, receiptLang, receiptSubject, tipReceiptHtml, tipReceiptSubject } from '../rideReceipt';
 import { buildWaybill } from '../../../../src/lib/waybill';
 
 const EMPRESA = { legalName: 'Go XL', licenseNumber: 'MCO-123', supportEmail: 'support@goxl.app' };
@@ -174,5 +174,60 @@ describe('o idioma do recibo é o que o passageiro escolheu no app', () => {
     expect(receiptLang('fr')).toBe('en');
     expect(receiptLang(null)).toBe('en');
     expect(receiptLang(undefined)).toBe('en');
+  });
+});
+
+describe('a data do recibo é a da VIAGEM, nunca a da reserva', () => {
+  // Corrida agendada: reservada em 07/10, feita em 08/10. É o caso do Steve Horn.
+  const agendada = {
+    ...corrida(CASOS[0]),
+    created_at: '2026-10-07T16:57:00Z',  // reserva
+    boarded_at: '2026-10-08T17:09:00Z',  // embarque  → 1:09 PM EDT
+    completed_at: '2026-10-08T17:49:00Z', // chegada  → 1:49 PM EDT
+  };
+
+  it('mostra embarque e chegada do dia da corrida', () => {
+    const html = receiptHtml(agendada, {}, EMPRESA, 'en');
+    expect(html).toContain('Pickup');
+    expect(html).toContain('Thu, Oct 8, 2026, 1:09 PM EDT');
+    expect(html).toContain('Drop-off');
+    expect(html).toContain('Thu, Oct 8, 2026, 1:49 PM EDT');
+    expect(html).not.toContain('Oct 7');
+  });
+
+  it('sem embarque nem chegada, NÃO cai para a data da reserva', () => {
+    const html = receiptHtml({ ...agendada, boarded_at: null, completed_at: null }, {}, EMPRESA, 'en');
+    expect(html).not.toContain('Oct 7');
+    expect(html).not.toContain('Pickup');
+  });
+});
+
+describe('o recibo da gorjeta', () => {
+  const gorjeta = {
+    rideId: '24c4247f-0000-0000-0000-000000000000',
+    amount: 15,
+    chargedAt: '2026-10-09T11:21:00Z',       // cobrada no dia seguinte
+    rideCompletedAt: '2026-10-08T17:49:00Z',
+    card: 'Visa •••• 4242',
+  };
+
+  it('traz o valor da gorjeta, a hora da cobrança e o dia da corrida', () => {
+    const html = tipReceiptHtml(gorjeta, { passengerName: 'Steve Horn', driverName: 'Fabricio' }, EMPRESA, 'en');
+    expect(html).toContain('Tip receipt');
+    expect(html).toContain('Hi Steve,');
+    expect(html).toContain('$15.00');
+    expect(html).toContain('Fri, Oct 9, 2026, 7:21 AM EDT'); // cobrança
+    expect(html).toContain('Thu, Oct 8, 2026, 1:49 PM EDT'); // corrida
+    expect(html).toContain('Visa •••• 4242');
+    expect(html).toContain('Fabricio');
+  });
+
+  it('sai no idioma do passageiro', () => {
+    const html = tipReceiptHtml(gorjeta, { passengerName: 'Edson Luiz' }, EMPRESA, 'pt');
+    expect(html).toContain('Recibo da gorjeta');
+    expect(html).toContain('Olá Edson,');
+    expect(html).toContain('Cobrada em');
+    expect(tipReceiptSubject(gorjeta, EMPRESA, 'pt')).toBe('Go XL — recibo da gorjeta ($15.00)');
+    expect(tipReceiptSubject(gorjeta, EMPRESA, 'es')).toBe('Go XL — recibo de propina ($15.00)');
   });
 });

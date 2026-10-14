@@ -38,7 +38,9 @@
 // Opcionais: RECEIPT_SUPPORT_EMAIL (reply-to e rodapé), RECEIPT_BCC (cópia à operação)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { receiptHtml, receiptLang, receiptSubject, type ReceiptRide } from '../_shared/rideReceipt.ts';
+import {
+  receiptHtml, receiptLang, receiptSubject, tipReceiptHtml, tipReceiptSubject, type ReceiptRide,
+} from '../_shared/rideReceipt.ts';
 import { isServiceRoleCaller } from '../_shared/serviceAuth.ts';
 import { GOXL_LOGO_CID, GOXL_LOGO_PNG_BASE64 } from '../_shared/receiptLogo.ts';
 
@@ -52,6 +54,8 @@ const SUPPORT_EMAIL        = Deno.env.get('RECEIPT_SUPPORT_EMAIL')     ?? '';
 // Cópia oculta de cada recibo para a operação (ex.: o e-mail do Edson). Serve de
 // arquivo e de prova de entrega quando o passageiro diz que "não chegou".
 const RECEIPT_BCC          = Deno.env.get('RECEIPT_BCC')               ?? '';
+// Para o recibo da gorjeta: valor, hora e cartão saem da cobrança na Stripe.
+const STRIPE_SECRET_KEY    = Deno.env.get('STRIPE_SECRET_KEY')         ?? '';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -70,7 +74,15 @@ Deno.serve(async (req) => {
     return json({ error: 'Não autorizado' }, 401);
   }
 
-  const { rideId, force } = await req.json().catch(() => ({ rideId: null, force: false }));
+  const corpo = await req.json().catch(() => ({}));
+  const rideId: string | null = corpo?.rideId ?? null;
+  const force = corpo?.force === true;
+  // `ride` (padrão) = recibo da corrida; `tip` = recibo da cobrança da gorjeta.
+  const kind: 'ride' | 'tip' = corpo?.kind === 'tip' ? 'tip' : 'ride';
+  // ENSAIO: gera o recibo de uma corrida real mas entrega em `testTo` (e-mail da
+  // operação), sem cópia oculta e SEM marcar a corrida — o passageiro continua
+  // recebendo o dele normalmente depois. Só quem tem a service key chega aqui.
+  const testTo: string | null = typeof corpo?.testTo === 'string' && corpo.testTo.includes('@') ? corpo.testTo.trim() : null;
   if (!rideId) return json({ error: 'rideId obrigatório' }, 400);
 
   // Sem provedor NÃO marcamos nada. Ver o cabeçalho: marcar antes de conseguir
@@ -86,24 +98,25 @@ Deno.serve(async (req) => {
   const { data: ride, error: erroCorrida } = await admin
     .from('rides')
     .select('id, status, price, toll_amount, airport_port_fee, tip_amount, distance_km, duration_min, ' +
-            'origin_address, destination_address, completed_at, created_at, receipt_sent_at, passenger_id, driver_id')
+            'origin_address, destination_address, completed_at, boarded_at, created_at, receipt_sent_at, ' +
+            'tip_payment_intent_id, tip_receipt_sent_at, passenger_id, driver_id')
     .eq('id', rideId)
     .single();
 
   if (erroCorrida || !ride) return json({ error: 'Corrida não encontrada' }, 404);
   const r = ride as unknown as ReceiptRide & {
     status: string; receipt_sent_at: string | null; passenger_id: string; driver_id: string | null;
+    tip_payment_intent_id: string | null; tip_receipt_sent_at: string | null;
   };
 
   // Recibo é de viagem FEITA. Corrida cancelada não gera recibo — e mandar um
   // para quem cancelou é o tipo de e-mail que vira reclamação.
   if (r.status !== 'completed') return json({ skipped: 'not_completed', status: r.status });
-  if (r.receipt_sent_at && !force) return json({ skipped: 'already_sent', at: r.receipt_sent_at });
 
   const { data: pax } = await admin
     .from('profiles').select('full_name, email, language').eq('id', r.passenger_id).single();
   const p = pax as { full_name: string | null; email: string | null; language: string | null } | null;
-  const email = p?.email?.trim();
+  const email = testTo ?? p?.email?.trim();
   if (!email) return json({ skipped: 'no_email' });
 
   let driverName: string | null = null;
@@ -123,43 +136,97 @@ Deno.serve(async (req) => {
   };
   // O idioma é o que o passageiro escolheu no app (cadastro/Perfil); sem escolha, inglês.
   const idioma = receiptLang(p?.language);
-  const html = receiptHtml(r, { passengerName: p?.full_name, driverName, vehicle }, empresa, idioma);
+  const partes = { passengerName: p?.full_name, driverName, vehicle };
 
-  const resposta = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: RECEIPT_FROM,
-      to: [email],
-      ...(RECEIPT_BCC ? { bcc: RECEIPT_BCC.split(',').map((s) => s.trim()).filter(Boolean) } : {}),
-      // Resposta ao recibo vai para o suporte, não para um remetente que ninguém lê.
-      ...(SUPPORT_EMAIL ? { reply_to: SUPPORT_EMAIL } : {}),
-      subject: receiptSubject(r, empresa, idioma),
-      html,
-      // A logo vai EMBUTIDA (content_id ↔ `cid:` no HTML), não como URL remota.
-      attachments: [{ filename: 'goxl.png', content: GOXL_LOGO_PNG_BASE64, content_id: GOXL_LOGO_CID }],
-    }),
-  });
+  /** Entrega um recibo e, só se o provedor aceitar, grava a coluna de controle. */
+  async function enviar(assunto: string, html: string, coluna: 'receipt_sent_at' | 'tip_receipt_sent_at') {
+    const resposta = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: RECEIPT_FROM,
+        to: [email],
+        ...(RECEIPT_BCC && !testTo ? { bcc: RECEIPT_BCC.split(',').map((s) => s.trim()).filter(Boolean) } : {}),
+        // Resposta ao recibo vai para o suporte, não para um remetente que ninguém lê.
+        ...(SUPPORT_EMAIL ? { reply_to: SUPPORT_EMAIL } : {}),
+        subject: assunto,
+        html,
+        // A logo vai EMBUTIDA (content_id ↔ `cid:` no HTML), não como URL remota.
+        attachments: [{ filename: 'goxl.png', content: GOXL_LOGO_PNG_BASE64, content_id: GOXL_LOGO_CID }],
+      }),
+    });
 
-  if (!resposta.ok) {
-    const detalhe = await resposta.text().catch(() => '');
-    console.error('[send-ride-receipt] provedor recusou', rideId, resposta.status, detalhe);
-    // NÃO marca. A corrida continua elegível para a próxima tentativa.
-    return json({ error: 'Provedor recusou o envio.', status: resposta.status, detail: detalhe.slice(0, 300) }, 502);
+    if (!resposta.ok) {
+      const detalhe = await resposta.text().catch(() => '');
+      console.error('[send-ride-receipt] provedor recusou', rideId, coluna, resposta.status, detalhe);
+      // NÃO marca. A corrida continua elegível para a próxima tentativa.
+      return { ok: false as const, status: resposta.status, detail: detalhe.slice(0, 300) };
+    }
+    const enviado = await resposta.json().catch(() => ({}));
+    if (testTo) return { ok: true as const, id: (enviado?.id as string) ?? null, marcado: true, ensaio: true };
+
+    // Marca DEPOIS de o provedor aceitar. O erro do UPDATE é conferido: descartá-lo
+    // faria o recibo ser reenviado a cada passada, e e-mail repetido para cliente
+    // é o defeito que a coluna existe para evitar.
+    const { error: erroMarca } = await admin
+      .from('rides').update({ [coluna]: new Date().toISOString() }).eq('id', rideId);
+    if (erroMarca) console.error('[send-ride-receipt] enviado mas NÃO marcado', rideId, coluna, erroMarca);
+    return { ok: true as const, id: (enviado?.id as string) ?? null, marcado: !erroMarca };
   }
 
-  const enviado = await resposta.json().catch(() => ({}));
+  /**
+   * O recibo da gorjeta. Valor, hora e cartão vêm da STRIPE, não do banco: é a
+   * cobrança que o passageiro vai ver na fatura, e a gorjeta pode ter sido dada
+   * horas ou um dia depois da corrida.
+   */
+  async function recibodaGorjeta() {
+    if (!r.tip_payment_intent_id) return { skipped: 'no_tip' };
+    if (r.tip_receipt_sent_at && !force && !testTo) return { skipped: 'already_sent', at: r.tip_receipt_sent_at };
+    if (!STRIPE_SECRET_KEY) return { error: 'STRIPE_SECRET_KEY ausente — sem como ler a cobrança da gorjeta.' };
 
-  // Marca DEPOIS de o provedor aceitar. O erro do UPDATE é conferido: descartá-lo
-  // faria o recibo ser reenviado a cada passada, e e-mail repetido para cliente
-  // é o defeito que a coluna existe para evitar.
-  const { error: erroMarca } = await admin
-    .from('rides').update({ receipt_sent_at: new Date().toISOString() }).eq('id', rideId);
+    const pr = await fetch(
+      `https://api.stripe.com/v1/payment_intents/${r.tip_payment_intent_id}?expand[]=latest_charge`,
+      { headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}` } },
+    );
+    const pi = await pr.json().catch(() => null);
+    if (!pr.ok || !pi) return { error: 'Falha ao ler a gorjeta na Stripe.', status: pr.status };
+    if (pi.status !== 'succeeded') return { skipped: 'tip_not_succeeded', status: pi.status };
 
-  if (erroMarca) {
-    console.error('[send-ride-receipt] enviado mas NÃO marcado', rideId, erroMarca);
-    return json({ sent: true, warning: 'enviado, porém não marcado — risco de reenvio', id: enviado?.id }, 200);
+    const cobranca = pi.latest_charge ?? {};
+    const cartao = cobranca?.payment_method_details?.card;
+    const marca = cartao?.brand ? String(cartao.brand).charAt(0).toUpperCase() + String(cartao.brand).slice(1) : null;
+    const gorjeta = {
+      rideId: r.id,
+      amount: (pi.amount_received ?? pi.amount ?? 0) / 100,
+      chargedAt: new Date(((cobranca?.created ?? pi.created) as number) * 1000).toISOString(),
+      rideCompletedAt: r.completed_at ?? null,
+      card: cartao?.last4 ? `${marca ?? 'Card'} •••• ${cartao.last4}` : null,
+    };
+    const res = await enviar(
+      tipReceiptSubject(gorjeta, empresa, idioma), tipReceiptHtml(gorjeta, partes, empresa, idioma), 'tip_receipt_sent_at',
+    );
+    return res.ok ? { sent: true, id: res.id } : { error: 'Provedor recusou o envio.', status: res.status, detail: res.detail };
   }
 
-  return json({ sent: true, to: email, id: enviado?.id ?? null });
+  if (kind === 'tip') {
+    const out = await recibodaGorjeta();
+    return json({ kind: 'tip', to: email, ...out }, 'error' in out ? 502 : 200);
+  }
+
+  if (r.receipt_sent_at && !force && !testTo) return json({ skipped: 'already_sent', at: r.receipt_sent_at });
+
+  // A gorjeta NÃO entra no recibo da corrida: ela é outra cobrança no cartão e
+  // tem recibo próprio. Somá-la aqui faria o total deste e-mail não bater com
+  // nenhuma linha da fatura do passageiro.
+  const semGorjeta = { ...r, tip_amount: null };
+  const res = await enviar(
+    receiptSubject(semGorjeta, empresa, idioma), receiptHtml(semGorjeta, partes, empresa, idioma), 'receipt_sent_at',
+  );
+  if (!res.ok) return json({ error: 'Provedor recusou o envio.', status: res.status, detail: res.detail }, 502);
+
+  // Gorjeta cobrada ANTES da conclusão (raro, mas possível): o gatilho da
+  // gorjeta exige corrida concluída, então o recibo dela sai daqui.
+  const tip = r.tip_payment_intent_id && !r.tip_receipt_sent_at ? await recibodaGorjeta() : null;
+
+  return json({ sent: true, to: email, id: res.id, ...(res.marcado ? {} : { warning: 'enviado, porém não marcado — risco de reenvio' }), ...(tip ? { tip } : {}) });
 });

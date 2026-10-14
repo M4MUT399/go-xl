@@ -35,7 +35,26 @@ export interface ReceiptRide {
   origin_address?: string | null;
   destination_address?: string | null;
   completed_at?: string | null;
+  /** Embarque. Junto com `completed_at` é o que diz QUANDO a corrida aconteceu. */
+  boarded_at?: string | null;
+  /**
+   * Criação do PEDIDO. Numa agendada é o dia da reserva, não o da viagem — por
+   * isso o recibo NUNCA usa este campo como data. Fica na interface só porque
+   * o `buildWaybill` do app o aceita e os testes passam o mesmo insumo aos dois.
+   */
   created_at?: string | null;
+}
+
+/** A cobrança da gorjeta — lida da Stripe, que é a fonte do valor e da hora. */
+export interface ReceiptTip {
+  rideId: string;
+  amount: number;
+  /** Quando a gorjeta foi cobrada (ISO). */
+  chargedAt: string;
+  /** "Visa •••• 4242", quando a Stripe informar. */
+  card?: string | null;
+  /** Fim da corrida a que a gorjeta se refere (ISO). */
+  rideCompletedAt?: string | null;
 }
 
 export interface ReceiptParties {
@@ -103,6 +122,10 @@ export type ReceiptLang = 'en' | 'es' | 'pt';
 
 const TEXTOS = {
   en: {
+    pickup: 'Pickup', dropoff: 'Drop-off', card: 'Card',
+    tipSubject: 'tip receipt', tipTitle: 'Tip receipt',
+    tipThanks: 'thank you for the tip! It goes to your driver. Here is the receipt for this charge.',
+    tipChargedOn: 'Charged on', rideDate: 'Ride date', tipTotal: 'Tip',
     locale: 'en-US', subject: 'receipt for your ride', title: 'Receipt for your ride',
     hi: 'Hi', hiAnon: 'Hi,', thanks: 'thanks for riding with us. Here is the receipt for your trip.',
     ride: 'Ride', date: 'Date', from: 'From', to: 'To', distance: 'Distance', duration: 'Duration',
@@ -111,6 +134,10 @@ const TEXTOS = {
     'Base fare': 'Base fare', Tolls: 'Tolls', 'Airport/Port fee': 'Airport/Port fee', Tip: 'Tip',
   },
   es: {
+    pickup: 'Recogida', dropoff: 'Llegada', card: 'Tarjeta',
+    tipSubject: 'recibo de propina', tipTitle: 'Recibo de propina',
+    tipThanks: '¡gracias por la propina! Va para tu conductor. Aquí está el recibo de este cobro.',
+    tipChargedOn: 'Cobrada el', rideDate: 'Fecha del viaje', tipTotal: 'Propina',
     locale: 'es-US', subject: 'recibo de tu viaje', title: 'Recibo de tu viaje',
     hi: 'Hola', hiAnon: 'Hola,', thanks: 'gracias por viajar con nosotros. Aquí está el recibo de tu viaje.',
     ride: 'Viaje', date: 'Fecha', from: 'Origen', to: 'Destino', distance: 'Distancia', duration: 'Duración',
@@ -119,6 +146,10 @@ const TEXTOS = {
     'Base fare': 'Tarifa base', Tolls: 'Peajes', 'Airport/Port fee': 'Tasa de aeropuerto/puerto', Tip: 'Propina',
   },
   pt: {
+    pickup: 'Embarque', dropoff: 'Chegada', card: 'Cartão',
+    tipSubject: 'recibo da gorjeta', tipTitle: 'Recibo da gorjeta',
+    tipThanks: 'obrigado pela gorjeta! Ela vai para o seu motorista. Aqui está o recibo desta cobrança.',
+    tipChargedOn: 'Cobrada em', rideDate: 'Data da corrida', tipTotal: 'Gorjeta',
     locale: 'pt-BR', subject: 'recibo da sua corrida', title: 'Recibo da sua corrida',
     hi: 'Olá', hiAnon: 'Olá,', thanks: 'obrigado por viajar com a gente. Aqui está o recibo da sua corrida.',
     ride: 'Corrida', date: 'Data', from: 'Origem', to: 'Destino', distance: 'Distância', duration: 'Duração',
@@ -152,46 +183,29 @@ function linha(k: string, v: string): string {
     `<td style="padding:6px 0;font-size:13px;color:#111;text-align:right;font-weight:600">${esc(v)}</td></tr>`;
 }
 
-/**
- * O corpo do e-mail. Estilo EM LINHA e layout em tabela de propósito: cliente
- * de e-mail descarta `<style>` externo e trata `flex`/`grid` de forma
- * imprevisível. Sem imagem remota — recibo que depende de imagem carregar é
- * recibo que chega quebrado com "exibir imagens?" por cima.
- */
-export function receiptHtml(
-  ride: ReceiptRide,
-  parties: ReceiptParties,
-  company: ReceiptCompany,
-  lang: ReceiptLang = 'en',
-): string {
-  const T = TEXTOS[lang];
-  const { lines, total } = receiptFareLines(ride);
-  const quando = ride.completed_at ?? ride.created_at ?? null;
+function dataHora(iso: string | null | undefined, T: Textos): string {
+  if (!iso) return '';
   // Hora de Orlando, que é onde a viagem aconteceu. Em UTC o passageiro via
   // "19:33" numa corrida que ele lembra como 15:33 — e confere contra a fatura.
-  const dataLegivel = quando
-    ? new Date(quando).toLocaleString(T.locale, {
-      timeZone: RECEIPT_TIME_ZONE, weekday: 'short', month: 'short', day: 'numeric',
-      year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-    })
-    : '';
+  return new Date(iso).toLocaleString(T.locale, {
+    timeZone: RECEIPT_TIME_ZONE, weekday: 'short', month: 'short', day: 'numeric',
+    year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
+}
 
-  const infos = [
-    linha(T.ride, ride.id.slice(0, 8).toUpperCase()),
-    linha(T.date, dataLegivel),
-    linha(T.from, ride.origin_address ?? ''),
-    linha(T.to, ride.destination_address ?? ''),
-    ride.distance_km != null ? linha(T.distance, `${(Number(ride.distance_km) * 0.621371).toFixed(1)} mi`) : '',
-    ride.duration_min != null ? linha(T.duration, `${ride.duration_min} min`) : '',
-    parties.driverName ? linha(T.driver, parties.driverName) : '',
-    parties.vehicle ? linha(T.vehicle, parties.vehicle) : '',
-  ].join('');
+type Textos = (typeof TEXTOS)[ReceiptLang];
 
-  const tarifa = lines
-    .map((l) => `<tr><td style="padding:6px 0;font-size:13px;color:#666">${esc((T as Record<string, string>)[l.label] ?? l.label)}</td>` +
-      `<td style="padding:6px 0;font-size:13px;color:#111;text-align:right;font-weight:600">${money(l.amount)}</td></tr>`)
-    .join('');
-
+/**
+ * A moldura comum aos dois recibos: faixa escura com a logo, título, empresa,
+ * saudação e o rodapé de suporte. Estilo EM LINHA e layout em tabela de
+ * propósito: cliente de e-mail descarta `<style>` externo e trata `flex`/`grid`
+ * de forma imprevisível. Sem imagem remota — recibo que depende de imagem
+ * carregar é recibo que chega quebrado com "exibir imagens?" por cima.
+ */
+function moldura(
+  T: Textos, lang: ReceiptLang, company: ReceiptCompany, parties: ReceiptParties,
+  titulo: string, frase: string, miolo: string,
+): string {
   const licenca = company.licenseNumber
     ? `${esc(company.legalName)} — ${T.license}: ${esc(company.licenseNumber)}`
     : esc(company.legalName);
@@ -217,17 +231,92 @@ export function receiptHtml(
     <td style="padding:22px 28px;text-align:right;font-size:11px;letter-spacing:1.5px;color:#c9a54c;text-transform:uppercase">Executive XL</td>
   </tr></table>
 <div style="padding:28px">
-  <h1 style="font-size:18px;margin:0 0 4px">${T.title}</h1>
+  <h1 style="font-size:18px;margin:0 0 4px">${titulo}</h1>
   <p style="font-size:12px;color:#444;margin:0 0 18px">${licenca}</p>
-  <p style="font-size:14px;margin:0 0 18px">${saudacao} ${T.thanks}</p>
-  <table style="width:100%;border-collapse:collapse;margin-bottom:18px">${infos}</table>
-  <table style="width:100%;border-collapse:collapse">
-    ${tarifa}
-    <tr><td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700">${T.total}</td>
-        <td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700;text-align:right">${money(total)}</td></tr>
-  </table>
+  <p style="font-size:14px;margin:0 0 18px">${saudacao} ${frase}</p>
+  ${miolo}
   ${suporte}
 </div>
 </div>
 </body></html>`;
+}
+
+const linhaTotal = (rotulo: string, valor: number) =>
+  `<tr><td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700">${rotulo}</td>` +
+  `<td style="border-top:1px solid #ddd;padding-top:10px;font-size:15px;font-weight:700;text-align:right">${money(valor)}</td></tr>`;
+
+/**
+ * O recibo DA CORRIDA.
+ *
+ * A data é a da VIAGEM: embarque (`boarded_at`) e chegada (`completed_at`).
+ * Nunca `created_at` — numa corrida agendada esse é o dia em que o passageiro
+ * reservou, que pode ser uma semana antes, e o recibo ficaria com a data da
+ * reserva no lugar da data da corrida.
+ */
+export function receiptHtml(
+  ride: ReceiptRide,
+  parties: ReceiptParties,
+  company: ReceiptCompany,
+  lang: ReceiptLang = 'en',
+): string {
+  const T = TEXTOS[lang];
+  const { lines, total } = receiptFareLines(ride);
+
+  const infos = [
+    linha(T.ride, ride.id.slice(0, 8).toUpperCase()),
+    linha(T.pickup, dataHora(ride.boarded_at, T)),
+    linha(T.dropoff, dataHora(ride.completed_at, T)),
+    linha(T.from, ride.origin_address ?? ''),
+    linha(T.to, ride.destination_address ?? ''),
+    ride.distance_km != null ? linha(T.distance, `${(Number(ride.distance_km) * 0.621371).toFixed(1)} mi`) : '',
+    ride.duration_min != null ? linha(T.duration, `${ride.duration_min} min`) : '',
+    parties.driverName ? linha(T.driver, parties.driverName) : '',
+    parties.vehicle ? linha(T.vehicle, parties.vehicle) : '',
+  ].join('');
+
+  const tarifa = lines
+    .map((l) => `<tr><td style="padding:6px 0;font-size:13px;color:#666">${esc((T as Record<string, string>)[l.label] ?? l.label)}</td>` +
+      `<td style="padding:6px 0;font-size:13px;color:#111;text-align:right;font-weight:600">${money(l.amount)}</td></tr>`)
+    .join('');
+
+  const miolo = `<table style="width:100%;border-collapse:collapse;margin-bottom:18px">${infos}</table>
+  <table style="width:100%;border-collapse:collapse">
+    ${tarifa}
+    ${linhaTotal(T.total, total)}
+  </table>`;
+
+  return moldura(T, lang, company, parties, T.title, T.thanks, miolo);
+}
+
+/**
+ * O recibo DA GORJETA. A gorjeta é uma cobrança à parte no cartão — outro
+ * PaymentIntent, outro dia às vezes (Steve Horn deu a da corrida de 08/10 no
+ * dia 09) — então tem recibo próprio, com o valor e a hora DAQUELA cobrança.
+ * Assim cada e-mail bate com uma linha da fatura do passageiro.
+ */
+export function tipReceiptHtml(
+  tip: ReceiptTip,
+  parties: ReceiptParties,
+  company: ReceiptCompany,
+  lang: ReceiptLang = 'en',
+): string {
+  const T = TEXTOS[lang];
+  const infos = [
+    linha(T.ride, tip.rideId.slice(0, 8).toUpperCase()),
+    linha(T.rideDate, dataHora(tip.rideCompletedAt, T)),
+    linha(T.tipChargedOn, dataHora(tip.chargedAt, T)),
+    parties.driverName ? linha(T.driver, parties.driverName) : '',
+    tip.card ? linha(T.card, tip.card) : '',
+  ].join('');
+
+  const miolo = `<table style="width:100%;border-collapse:collapse;margin-bottom:18px">${infos}</table>
+  <table style="width:100%;border-collapse:collapse">
+    ${linhaTotal(T.tipTotal, round2(tip.amount))}
+  </table>`;
+
+  return moldura(T, lang, company, parties, T.tipTitle, T.tipThanks, miolo);
+}
+
+export function tipReceiptSubject(tip: ReceiptTip, company: ReceiptCompany, lang: ReceiptLang = 'en'): string {
+  return `${company.legalName} — ${TEXTOS[lang].tipSubject} (${money(round2(tip.amount))})`;
 }
