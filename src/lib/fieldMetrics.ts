@@ -36,6 +36,8 @@ export type MetricName =
   | 'js_bootstrap_to_interactive'
   /** Ida e volta completa de uma busca de autocomplete, incluindo fallback. */
   | 'autocomplete_round_trip'
+  /** Ida e volta da busca ampla (autocomplete + Text Search em paralelo). */
+  | 'wide_search_round_trip'
   /** Ida e volta do details que fecha a sessão do Places. */
   | 'place_details_round_trip'
   /**

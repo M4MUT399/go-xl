@@ -38,6 +38,8 @@ export interface PlaceSuggestion {
   address: string;
   /** Categoria do local (hospital, school, restaurant…), quando disponível. */
   category?: string;
+  /** Tipos crus da Google (ex.: 'airport', 'lodging'). Vazio no fallback. */
+  types?: string[];
   /**
    * Só o fallback já chega com coordenada. Na Google a predição NÃO traz
    * geometria — ela só vem no `resolvePlace`, e é justamente essa segunda
@@ -69,6 +71,8 @@ function shorten(displayName: string): string {
 /** Emoji por tipo de POI para enriquecer visualmente a lista. */
 function categoryLabel(types: string[] = []): string | undefined {
   const map: Record<string, string> = {
+    airport: 'Aeroporto',
+    international_airport: 'Aeroporto',
     hospital: 'Hospital',
     doctor: 'Clínica',
     health: 'Saúde',
@@ -76,8 +80,14 @@ function categoryLabel(types: string[] = []): string | undefined {
     school: 'Escola',
     university: 'Universidade',
     tourist_attraction: 'Ponto turístico',
-    airport: 'Aeroporto',
+    hotel: 'Hotel',
+    resort_hotel: 'Resort',
     lodging: 'Hotel',
+    medical_clinic: 'Clínica',
+    dentist: 'Dentista',
+    physiotherapist: 'Fisioterapia',
+    convention_center: 'Centro de convenções',
+    amusement_park: 'Parque',
     restaurant: 'Restaurante',
     cafe: 'Café',
     bar: 'Bar',
@@ -114,7 +124,68 @@ async function googleAutocomplete(
       shortName: p.structuredFormat?.mainText?.text ?? p.text?.text ?? '',
       address: p.structuredFormat?.secondaryText?.text ?? p.text?.text ?? '',
       category: categoryLabel(p.types),
+      types: p.types ?? [],
     }));
+}
+
+// ─── Busca ampla via Google Text Search (proxiado pela Edge Function) ───────
+interface GoogleTextSearchPlace {
+  id?: string;
+  displayName?: { text?: string };
+  formattedAddress?: string;
+  location?: { latitude?: number; longitude?: number };
+  types?: string[];
+}
+
+async function googleTextSearch(
+  query: string,
+  near?: { lat: number; lng: number }
+): Promise<PlaceSuggestion[]> {
+  const { places } = await callEdgeFunction<{ places: GoogleTextSearchPlace[] }>(
+    'places-search',
+    { action: 'textsearch', query, near }
+  );
+
+  return (places ?? [])
+    .filter((p) =>
+      !!p.id && typeof p.location?.latitude === 'number' && typeof p.location?.longitude === 'number'
+    )
+    .map((p) => ({
+      placeId: p.id!,
+      shortName: p.displayName?.text ?? p.formattedAddress ?? '',
+      address: p.formattedAddress ?? '',
+      category: categoryLabel(p.types),
+      types: p.types ?? [],
+      // Já vem com coordenada: escolher daqui não precisa do details.
+      location: { lat: p.location!.latitude!, lng: p.location!.longitude! },
+    }));
+}
+
+/**
+ * Junta duas listas sem repetir lugar. A primeira manda na ordem (é a que o
+ * passageiro já está vendo); da segunda entram só os lugares novos. Quando o
+ * mesmo lugar aparece nas duas, fica a versão que já tem coordenada — escolher
+ * essa dispensa uma ida à rede.
+ */
+export function mergeSuggestions(
+  first: PlaceSuggestion[],
+  second: PlaceSuggestion[]
+): PlaceSuggestion[] {
+  const key = (s: PlaceSuggestion) =>
+    s.placeId || `${s.shortName}|${s.address}`.toLowerCase();
+  const byKey = new Map<string, PlaceSuggestion>();
+  const order: string[] = [];
+  for (const s of [...first, ...second]) {
+    const k = key(s);
+    const prev = byKey.get(k);
+    if (!prev) {
+      byKey.set(k, s);
+      order.push(k);
+    } else if (!prev.location && s.location) {
+      byKey.set(k, { ...prev, location: s.location, types: prev.types?.length ? prev.types : s.types });
+    }
+  }
+  return order.map((k) => byKey.get(k)!);
 }
 
 // ─── Busca via Nominatim (fallback) ─────────────────────────────────────────
@@ -184,6 +255,43 @@ export async function searchPlaces(
   try {
     // A Google respondendo vazio também cai aqui, e a amostra sai como
     // 'nominatim' de propósito: quem digitou esperou as DUAS idas.
+    const results = await nominatimSearch(query, near);
+    fim({ source: 'nominatim', results: results.length });
+    return results;
+  } catch {
+    fim({ source: 'failed', results: 0 });
+    return [];
+  }
+}
+
+/**
+ * Busca AMPLA — a mesma do Google Maps. Pega o que o autocomplete deixa de
+ * fora (hotel, clínica, consultório, loja pelo nome; até 20 resultados) e
+ * mescla com a lista do autocomplete. É mais cara por chamada que o
+ * autocomplete, por isso a tela só a dispara quando a digitação assenta
+ * (debounce maior), não a cada tecla.
+ *
+ * Nunca lança: se a busca ampla falhar, devolve o que o autocomplete deu.
+ */
+export async function searchPlacesWide(
+  query: string,
+  sessionToken: string,
+  near?: { lat: number; lng: number }
+): Promise<PlaceSuggestion[]> {
+  if (query.trim().length < 3) return [];
+
+  const fim = startTiming('wide_search_round_trip');
+  const [auto, wide] = await Promise.all([
+    googleAutocomplete(query, sessionToken, near).catch(() => [] as PlaceSuggestion[]),
+    googleTextSearch(query, near).catch(() => [] as PlaceSuggestion[]),
+  ]);
+  const merged = mergeSuggestions(auto, wide);
+  if (merged.length > 0) {
+    fim({ source: 'google_wide', results: merged.length });
+    return merged;
+  }
+
+  try {
     const results = await nominatimSearch(query, near);
     fim({ source: 'nominatim', results: results.length });
     return results;

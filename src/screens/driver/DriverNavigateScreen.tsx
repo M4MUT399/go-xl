@@ -51,6 +51,7 @@ import { ExternalNavBar } from '../../components/driver/ExternalNavBar';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
 import { notifyInApp } from '../../lib/inAppNotify';
+import { FlightInfoLine } from '../../components/common/FlightInfoLine';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DriverNavigate'>;
@@ -1347,6 +1348,8 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             no pickup é o passageiro, no dropoff é o destino — o mesmo `target`
             que a navegação interna persegue. Nada aqui interrompe a corrida:
             o motorista sai para o outro app e volta com o estado intacto. */}
+        <FlightInfoLine ride={ride} style={{ marginBottom: 8 }} />
+
         <ExternalNavBar
           target={alvoExterno}
         />

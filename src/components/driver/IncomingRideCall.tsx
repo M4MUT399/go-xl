@@ -20,6 +20,7 @@ import { rideOrigin, rideDestination } from '../../lib/ride';
 import { getRoute } from '../../lib/routing';
 import { supabase } from '../../lib/supabase';
 import type { Ride } from '../../types';
+import { FlightInfoLine } from '../common/FlightInfoLine';
 
 /** Linha extra na composição da tarifa (pedágio, fee de aeroporto, etc. — P5/P6). */
 export interface FareLine {
@@ -246,6 +247,7 @@ export function IncomingRideCall({
                   </Text>
                 </View>
               </View>
+              <FlightInfoLine ride={ride} style={{ marginTop: 10 }} />
             </View>
 
             {/* Métricas */}

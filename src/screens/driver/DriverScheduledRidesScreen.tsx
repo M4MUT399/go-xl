@@ -22,6 +22,7 @@ function isCancellationFree(scheduledFor?: string): boolean {
   return new Date(scheduledFor).getTime() - Date.now() > 60 * 60 * 1000;
 }
 import { formatCurrency, formatDistance } from '../../lib/format';
+import { FlightInfoLine } from '../../components/common/FlightInfoLine';
 
 // ─── Funções de tempo ─────────────────────────────────────────────────────────
 
@@ -180,6 +181,7 @@ function ClaimedCard({
           <Text style={[styles.addr, styles.addrDest]} numberOfLines={2}>{ride.destination_address}</Text>
         </View>
       </View>
+      <FlightInfoLine ride={ride} style={{ marginTop: 8 }} />
 
       {/* Meta */}
       <View style={styles.meta}>

@@ -127,6 +127,9 @@ export interface Ride {
   duration_min?: number;
   toll_amount?: number;
   airport_port_fee?: number;
+  /** Corrida para aeroporto: voo e terminal informados pelo passageiro (migration 0088). */
+  flight_number?: string | null;
+  airport_terminal?: string | null;
   scheduled_for?: string;
   // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
   driver_lat?: number;
@@ -188,6 +191,8 @@ export interface RideRecord {
   distance_km?: number;
   duration_min?: number;
   scheduled_for?: string;
+  flight_number?: string | null;
+  airport_terminal?: string | null;
   paid?: boolean;
   created_at: string;
   accepted_at?: string;

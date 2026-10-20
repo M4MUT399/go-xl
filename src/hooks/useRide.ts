@@ -7,6 +7,7 @@ import { getSurgeInfo } from '../lib/surge';
 import { composeRideSplit } from '../lib/split';
 import { estimateTollAmount } from '../lib/tolls';
 import { estimateAirportFees } from '../lib/airportFees';
+import { normalizeFlightNumber } from '../lib/airportTrip';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import { canReceiveNewRideOffer } from '../lib/rideDispatch';
@@ -607,6 +608,24 @@ export function estimateDuration(distanceKm: number) {
   return Math.ceil((miles / AVG_SPEED_MPH) * 60);
 }
 
+/** Voo e terminal de uma corrida para aeroporto (ver lib/airportTrip). */
+export interface FlightInfo {
+  number: string;
+  terminal: string;
+}
+
+// As colunas só entram no insert quando há voo: corrida comum continua com o
+// payload de sempre, e por isso não depende da migration 0088 estar aplicada.
+function flightColumns(
+  flight?: FlightInfo
+): { flight_number?: string; airport_terminal?: string } {
+  if (!flight) return {};
+  return {
+    flight_number: normalizeFlightNumber(flight.number),
+    airport_terminal: flight.terminal.trim(),
+  };
+}
+
 const ACTIVE_RIDE_STATUSES: RideStatus[] = ['requesting', 'accepted', 'driver_en_route', 'in_progress'];
 
 export function usePassengerRide(passengerId: string | undefined, jurisdiction: string = 'global') {
@@ -691,7 +710,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
     origin: Location,
     destination: Location,
     routeInfo?: { distanceKm: number; durationMin: number },
-    options?: { lockedDriverId?: string }
+    options?: { lockedDriverId?: string; flight?: FlightInfo }
   ): Promise<Ride | null> => {
     if (!passengerId) return null;
 
@@ -746,6 +765,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       platform_fee: platformFee,
       // QR: pré-vincula o motorista; ele ainda precisa aceitar
       ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
+      ...flightColumns(options?.flight),
     };
 
     const { error: insertError } = await supabase
@@ -799,7 +819,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
     destination: Location,
     scheduledFor: Date,
     routeInfo?: { distanceKm: number; durationMin: number },
-    options?: { lockedDriverId?: string }
+    options?: { lockedDriverId?: string; flight?: FlightInfo }
   ): Promise<Ride | null | 'conflict'> => {
     if (!passengerId) return null;
 
@@ -844,6 +864,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       platform_fee: platformFee,
       // QR: pré-vincula o motorista; ele ainda precisa aceitar/recusar o agendamento
       ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
+      ...flightColumns(options?.flight),
     };
 
     // ── Vários agendamentos, sim; dois no mesmo horário, não ─────────────────

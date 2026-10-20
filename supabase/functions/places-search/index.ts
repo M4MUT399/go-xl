@@ -17,6 +17,8 @@
 //     → { suggestions: [...] } (Places API New — places:autocomplete)
 //   POST { action: 'details', placeId, sessionToken }
 //     → { location: { latitude, longitude } | null } (Places API New)
+//   POST { action: 'textsearch', query, near?: {lat,lng} }
+//     → { places: [...] } (Places API New — places:searchText, até 20, com coordenada)
 //   POST { action: 'search', query: string, near?: {lat,lng} }
 //     → { results: [{ name, formatted_address, geometry, types }] } (Places Text Search)
 //   POST { action: 'reverse', lat: number, lng: number }
@@ -30,6 +32,15 @@
 // de quando o passageiro começa a digitar até o details que resolve a escolha;
 // depois disso ele morre e o cliente precisa gerar outro. Reusar um token já
 // fechado faz a Google cobrar tudo por requisição de novo.
+//
+// Por que existe também `textsearch`: o autocomplete devolve no MÁXIMO 5
+// predições e é feito para completar ENDEREÇO — hotel, clínica, consultório,
+// restaurante pelo nome muitas vezes fica de fora ou chega só como rua. O
+// Text Search (New) é a busca do próprio Google Maps: entende "hilton near
+// disney", "dermatologist lake nona", devolve até 20 lugares e já traz a
+// coordenada (dispensa o details). Custa mais por chamada, por isso o cliente
+// só a dispara com um debounce maior, quando a digitação assenta, e mescla com
+// a lista rápida do autocomplete — ver `searchPlacesWide` em src/lib/geocoding.ts.
 //
 // `action: 'search'` continua aqui porque há app instalado em campo (os QR já
 // impressos) que ainda chama essa rota. Pode sair quando não houver mais build
@@ -59,6 +70,7 @@ const GOOGLE_PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/tex
 const GOOGLE_GEOCODE_REVERSE   = 'https://maps.googleapis.com/maps/api/geocode/json';
 const GOOGLE_PLACES_AUTOCOMPLETE = 'https://places.googleapis.com/v1/places:autocomplete';
 const GOOGLE_PLACES_DETAILS      = 'https://places.googleapis.com/v1/places';
+const GOOGLE_PLACES_SEARCHTEXT   = 'https://places.googleapis.com/v1/places:searchText';
 
 // O placeId e o token entram numa URL montada aqui. Sem esta trava, um cliente
 // autenticado escolhe o caminho e a query string da chamada que sai DO NOSSO
@@ -134,6 +146,42 @@ Deno.serve(async (req) => {
       if (!res.ok) return json({ error: 'Falha na busca' }, 502);
       const data = await res.json();
       return json({ suggestions: data.suggestions ?? [] });
+    }
+
+    if (action === 'textsearch') {
+      const query = typeof body.query === 'string' ? body.query.trim() : '';
+      if (query.length < 3) return json({ places: [] });
+
+      const payload: Record<string, unknown> = {
+        textQuery: query,
+        languageCode: 'en',
+        regionCode: 'us',
+        pageSize: 20,
+      };
+      if (isLatLng(body.near)) {
+        // Viés, não restrição: o passageiro em Orlando que digita "Miami
+        // International Airport" tem de achar o aeroporto de Miami.
+        payload.locationBias = {
+          circle: {
+            center: { latitude: body.near.lat, longitude: body.near.lng },
+            radius: 50000,
+          },
+        };
+      }
+
+      const res = await fetch(GOOGLE_PLACES_SEARCHTEXT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_KEY,
+          'X-Goog-FieldMask':
+            'places.id,places.displayName,places.formattedAddress,places.location,places.types',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return json({ error: 'Falha na busca' }, 502);
+      const data = await res.json();
+      return json({ places: data.places ?? [] });
     }
 
     if (action === 'details') {

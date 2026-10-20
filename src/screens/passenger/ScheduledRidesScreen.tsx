@@ -18,6 +18,7 @@ import { useTranslation } from '../../i18n';
 // igual nesta tela e na de detalhes da viagem, e enquanto morou inline aqui a
 // outra tela ficou sem cancelamento nenhum.
 import { cancellationPolicy } from '../../lib/cancellation';
+import { FlightInfoLine } from '../../components/common/FlightInfoLine';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'ScheduledRides'> };
 
@@ -375,6 +376,7 @@ function ScheduledCard({
           <Text style={[styles.addr, { marginTop: 14 }]} numberOfLines={1}>{ride.destination_address}</Text>
         </View>
       </View>
+      <FlightInfoLine ride={ride} style={{ marginTop: 8 }} />
 
       {/* ── Motorista confirmado ── */}
       {hasDriver && (

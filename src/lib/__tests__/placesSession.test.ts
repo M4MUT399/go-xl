@@ -104,6 +104,9 @@ describe('searchPlaces', () => {
         shortName: 'Orlando International Airport Terminal A',
         address: 'Orlando, FL, USA',
         category: 'Aeroporto',
+        // Os tipos crus seguem junto: é por eles que a tela sabe que o destino
+        // é aeroporto e pede voo + terminal.
+        types: ['airport'],
       },
     ]);
   });
@@ -289,8 +292,11 @@ describe('faixa de cobrança do details (lida do servidor)', () => {
     // de faixa. Nome e endereço já vieram na predição — pedir de novo aqui é
     // pagar mais caro pelo que o cliente já tem. Se alguém ampliar a máscara,
     // este teste cai antes da fatura.
+    // Recorta a partir do details: o `textsearch` tem a máscara dele (Pro, de
+    // propósito — é a busca ampla), e não é dela que este teste fala.
     const src = readFileSync(SERVIDOR, 'utf8');
-    const m = /'X-Goog-FieldMask':\s*'([^']*)'/.exec(src);
+    const detalhe = src.slice(src.indexOf("action === 'details'"));
+    const m = /'X-Goog-FieldMask':\s*'([^']*)'/.exec(detalhe);
     expect(m).not.toBeNull();
     expect(m![1]).toBe('location');
   });
