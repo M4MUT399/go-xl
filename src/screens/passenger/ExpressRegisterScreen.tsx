@@ -41,7 +41,7 @@ type Props = {
 export function ExpressRegisterScreen({ navigation, route }: Props) {
   const { driverCode } = route.params;
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, lang } = useTranslation();
 
   const [loading, setLoading] = useState(false);
   const [step,    setStep]    = useState<'card' | 'done'>('card');
@@ -99,6 +99,8 @@ export function ExpressRegisterScreen({ navigation, route }: Props) {
         phone:      '',
         email,
         type:       'passenger',
+        // Idioma em que ele está usando o app — é o do e-mail de recibo.
+        language:   lang,
       });
 
       // ── 4. Registra corrida expressa pendente (antes do redirect de auth) ─

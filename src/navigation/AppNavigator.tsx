@@ -23,7 +23,7 @@ import { useDriverReminderScheduler } from '../hooks/useDriverReminderScheduler'
 import { usePassengerReminderScheduler } from '../hooks/usePassengerReminderScheduler';
 import { setNotifyHandler } from '../lib/inAppNotify';
 import { markAppInteractive } from '../lib/fieldMetrics';
-import { useTranslation, type Lang } from '../i18n';
+import { useTranslation, consumeExplicitLangChoice, type Lang } from '../i18n';
 
 import { WelcomeScreen } from '../screens/auth/WelcomeScreen';
 import { LoginScreen } from '../screens/auth/LoginScreen';
@@ -238,11 +238,26 @@ export function AppNavigator() {
   const { session, profile, loading, markRecovery, isRecovery } = useAuth();
   const { setLang } = useTranslation();
 
-  // Aplica o idioma salvo no perfil do usuário assim que ele é carregado
+  // Idioma: o app e profiles.language (de onde sai o idioma do e-mail de recibo)
+  // têm de dizer a mesma coisa. Se o usuário ESCOLHEU um idioma num seletor que
+  // ainda não chegou ao perfil (ex.: na tela de Login), essa escolha vence e é
+  // gravada no perfil; senão, o app adota o idioma salvo no perfil.
   useEffect(() => {
-    const pref = profile?.language as Lang | undefined;
-    if (pref) setLang(pref);
-  }, [profile?.language, setLang]);
+    if (!profile?.id) return;
+    let alive = true;
+    (async () => {
+      const escolhido = await consumeExplicitLangChoice();
+      if (!alive) return;
+      if (escolhido && escolhido !== profile.language) {
+        setLang(escolhido);
+        await supabase.from('profiles').update({ language: escolhido }).eq('id', profile.id);
+        return;
+      }
+      const pref = profile.language as Lang | undefined;
+      if (pref) setLang(pref);
+    })();
+    return () => { alive = false; };
+  }, [profile?.id, profile?.language, setLang]);
 
   // Libera a splash nativa (ver App.tsx) assim que o check de sessão termina —
   // evita a piscada splash → tela em branco → LoadingScreen.
