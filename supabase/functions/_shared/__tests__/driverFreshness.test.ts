@@ -88,3 +88,28 @@ describe('os fantasmas reais de 02/09/2026', () => {
     expect(fixEstaFresco(t, depois)).toBe(true);
   });
 });
+
+describe('leque do push: raio de 50 milhas e janela de 12 h (26/10/2026)', () => {
+  const { dentroDoRaio, cortePushIso, DISPATCH_RADIUS_KM } = jest.requireActual('../driverFreshness');
+  const mco = { lat: 28.4312, lng: -81.3081 };
+
+  it('o raio é 50 milhas', () => {
+    expect(DISPATCH_RADIUS_KM).toBeCloseTo(80.467, 2);
+  });
+
+  it('motorista em Kissimmee (~25 km) entra; em Tampa (~130 km) fica de fora', () => {
+    expect(dentroDoRaio(mco, { lat: 28.2920, lng: -81.4076 })).toBe(true);
+    expect(dentroDoRaio(mco, { lat: 27.9506, lng: -82.4572 })).toBe(false);
+  });
+
+  it('sem coordenada de um dos lados, o motorista fica no leque', () => {
+    expect(dentroDoRaio({ lat: null, lng: null }, { lat: 27.9, lng: -82.4 })).toBe(true);
+    expect(dentroDoRaio(mco, { lat: null, lng: null })).toBe(true);
+    expect(dentroDoRaio(null, { lat: 27.9, lng: -82.4 })).toBe(true);
+  });
+
+  it('a janela do push é de 12 h', () => {
+    const agora = Date.parse('2026-10-26T12:00:00Z');
+    expect(cortePushIso(agora)).toBe('2026-10-26T00:00:00.000Z');
+  });
+});

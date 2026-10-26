@@ -34,6 +34,8 @@ import {
 } from '../../lib/nav/courseUp';
 import { zoomForSpeed } from '../../lib/nav/follow';
 import { supabase } from '../../lib/supabase';
+import * as ExpoLocation from 'expo-location';
+import { startDriverOnlineBackgroundLocation } from '../../lib/nav/backgroundLocationTask';
 import { statusBannerText } from '../../lib/driverOnlineStatus';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
@@ -295,6 +297,47 @@ export function DriverHomeScreen({ navigation }: Props) {
     // Abre/fecha a sessão de serviço que alimenta o cálculo do limite (P3).
     if (val) duty.startSession();
     else duty.endSession();
+    if (val) askOnlineBackgroundLocation();
+  }
+
+  // iOS: sem "Permitir Sempre", o motorista ocioso com o app em segundo plano
+  // para de publicar a posição e deixa de receber chamadas. Pede no gesto de
+  // ficar online, uma vez por sessão; o DriverRideContext liga a task quando a
+  // permissão existir. (Android usa o foreground service — não precisa disto.)
+  const bgOnlineAskedRef = useRef(false);
+  async function askOnlineBackgroundLocation() {
+    if (Platform.OS !== 'ios' || bgOnlineAskedRef.current || !profile?.id) return;
+    try {
+      const current = await ExpoLocation.getBackgroundPermissionsAsync();
+      if (current.status === 'granted' || !current.canAskAgain) return;
+    } catch {
+      return;
+    }
+    bgOnlineAskedRef.current = true;
+    const driverId = profile.id;
+    Alert.alert(
+      t('driverHome.bgOnlineTitle'),
+      t('driverHome.bgOnlineMessage'),
+      [
+        { text: t('driverHome.bgOnlineDeny'), style: 'cancel' },
+        {
+          text: t('driverHome.bgOnlineAllow'),
+          onPress: async () => {
+            try {
+              const { status } = await ExpoLocation.requestBackgroundPermissionsAsync();
+              if (status !== 'granted') return;
+              await startDriverOnlineBackgroundLocation({
+                driverId,
+                notifTitle: 'Go XL',
+                notifBody: t('driverHome.bgOnlineNotifBody'),
+              });
+            } catch {
+              // best-effort
+            }
+          },
+        },
+      ],
+    );
   }
 
   async function handleConfirmScheduled() {

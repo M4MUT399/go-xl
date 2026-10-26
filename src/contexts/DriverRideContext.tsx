@@ -14,6 +14,13 @@ import type { Coordinates } from '../types';
 import type { IdleSegment } from '../lib/drivingLimits';
 import { decideStatusRevert, type StatusRevertDecision } from '../lib/driverOnlineStatus';
 import { updateCarActiveRide, updateCarRideOffer } from '../native/carRideBridge';
+import { Platform } from 'react-native';
+import * as ExpoLocation from 'expo-location';
+import { useTranslation } from '../i18n';
+import {
+  startDriverOnlineBackgroundLocation,
+  stopDriverOnlineBackgroundLocation,
+} from '../lib/nav/backgroundLocationTask';
 
 type UseDriverRideReturn = ReturnType<typeof useDriverRide>;
 
@@ -447,6 +454,38 @@ export function DriverRideProvider({ children }: { children: ReactNode }) {
     })();
     return () => { cancelled = true; };
   }, [location, isOnline, profile?.id, onlineLoaded]);
+
+  // GPS em SEGUNDO PLANO enquanto ONLINE (26/10/2026). O efeito acima só roda
+  // com o app aberto; com o celular no bolso o motorista ocioso parava de
+  // carimbar `updated_at` e sumia do despacho. Aqui a task nativa assume esse
+  // papel — só se a permissão já existir (iOS: "Sempre"; Android: o foreground
+  // service basta). Quem PEDE a permissão é o toque na chave (DriverHomeScreen).
+  const { t: tBg } = useTranslation();
+  useEffect(() => {
+    if (!onlineLoaded || !profile?.id) return;
+    if (!isOnline) {
+      stopDriverOnlineBackgroundLocation().catch(() => {});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = Platform.OS === 'ios'
+          ? await ExpoLocation.getBackgroundPermissionsAsync()
+          : await ExpoLocation.getForegroundPermissionsAsync();
+        if (cancelled || perm.status !== 'granted') return;
+        await startDriverOnlineBackgroundLocation({
+          driverId: profile.id,
+          notifTitle: 'Go XL',
+          notifBody: tBg('driverHome.bgOnlineNotifBody', 'Online — receiving nearby ride requests'),
+        });
+      } catch {
+        // best-effort — o publicador de primeiro plano segue funcionando
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, onlineLoaded, profile?.id]);
 
   // Escreve a TRANSIÇÃO de status (online↔offline) no servidor sempre que ela
   // muda — inclusive ao ficar OFFLINE (para o passageiro deixar de ver o

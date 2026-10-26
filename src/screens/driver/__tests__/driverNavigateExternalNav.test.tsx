@@ -93,6 +93,10 @@ jest.mock('../../../lib/nav/lastCamera', () => ({
 jest.mock('../../../lib/nav/backgroundLocationTask', () => ({
   startDriverBackgroundLocation: () => Promise.resolve(),
   stopDriverBackgroundLocation: () => Promise.resolve(),
+  releaseRideBackgroundLocation: () => Promise.resolve(),
+}));
+jest.mock('../../../hooks/usePassengerLocation', () => ({
+  usePassengerLiveLocation: () => null,
 }));
 jest.mock('../../../lib/nav/sharedRouteClient', () => ({
   requestServerRoute: () => Promise.resolve(null),

@@ -21,6 +21,11 @@ import { useCameraController } from '../../hooks/useCameraController';
 import { KM_TO_MILES, formatCurrency } from '../../lib/format';
 import { telemetryFreshness, staleMinutes } from '../../lib/telemetryFreshness';
 import { CarMarker } from '../../components/common/CarMarker';
+import { PassengerMarker } from '../../components/common/PassengerMarker';
+import {
+  usePublishPassengerLocation,
+  PASSENGER_PUBLISH_STATUSES,
+} from '../../hooks/usePassengerLocation';
 import { SmoothMarker } from '../../components/common/SmoothMarker';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import type { MarkerFix } from '../../lib/nav/smoothMarker';
@@ -65,6 +70,12 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // inteiro) — bug conhecido do react-native-maps. `onMapReady` garante que só
   // recentralizamos depois que o mapa está de fato pronto para receber câmera.
   const [mapReady, setMapReady] = useState(false);
+  // Até o embarque, o passageiro publica a própria posição para o motorista
+  // achá-lo (0090) e se vê no mapa junto do carro, estilo Uber.
+  const myLive = usePublishPassengerLocation(
+    ride.id,
+    (PASSENGER_PUBLISH_STATUSES as readonly string[]).includes(ride.status),
+  );
 
   const styles = makeStyles(colors);
 
@@ -613,6 +624,18 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             tracksViewChanges={tracksCar}
           >
             <CarMarker scale={0.75} heading={driverLoc.heading ?? 0} />
+          </Marker>
+        )}
+        {myLive && (
+          <Marker
+            coordinate={{ latitude: myLive.lat, longitude: myLive.lng }}
+            anchor={{ x: 0.5, y: 0.25 }}
+            // Android rasteriza o marcador num bitmap: sem rastrear, o texto
+            // do nome pode sair em branco no primeiro quadro.
+            tracksViewChanges={Platform.OS === 'android'}
+            zIndex={6}
+          >
+            <PassengerMarker label={t('activeRide.you')} />
           </Marker>
         )}
       </MapView>

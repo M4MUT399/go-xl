@@ -72,7 +72,7 @@ module.exports = {
         NSLocationWhenInUseUsageDescription:
           'O Go XL usa sua localização para encontrar motoristas próximos e definir o ponto de partida da corrida.',
         NSLocationAlwaysAndWhenInUseUsageDescription:
-          'O Go XL usa sua localização em segundo plano, só durante uma corrida ativa e com sua autorização explícita, para o passageiro continuar vendo sua posição mesmo com o app minimizado.',
+          'O Go XL usa sua localização em segundo plano, com sua autorização explícita, enquanto você está online como motorista — para receber chamadas próximas — e durante uma corrida ativa, para o passageiro continuar vendo sua posição mesmo com o app minimizado. Fica offline e o rastreamento para.',
         NSCameraUsageDescription:
           'O Go XL usa a câmera para escanear QR Codes e tirar fotos de perfil e do veículo.',
         NSPhotoLibraryUsageDescription:

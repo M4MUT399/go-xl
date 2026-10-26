@@ -131,6 +131,11 @@ export interface Ride {
   flight_number?: string | null;
   airport_terminal?: string | null;
   scheduled_for?: string;
+  // Posição ao vivo do PASSAGEIRO até o embarque (migration 0090) — o motorista
+  // a vê no mapa para achá-lo na calçada. Publicada só em accepted/driver_en_route.
+  passenger_lat?: number | null;
+  passenger_lng?: number | null;
+  passenger_location_at?: string | null;
   // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
   driver_lat?: number;
   driver_lng?: number;

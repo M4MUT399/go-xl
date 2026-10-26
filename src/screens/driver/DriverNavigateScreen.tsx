@@ -22,7 +22,7 @@ import {
 import { zoomForSpeed, updateOffRoute, initialOffRouteState, OffRouteState } from '../../lib/nav/follow';
 import { matchToRoute, initialMatchState, type MatchState } from '../../lib/nav/mapMatch';
 import { shouldPublishFix, type PublishMark } from '../../lib/nav/publishGate';
-import { startDriverBackgroundLocation, stopDriverBackgroundLocation } from '../../lib/nav/backgroundLocationTask';
+import { startDriverBackgroundLocation, releaseRideBackgroundLocation } from '../../lib/nav/backgroundLocationTask';
 import * as Location from 'expo-location';
 import { updateArrivalAt, initialArrivalState, type ArrivalState } from '../../lib/nav/arrival';
 import {
@@ -47,6 +47,8 @@ import { buildRideCardModel } from '../../lib/nav/rideCard';
 import { requestServerRoute } from '../../lib/nav/sharedRouteClient';
 import { RouteStep } from '../../lib/routing';
 import { CarMarker } from '../../components/common/CarMarker';
+import { PassengerMarker } from '../../components/common/PassengerMarker';
+import { usePassengerLiveLocation } from '../../hooks/usePassengerLocation';
 import { ExternalNavBar } from '../../components/driver/ExternalNavBar';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
@@ -308,7 +310,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     );
 
     return () => {
-      stopDriverBackgroundLocation().catch(() => {});
+      // Motorista ainda online → a task volta ao modo ocioso (segue visível
+      // para o despacho); offline → para. Ver backgroundLocationTask.ts.
+      releaseRideBackgroundLocation().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backgroundLocationEnabled, profile?.id, ride.id]);
@@ -1063,6 +1067,9 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   const showCar = !!location || !!initialDriverLocation;
 
+  // Passageiro se movendo no mapa até o embarque (0090), estilo Uber.
+  const passengerLive = usePassengerLiveLocation(ride.id, phase === 'pickup');
+
   return (
     <View style={styles.container}>
       <View style={styles.mapArea}>
@@ -1192,6 +1199,19 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
           >
             <CarMarker scale={0.9} heading={0} />
           </MarkerAnimated>
+        )}
+
+        {phase === 'pickup' && passengerLive && (
+          <Marker
+            coordinate={{ latitude: passengerLive.lat, longitude: passengerLive.lng }}
+            anchor={{ x: 0.5, y: 0.25 }}
+            // Android rasteriza o marcador num bitmap: sem rastrear, o texto
+            // do nome pode sair em branco no primeiro quadro.
+            tracksViewChanges={Platform.OS === 'android'}
+            zIndex={6}
+          >
+            <PassengerMarker label={passengerName?.split(' ')[0] ?? null} />
+          </Marker>
         )}
       </MapView>
 

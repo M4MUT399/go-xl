@@ -111,8 +111,10 @@ export const DISPATCH_DEFAULTS: DispatchConfig = {
   offerTtlMs: 15_000,
   dispatchMode: 'sequential',
   radiusInitialKm: 3,
-  radiusStepKm: 2,
-  radiusMaxKm: 15,
+  // 26/10/2026: alcance máximo de 50 milhas (decisão do Edson), em passos de
+  // 10 km para chegar lá dentro do timeout global.
+  radiusStepKm: 10,
+  radiusMaxKm: 50 * 1.609344,
   globalTimeoutMs: 5 * 60_000,
   avgSpeedKmPerMin: 0.5,
 };

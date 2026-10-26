@@ -49,6 +49,17 @@ export const DEFAULT_BACKGROUND_PUBLISH_GATE: PublishGateConfig = {
   minDistanceM: 50,
 };
 
+// Motorista ONLINE e OCIOSO (sem corrida) com o app em segundo plano. Aqui não
+// há passageiro olhando o carro andar: o que importa é o motorista continuar
+// existindo para o despacho (driver_locations.updated_at) sem gastar bateria.
+// Um fix por minuto andando, heartbeat a cada 4 min parado — bem dentro da
+// janela de 10 min do mapa/motor v2.
+export const IDLE_BACKGROUND_PUBLISH_GATE: PublishGateConfig = {
+  minIntervalMs: 60_000,
+  maxIntervalMs: 4 * 60_000,
+  minDistanceM: 200,
+};
+
 /** Último ponto publicado + quando. `null` = nada publicado ainda. */
 export interface PublishMark {
   lat: number;

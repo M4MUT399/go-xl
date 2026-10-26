@@ -106,6 +106,14 @@ jest.mock('../../hooks/useDriverPeriodTracker', () => ({
   useDriverPeriodTracker: () => ({ enabled: false, period: 'P0' }),
 }));
 jest.mock('../../hooks/useTelematicsSession', () => ({ useTelematicsSession: () => undefined }));
+jest.mock('../../lib/nav/backgroundLocationTask', () => ({
+  startDriverOnlineBackgroundLocation: () => Promise.resolve(),
+  stopDriverOnlineBackgroundLocation: () => Promise.resolve(),
+}));
+jest.mock('expo-location', () => ({
+  getBackgroundPermissionsAsync: () => Promise.resolve({ status: 'denied' }),
+  getForegroundPermissionsAsync: () => Promise.resolve({ status: 'denied' }),
+}));
 jest.mock('../../native/carRideBridge', () => ({
   updateCarActiveRide: () => undefined,
   updateCarRideOffer: () => undefined,

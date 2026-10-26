@@ -37,7 +37,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { driversFreeForOffer, type BusyRideRow } from '../_shared/rideDispatch.ts';
-import { cortePorFrescorIso } from '../_shared/driverFreshness.ts';
+import { cortePushIso, dentroDoRaio } from '../_shared/driverFreshness.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -64,6 +64,8 @@ type Ride = {
   destination_address: string | null;
   destination_lat: number | null;
   destination_lng: number | null;
+  origin_lat: number | null;
+  origin_lng: number | null;
   price: number | null;
   driver_eta_min: number | null;
   scheduled_for: string | null;
@@ -139,7 +141,7 @@ type OnlineDriverReader = {
       eq(column: string, value: boolean): {
         gt(column: string, value: string): {
           order(column: string, options: { ascending: boolean }): {
-            limit(count: number): PromiseLike<{ data: { driver_id: string | null }[] | null; error: PgError }>;
+            limit(count: number): PromiseLike<{ data: { driver_id: string | null; lat: number | null; lng: number | null }[] | null; error: PgError }>;
           };
         };
       };
@@ -196,7 +198,7 @@ async function tokensFor(admin: ProfileTokenReader, ids: string[]): Promise<stri
  * ficou online e nunca desligou o espelho. Em 02/09/2026 isso eram seis
  * telefones parados havia entre 8 e 55 dias tocando a cada corrida pedida.
  *
- * `cortePorFrescorIso()` é a MESMA janela do `dispatch-engine` e da
+ * (Até 26/10/2026) `cortePorFrescorIso()` era a MESMA janela do `dispatch-engine` e da
  * `nearby_online_drivers` — ver _shared/driverFreshness.ts para por que 10 min.
  *
  * Isto vale também para o `silent_revoke`, e está certo: quem não estava fresco
@@ -204,12 +206,17 @@ async function tokensFor(admin: ProfileTokenReader, ids: string[]): Promise<stri
  * ~30 s (`ride_offer_timeout_seconds`), muito dentro da janela, então um
  * motorista que recebeu o toque continua alcançável pela revogação.
  */
-async function onlineDriverIds(admin: OnlineDriverReader): Promise<string[]> {
+async function onlineDriverIds(
+  admin: OnlineDriverReader,
+  embarque: { lat: number | null; lng: number | null } | null = null,
+): Promise<string[]> {
+  // 26/10/2026: janela do PUSH (12 h) + raio de 50 mi do embarque, no lugar
+  // dos 10 min — ver o bloco "O LEQUE DO PUSH" em _shared/driverFreshness.ts.
   const { data, error } = await admin
     .from('driver_locations')
-    .select('driver_id')
+    .select('driver_id, lat, lng')
     .eq('is_online', true)
-    .gt('updated_at', cortePorFrescorIso())
+    .gt('updated_at', cortePushIso())
     .order('updated_at', { ascending: false })
     .limit(MAX_BROADCAST_TARGETS);
 
@@ -221,7 +228,10 @@ async function onlineDriverIds(admin: OnlineDriverReader): Promise<string[]> {
     });
     return [];
   }
-  return (data ?? []).map((d) => d.driver_id).filter((id): id is string => !!id);
+  return (data ?? [])
+    .filter((d) => dentroDoRaio(embarque, d))
+    .map((d) => d.driver_id)
+    .filter((id): id is string => !!id);
 }
 
 /**
@@ -354,7 +364,7 @@ Deno.serve(async (req) => {
 
     const { data: rideRow, error: rideErr } = await rawAdmin
       .from('rides')
-      .select('id, passenger_id, driver_id, status, destination_address, destination_lat, destination_lng, price, driver_eta_min, scheduled_for')
+      .select('id, passenger_id, driver_id, status, destination_address, destination_lat, destination_lng, origin_lat, origin_lng, price, driver_eta_min, scheduled_for')
       .eq('id', rideId)
       .single();
     if (rideErr || !rideRow) return json({ error: 'Corrida não encontrada' }, 404);
@@ -423,7 +433,7 @@ Deno.serve(async (req) => {
         // um motorista legítimo aceite a corrida.
         // O leque é derivado AQUI, com a service key, e não vem mais do corpo
         // da requisição — ver o cabeçalho deste arquivo.
-        const fanout = await onlineDriverIds(admin);
+        const fanout = await onlineDriverIds(admin, { lat: ride.origin_lat, lng: ride.origin_lng });
         await recordPushOffers(admin, rideId, fanout);
 
         // ── QUEM DE FATO RECEBE O TOQUE ───────────────────────────────────

@@ -68,3 +68,55 @@ export function fixEstaFresco(updatedAt: string | null | undefined, agoraMs: num
   if (!Number.isFinite(t)) return false;
   return t > agoraMs - DRIVER_FIX_MAX_AGE_MS;
 }
+
+// ── O LEQUE DO PUSH E O RAIO DE 50 MILHAS (26/10/2026) ─────────────────────
+//
+// Medido em produção: de 12 pedidos imediatos em outubro, 10 foram oferecidos a
+// ZERO motoristas (ride_push_offers vazio). Motivo: até a build que publica GPS
+// com o motorista ocioso em segundo plano (backgroundLocationTask, modo
+// "online"), quem fica online e põe o celular no bolso para de carimbar
+// `updated_at` — e em 10 min some do leque. O PUSH é justamente o que existe
+// para alcançar esse motorista; exigir dele um fix de 10 min anula o push.
+//
+// Por isso o leque do PUSH usa uma janela própria, larga, e um corte
+// GEOGRÁFICO no lugar do corte de tempo: motorista online com último fix nas
+// últimas 12 h (o mesmo teto de `driving_limit_hours`) e a até 50 milhas do
+// embarque. O fantasma de 50 dias que motivou o filtro de frescor continua de
+// fora. Mapa do passageiro e motor v2 seguem com a janela de 10 min — eles
+// mostram/ranqueiam POSIÇÃO, e posição velha ali é mentira; aqui ela só decide
+// quem recebe o toque. Quem autoriza o aceite segue sendo o `charge-ride`.
+
+/** Idade máxima do último fix para um motorista online ainda receber o PUSH. */
+export const PUSH_FANOUT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+/** Raio de despacho: 50 milhas, em km. */
+export const DISPATCH_RADIUS_KM = 50 * 1.609344;
+
+/** Corte em ISO para o leque do push (ver PUSH_FANOUT_MAX_AGE_MS). */
+export function cortePushIso(agoraMs: number = Date.now()): string {
+  return new Date(agoraMs - PUSH_FANOUT_MAX_AGE_MS).toISOString();
+}
+
+/** Distância em km (haversine) — mesma fórmula de dispatchEngine/airportFees. */
+export function distanciaKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * O motorista está dentro do raio de despacho? Sem coordenada de um dos lados
+ * não há como medir — aí ele FICA no leque (errar para o lado de tocar um
+ * telefone a mais custa menos que perder a corrida).
+ */
+export function dentroDoRaio(
+  embarque: { lat: number | null; lng: number | null } | null,
+  motorista: { lat: number | null; lng: number | null },
+  raioKm: number = DISPATCH_RADIUS_KM,
+): boolean {
+  if (!embarque || embarque.lat == null || embarque.lng == null) return true;
+  if (motorista.lat == null || motorista.lng == null) return true;
+  return distanciaKm({ lat: embarque.lat, lng: embarque.lng }, { lat: motorista.lat, lng: motorista.lng }) <= raioKm;
+}
