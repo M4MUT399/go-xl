@@ -6,6 +6,8 @@
 //   ficam em 85% (driver_share_percent = 0.850); do 101º em diante, 80% (0.800).
 //   A faixa é fixada no onboarding e nunca recalculada (ver migração 0037 e a
 //   função assign_driver_tier).
+//   DESDE A 0089 (26/10/2026) a faixa é única: todos em 0.800 (plataforma 20%).
+//   O endpoint segue útil como auditoria da ordem de onboarding.
 //
 // Ações:
 //   summary → contagem por faixa + a partir de qual motorista/seq/data começou

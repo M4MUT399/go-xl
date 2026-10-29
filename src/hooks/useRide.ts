@@ -62,8 +62,8 @@ async function chargeRide(rideId: string): Promise<{ ok: boolean; error?: string
 
 /**
  * Reaplica a divisão de receita de uma corrida com a fatia REAL do motorista que
- * a assumiu (profiles.driver_share_percent), decidida no onboarding — 85% para os
- * 100 primeiros motoristas, 80% do 101º em diante.
+ * a assumiu (profiles.driver_share_percent), gravada no onboarding — 80% para
+ * todos desde a 0089 (plataforma 20%).
  *
  * Por que aqui e não no pedido: no `requestRide`/`scheduleRide` o motorista ainda
  * é desconhecido (pool aberto), então o split é gravado com o padrão. Quando um

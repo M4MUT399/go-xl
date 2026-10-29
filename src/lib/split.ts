@@ -2,8 +2,9 @@
 //
 // A plataforma cobra o passageiro e, semanalmente, repassa a fatia do motorista.
 // A fatia do motorista NÃO é um valor global fixo: cada motorista tem sua
-// própria `driver_share_percent`, decidida no onboarding (85% para os 100
-// primeiros; 80% do 101º em diante) e gravada em profiles.driver_share_percent.
+// própria `driver_share_percent`, gravada no onboarding em
+// profiles.driver_share_percent. Desde a 0089 é 80% para todos (plataforma 20%);
+// a faixa de 85% dos 100 primeiros (0037) acabou.
 //
 // Como no PEDIDO o motorista ainda é desconhecido (pool aberto), o split gravado
 // na criação da corrida usa o padrão (DEFAULT_DRIVER_SHARE). Quem grava o valor
