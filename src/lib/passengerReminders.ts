@@ -21,55 +21,36 @@ import { Platform } from 'react-native';
 import { supabase } from './supabase';
 import { ensureNotificationPermissions } from './notifications';
 import { reportError } from './errorReporting';
+import { currentAppLang, reminderChannelName, reminderText, type ReminderOffsetKey } from './reminderText';
+import type { Lang } from '../i18n/translations';
 
 const ID_PREFIX = 'goxl-pax-sched-';
 const CHANNEL_ID = 'reminders';
 
 type ReminderOffset = {
-  key: string;
+  key: ReminderOffsetKey;
   minutes: number;
-  title: string;
-  body: (place: string) => string;
 };
 
 /**
  * Avisos do passageiro — todos disparam (sem tela de preferências, ao contrário
  * do motorista). Mesma cadência do motorista (2h/1h/30min/15min) para paridade,
- * com texto voltado a quem vai embarcar.
+ * com texto voltado a quem vai embarcar. Os textos ficam em
+ * src/i18n/translations.ts (`reminderNotif.pax.*`), no idioma atual do app.
  */
 const REMINDER_OFFSETS: ReminderOffset[] = [
-  {
-    key: 'h2',
-    minutes: 120,
-    title: '🗓️ Corrida agendada em 2 horas',
-    body: (p) => `Sua corrida agendada é em 2 horas${p ? ` — embarque em ${p}` : ''}.`,
-  },
-  {
-    key: 'h1',
-    minutes: 60,
-    title: '🗓️ Corrida agendada em 1 hora',
-    body: (p) => `Sua corrida agendada é em 1 hora${p ? ` — embarque em ${p}` : ''}.`,
-  },
-  {
-    key: 'm30',
-    minutes: 30,
-    title: '⏰ Sua corrida é em 30 minutos',
-    body: (p) => `Faltam 30 minutos para sua corrida agendada${p ? ` — embarque em ${p}` : ''}. Prepare-se.`,
-  },
-  {
-    key: 'm15',
-    minutes: 15,
-    title: '🚗 Sua corrida é em 15 minutos',
-    body: (p) => `Faltam 15 minutos${p ? ` — esteja pronto no embarque em ${p}` : ''}. Prepare-se para embarcar.`,
-  },
+  { key: 'h2', minutes: 120 },
+  { key: 'h1', minutes: 60 },
+  { key: 'm30', minutes: 30 },
+  { key: 'm15', minutes: 15 },
 ];
 
 /** Canal Android dedicado — o passageiro pode ajustá-lo nas configs do sistema. */
-async function ensureReminderChannel(): Promise<void> {
+async function ensureReminderChannel(lang: Lang): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
     await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: 'Lembretes de agendamento',
+      name: reminderChannelName(lang),
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 200, 150, 200],
       lightColor: '#C9A84C',
@@ -108,7 +89,8 @@ export async function syncPassengerReminders(passengerId: string | undefined): P
   try {
     const granted = await ensureNotificationPermissions();
     if (!granted) return;
-    await ensureReminderChannel();
+    const lang = await currentAppLang();
+    await ensureReminderChannel(lang);
 
     // Limpa os antigos SEMPRE (remove lembretes órfãos, evita duplicata).
     await clearPassengerReminders();
@@ -135,11 +117,12 @@ export async function syncPassengerReminders(passengerId: string | undefined): P
         if (fireMs <= now + 5_000) continue;
 
         try {
+          const text = reminderText(lang, 'pax', off.key, place);
           await Notifications.scheduleNotificationAsync({
             identifier: `${ID_PREFIX}${ride.id}-${off.key}`,
             content: {
-              title: off.title,
-              body: off.body(place),
+              title: text.title,
+              body: text.body,
               sound: 'default',
               data: { type: 'sched_reminder', rideId: ride.id, offset: off.minutes, role: 'passenger' },
             },

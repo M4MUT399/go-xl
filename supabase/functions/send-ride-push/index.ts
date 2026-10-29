@@ -32,12 +32,23 @@
 // do corpo é IGNORADO — permanece aceito e descartado só para que um app antigo
 // em campo não quebre.
 //
+// IDIOMA: todo título/corpo sai no idioma do DESTINATÁRIO (`profiles.language`,
+// en/es/pt, fallback en), lido junto com o `push_token`. Os textos moram em
+// _shared/pushI18n.ts — não escrever texto de push direto aqui.
+//
 // Deploy:  npx supabase functions deploy send-ride-push --no-verify-jwt
 // Chamada: POST { kind, rideId, exceptDriverId? } + JWT do usuário
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { driversFreeForOffer, type BusyRideRow } from '../_shared/rideDispatch.ts';
 import { cortePushIso, dentroDoRaio } from '../_shared/driverFreshness.ts';
+import {
+  pushLang, pushWhen, type PushLang, type PushText,
+  pushNewRideDirect, pushNewRideScheduledDirect, pushNewRideBroadcast,
+  pushRideAccepted, pushScheduleConfirmed, pushScheduleRejected, pushRideCompleted,
+  pushDriverArrived, pushRouteChanged,
+  pushDriverReleased, pushRideCancelledByPassenger, pushScheduleExpired,
+} from '../_shared/pushI18n.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -84,10 +95,6 @@ type PushMessage = {
   _contentAvailable?: boolean;
 };
 
-function formatCurrency(v: number | null | undefined): string {
-  return `$${(Number(v) || 0).toFixed(2)}`;
-}
-
 async function sendExpoPush(messages: PushMessage[]): Promise<void> {
   const valid = messages.filter((m) => m.to?.startsWith('ExponentPushToken'));
   if (valid.length === 0) return;
@@ -114,16 +121,38 @@ async function sendExpoPush(messages: PushMessage[]): Promise<void> {
 // que uma coluna mudar de nome; declarar a forma usada não cala nada.
 type PgError = { message: string } | null;
 
+/** Linha de `profiles` lida para push: o token E o idioma de quem recebe. */
+type ProfilePushRow = { push_token: string | null; language: string | null };
+
 type ProfileTokenReader = {
   from(table: string): {
     select(columns: string): {
-      in(column: string, values: string[]): PromiseLike<{ data: { push_token: string | null }[] | null }>;
+      in(column: string, values: string[]): PromiseLike<{ data: ProfilePushRow[] | null }>;
       eq(column: string, value: string): {
-        single(): PromiseLike<{ data: { push_token: string | null } | null }>;
+        single(): PromiseLike<{ data: ProfilePushRow | null }>;
       };
     };
   };
 };
+
+/** Destinatário de push: token Expo + idioma JÁ normalizado (en/es/pt, fallback en). */
+type PushTarget = { token: string; lang: PushLang };
+
+/**
+ * Um texto por idioma, calculado uma vez só — o leque pode ter centenas de
+ * motoristas, mas no máximo três idiomas.
+ */
+function textsByLang(make: (lang: PushLang) => PushText): (lang: PushLang) => PushText {
+  const cache = new Map<PushLang, PushText>();
+  return (lang) => {
+    let t = cache.get(lang);
+    if (!t) {
+      t = make(lang);
+      cache.set(lang, t);
+    }
+    return t;
+  };
+}
 
 type ActiveRideReader = {
   from(table: string): {
@@ -168,12 +197,12 @@ type OnlineDriverReader = {
  */
 type PushAdmin = ProfileTokenReader & ActiveRideReader & OnlineDriverReader & PushOfferWriter;
 
-async function tokensFor(admin: ProfileTokenReader, ids: string[]): Promise<string[]> {
+async function tokensFor(admin: ProfileTokenReader, ids: string[]): Promise<PushTarget[]> {
   if (ids.length === 0) return [];
-  const { data } = await admin.from('profiles').select('push_token').in('id', ids);
+  const { data } = await admin.from('profiles').select('push_token, language').in('id', ids);
   return (data ?? [])
-    .map((d) => d.push_token)
-    .filter((t): t is string => !!t);
+    .filter((d): d is ProfilePushRow & { push_token: string } => !!d.push_token)
+    .map((d) => ({ token: d.push_token, lang: pushLang(d.language) }));
 }
 
 /**
@@ -328,9 +357,9 @@ async function busyRidesFor(
   return data ?? [];
 }
 
-async function tokenFor(admin: ProfileTokenReader, id: string): Promise<string | null> {
-  const { data } = await admin.from('profiles').select('push_token').eq('id', id).single();
-  return data?.push_token ?? null;
+async function tokenFor(admin: ProfileTokenReader, id: string): Promise<PushTarget | null> {
+  const { data } = await admin.from('profiles').select('push_token, language').eq('id', id).single();
+  return data?.push_token ? { token: data.push_token, lang: pushLang(data.language) } : null;
 }
 
 Deno.serve(async (req) => {
@@ -377,12 +406,11 @@ Deno.serve(async (req) => {
       // ── Passageiro → motorista pré-vinculado por QR (imediato) ───────────
       case 'new_ride_direct': {
         if (!isPassenger || !ride.driver_id) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.driver_id);
-        if (token) {
+        const target = await tokenFor(admin, ride.driver_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '📲 Corrida via QR Code — Executive XL',
-            body: `Passageiro solicitou pelo seu QR. Destino: ${ride.destination_address ?? ''} • ${formatCurrency(ride.price)}`,
+            to: target.token,
+            ...pushNewRideDirect(target.lang, ride.destination_address, ride.price),
             data: { type: 'new_ride', rideId },
             sound: 'default', channelId: 'rides', ttl: 30, priority: 'high', collapseId: rideId,
           }]);
@@ -393,16 +421,14 @@ Deno.serve(async (req) => {
       // ── Passageiro → motorista pré-vinculado por QR (agendamento) ────────
       case 'new_ride_scheduled_direct': {
         if (!isPassenger || !ride.driver_id) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.driver_id);
-        if (token) {
-          const when = ride.scheduled_for ? new Date(ride.scheduled_for) : null;
-          const whenStr = when
-            ? `${when.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${when.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-            : '';
+        const target = await tokenFor(admin, ride.driver_id);
+        if (target) {
+          // Data/hora no idioma do MOTORISTA e no fuso de Orlando (antes saía
+          // em pt-BR e no fuso do servidor, UTC).
+          const whenStr = pushWhen(ride.scheduled_for, target.lang);
           await sendExpoPush([{
-            to: token,
-            title: '🗓️📲 Agendamento via QR Code — Executive XL',
-            body: `Passageiro agendou pelo seu QR para ${whenStr}. Destino: ${ride.destination_address ?? ''} • ${formatCurrency(ride.price)}`,
+            to: target.token,
+            ...pushNewRideScheduledDirect(target.lang, whenStr, ride.destination_address, ride.price),
             data: { type: 'new_scheduled_ride' },
             sound: 'default', channelId: 'rides',
           }]);
@@ -459,11 +485,12 @@ Deno.serve(async (req) => {
         });
         if (targets.length === 0) break;
 
-        const tokens = await tokensFor(admin, targets);
-        await sendExpoPush(tokens.map((to) => ({
-          to,
-          title: '🚗 Nova corrida Executive XL',
-          body: `Destino: ${ride.destination_address ?? ''} • ${formatCurrency(ride.price)}`,
+        const recipients = await tokensFor(admin, targets);
+        // Cada motorista no SEU idioma (no máximo três textos distintos).
+        const textFor = textsByLang((lang) => pushNewRideBroadcast(lang, ride.destination_address, ride.price));
+        await sendExpoPush(recipients.map(({ token, lang }) => ({
+          to: token,
+          ...textFor(lang),
           data: { type: 'new_ride', rideId },
           sound: 'default', channelId: 'rides', ttl: 30, priority: 'high', collapseId: rideId,
         })));
@@ -481,9 +508,10 @@ Deno.serve(async (req) => {
         const isOpenPool = !ride.driver_id && (ride.status === 'requesting' || ride.status === 'scheduled');
         if (!isPassenger && !isDriver && !isOpenPool) return json({ error: 'Não autorizado' }, 403);
         const targets = (await onlineDriverIds(admin)).filter((id) => id !== exceptDriverId);
-        const tokens = await tokensFor(admin, targets);
-        await sendExpoPush(tokens.map((to) => ({
-          to,
+        // Data-only (sem título/corpo): o idioma não importa aqui.
+        const recipients = await tokensFor(admin, targets);
+        await sendExpoPush(recipients.map(({ token }) => ({
+          to: token,
           data: { type: 'offer_revoked', rideId },
           channelId: 'rides', priority: 'high', ttl: 30, collapseId: rideId, _contentAvailable: true,
         })));
@@ -503,16 +531,11 @@ Deno.serve(async (req) => {
         // já que o alvo do push é sempre ride.passenger_id — não há
         // terceiro ilegítimo que se beneficie disso.
         if (!isDriver && !isPassenger) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.passenger_id);
-        if (token) {
-          const etaPhrase = ride.driver_eta_min ? ` Chegando em ${ride.driver_eta_min} min.` : ' Motorista a caminho!';
-          const bodyMsg = ride.price
-            ? `${formatCurrency(ride.price)} cobrado do seu cartão.${etaPhrase}`
-            : `Seu Executive XL foi confirmado.${etaPhrase}`;
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '💳 Pagamento confirmado — Motorista a caminho!',
-            body: bodyMsg,
+            to: target.token,
+            ...pushRideAccepted(target.lang, ride.price, ride.driver_eta_min),
             data: { type: 'ride_accepted' },
             sound: 'default', channelId: 'rides',
           }]);
@@ -523,12 +546,11 @@ Deno.serve(async (req) => {
       // ── Motorista → passageiro: agendamento confirmado ────────────────────
       case 'schedule_confirmed': {
         if (!isDriver) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.passenger_id);
-        if (token) {
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '🗓️ Motorista confirmado!',
-            body: 'Um motorista aceitou seu agendamento. Você pode ver os detalhes na tela de corridas agendadas.',
+            to: target.token,
+            ...pushScheduleConfirmed(target.lang),
             data: { type: 'schedule_confirmed' },
             sound: 'default', channelId: 'rides',
           }]);
@@ -545,12 +567,11 @@ Deno.serve(async (req) => {
         // mesmo sinal usado no watchdog de expiração abaixo.
         const isBackToPool = ride.status === 'scheduled' && !ride.driver_id;
         if (!isBackToPool) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.passenger_id);
-        if (token) {
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '🗓️ Agendamento não confirmado',
-            body: 'O motorista não pôde confirmar seu agendamento. Estamos procurando outro motorista para você.',
+            to: target.token,
+            ...pushScheduleRejected(target.lang),
             data: { type: 'schedule_rejected' },
             sound: 'default', channelId: 'rides',
           }]);
@@ -561,17 +582,43 @@ Deno.serve(async (req) => {
       // ── Motorista → passageiro: corrida concluída ─────────────────────────
       case 'ride_completed': {
         if (!isDriver) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.passenger_id);
-        if (token) {
-          const bodyMsg = ride.price
-            ? `Valor: ${formatCurrency(ride.price)}. Avalie o motorista e deixe uma gorjeta! 🌟`
-            : 'Sua corrida Executive XL foi concluída. Avalie o motorista!';
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '🏁 Corrida finalizada!',
-            body: bodyMsg,
+            to: target.token,
+            ...pushRideCompleted(target.lang, ride.price),
             data: { type: 'ride_completed' },
             sound: 'default', channelId: 'rides',
+          }]);
+        }
+        break;
+      }
+
+      // ── Motorista → passageiro: chegou ao embarque (0091) ─────────────────
+      case 'driver_arrived': {
+        if (!isDriver) return json({ error: 'Não autorizado' }, 403);
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
+          await sendExpoPush([{
+            to: target.token,
+            ...pushDriverArrived(target.lang),
+            data: { type: 'driver_arrived', rideId },
+            sound: 'default', channelId: 'rides', priority: 'high',
+          }]);
+        }
+        break;
+      }
+
+      // ── Passageiro → motorista: mudou a rota em curso (0091) ──────────────
+      case 'route_changed': {
+        if (!isPassenger || !ride.driver_id) return json({ error: 'Não autorizado' }, 403);
+        const target = await tokenFor(admin, ride.driver_id);
+        if (target) {
+          await sendExpoPush([{
+            to: target.token,
+            ...pushRouteChanged(target.lang),
+            data: { type: 'route_changed', rideId },
+            sound: 'default', channelId: 'rides', priority: 'high',
           }]);
         }
         break;
@@ -584,12 +631,11 @@ Deno.serve(async (req) => {
         // (agendamento de volta ao pool aberto).
         const isBackToPool = ride.status === 'scheduled' && !ride.driver_id;
         if (!isBackToPool) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.passenger_id);
-        if (token) {
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '⚠️ Motorista cancelou o agendamento',
-            body: 'O motorista liberou sua corrida agendada. Aguarde nova confirmação ou solicite agora.',
+            to: target.token,
+            ...pushDriverReleased(target.lang),
             data: { type: 'driver_released', rideId },
             sound: 'default', channelId: 'rides',
           }]);
@@ -604,12 +650,11 @@ Deno.serve(async (req) => {
       // conectado. Este push garante a entrega mesmo em segundo plano/fechado.
       case 'ride_cancelled_by_passenger': {
         if (!isPassenger || !ride.driver_id) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.driver_id);
-        if (token) {
+        const target = await tokenFor(admin, ride.driver_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '❌ Corrida cancelada',
-            body: 'O passageiro cancelou esta corrida.',
+            to: target.token,
+            ...pushRideCancelledByPassenger(target.lang),
             data: { type: 'ride_cancelled', rideId },
             sound: 'default', channelId: 'rides', ttl: 30, priority: 'high', collapseId: rideId,
           }]);
@@ -626,12 +671,11 @@ Deno.serve(async (req) => {
         // nulo (nunca chegou a ter motorista designado).
         const isPoolWatchdog = !ride.driver_id && (ride.status === 'scheduled' || ride.status === 'cancelled');
         if (!isPoolWatchdog) return json({ error: 'Não autorizado' }, 403);
-        const token = await tokenFor(admin, ride.passenger_id);
-        if (token) {
+        const target = await tokenFor(admin, ride.passenger_id);
+        if (target) {
           await sendExpoPush([{
-            to: token,
-            title: '⏰ Agendamento não confirmado',
-            body: 'Nenhum motorista aceitou seu agendamento a tempo. Solicite uma nova corrida.',
+            to: target.token,
+            ...pushScheduleExpired(target.lang),
             data: { type: 'schedule_expired', rideId },
             sound: 'default', channelId: 'rides',
           }]);

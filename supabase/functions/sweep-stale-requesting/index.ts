@@ -123,6 +123,7 @@ import { planDriverReversal, type TipDisposition } from '../_shared/refundRevers
 import { runRefundFlow, type RefundAuditRow, type RefundPorts } from '../_shared/refundFlow.ts';
 import { classifyStaleRide, type StaleRideCandidate } from '../_shared/staleRideSweep.ts';
 import { isServiceRoleCaller } from '../_shared/serviceAuth.ts';
+import { pushLang, pushRideExpiredNoDriver, pushRideRefundedNoDriver } from '../_shared/pushI18n.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
@@ -493,16 +494,17 @@ async function notifyPassengerRideExpired(
   if (!passengerId) return;
   try {
     const { data } = await admin
-      .from('profiles').select('push_token').eq('id', passengerId).maybeSingle();
-    const token = (data as { push_token: string | null } | null)?.push_token ?? null;
+      .from('profiles').select('push_token, language').eq('id', passengerId).maybeSingle();
+    const profile = data as { push_token: string | null; language: string | null } | null;
+    const token = profile?.push_token ?? null;
     if (!token || !token.startsWith('ExponentPushToken')) return;
+    const lang = pushLang(profile?.language);
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify([{
         to: token,
-        title: 'Não encontramos um motorista',
-        body: 'Sua solicitação foi encerrada e nada foi cobrado. Você pode pedir novamente quando quiser.',
+        ...pushRideExpiredNoDriver(lang),
         data: { type: 'ride_expired', rideId },
         sound: 'default',
         channelId: 'rides',
@@ -818,17 +820,17 @@ async function notifyPassengerRefunded(
   if (!passengerId) return;
   try {
     const { data } = await admin
-      .from('profiles').select('push_token').eq('id', passengerId).maybeSingle();
-    const token = (data as { push_token: string | null } | null)?.push_token ?? null;
+      .from('profiles').select('push_token, language').eq('id', passengerId).maybeSingle();
+    const profile = data as { push_token: string | null; language: string | null } | null;
+    const token = profile?.push_token ?? null;
     if (!token || !token.startsWith('ExponentPushToken')) return;
-    const dollars = (amountCents / 100).toFixed(2);
+    const lang = pushLang(profile?.language);
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify([{
         to: token,
-        title: '💸 Corrida cancelada — valor estornado',
-        body: `Nenhum motorista assumiu sua corrida. Estornamos $${dollars} no seu cartão (o banco pode levar alguns dias para mostrar).`,
+        ...pushRideRefundedNoDriver(lang, amountCents),
         data: { type: 'ride_refunded', rideId },
         sound: 'default',
         channelId: 'rides',
