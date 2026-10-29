@@ -109,7 +109,7 @@ create trigger trg_guard_ride_route_fields
 -- ── "Cheguei" ────────────────────────────────────────────────────────────────
 -- Só o motorista DESTA corrida, antes do embarque, e uma vez só (o primeiro
 -- toque vale; repetir devolve o mesmo instante). Proximidade: se a telemetria
--- dele for recente (< 3 min), ele precisa estar a até 400 m do embarque. É um
+-- dele for recente (< 3 min), ele precisa estar a até 100 m do embarque (Edson, 29/10/2026). É um
 -- freio contra o toque antecipado por engano, não uma prova — o próprio
 -- motorista publica driver_lat/lng.
 create or replace function public.mark_driver_arrived(p_ride_id uuid)
@@ -149,7 +149,7 @@ begin
         power(sin(radians(v_ride.origin_lat - v_ride.driver_lat) / 2), 2)
       + cos(radians(v_ride.driver_lat)) * cos(radians(v_ride.origin_lat))
       * power(sin(radians(v_ride.origin_lng - v_ride.driver_lng) / 2), 2))));
-    if v_dist_km > 0.4 then
+    if v_dist_km > 0.1 then
       raise exception 'mark_driver_arrived: driver is % km from pickup', round(v_dist_km::numeric, 2)
         using errcode = 'P0001', hint = 'too_far';
     end if;
