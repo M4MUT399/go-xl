@@ -231,3 +231,35 @@ describe('o recibo da gorjeta', () => {
     expect(tipReceiptSubject(gorjeta, EMPRESA, 'es')).toBe('Go XL — recibo de propina ($15.00)');
   });
 });
+
+describe('recibo de 29/10/2026: dados do passageiro, espera e recibo único', () => {
+  const { receiptHtml: html, receiptFareLines: linhas } = jest.requireActual('../rideReceipt');
+  const empresa = { legalName: 'Go XL' };
+  const corrida = {
+    id: 'abcdef12-0000-0000-0000-000000000000', price: 40, toll_amount: 0, airport_port_fee: 0,
+    completed_at: '2026-10-29T15:00:00Z', boarded_at: '2026-10-29T14:30:00Z',
+  };
+
+  it('traz nome completo e e-mail no bloco "Billed to"', () => {
+    const h = html(corrida, { passengerName: 'Ryan Guerrina', passengerEmail: 'ryan@example.com' }, empresa, 'en');
+    expect(h).toContain('Billed to');
+    expect(h).toContain('Ryan Guerrina');
+    expect(h).toContain('ryan@example.com');
+  });
+
+  it('sem dados do passageiro, o bloco não aparece', () => {
+    expect(html(corrida, {}, empresa, 'pt')).not.toContain('Cobrado de');
+  });
+
+  it('a espera entra como linha e soma no total', () => {
+    const r = linhas({ ...corrida, wait_fee_amount: 3 });
+    expect(r.lines.map((l: { label: string }) => l.label)).toContain('Wait time');
+    expect(r.total).toBe(43);
+  });
+
+  it('recibo único: gorjeta dentro do total e agradecimento pela gorjeta', () => {
+    const h = html({ ...corrida, tip_amount: 8 }, { passengerName: 'Steve Horn' }, empresa, 'en');
+    expect(h).toContain('$48.00');
+    expect(h).toContain('and for the tip');
+  });
+});

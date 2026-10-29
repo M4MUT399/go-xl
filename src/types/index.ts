@@ -236,7 +236,7 @@ export type RootStackParamList = {
   CompleteRegistration: undefined;
   PassengerTabs: undefined;
   DriverTabs: undefined;
-  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string; express?: boolean };
+  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string; express?: boolean; scheduleOnly?: boolean };
   QRCode: undefined;
   FindingDriver: { ride: Ride };
   ActiveRide: { ride: Ride };

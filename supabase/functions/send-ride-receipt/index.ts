@@ -1,7 +1,14 @@
 // Supabase Edge Function — envia o RECIBO da corrida ao e-mail do passageiro.
 //
-// Chamada pelo gatilho da migração 0085, quando o motorista conclui a corrida,
-// e pelo script `supabase/scripts/send_ride_receipts.ts` para corridas antigas.
+// Chamada pelo BANCO (migração 0092): pela varredura `ride-receipt-sweep`, 20
+// min depois de a corrida terminar, ou pelo gatilho da gorjeta; e pelo script
+// `supabase/scripts/send_ride_receipts.ts` para corridas antigas.
+//
+// RECIBO ÚNICO (Edson, 29/10/2026): se o passageiro der gorjeta até 20 min
+// depois do fim da corrida, sai UM recibo com viagem + gorjeta. Gorjeta dada
+// depois disso ganha recibo próprio. Por isso o recibo da corrida não sai mais
+// no instante da conclusão: ele espera a janela da gorjeta fechar (ou a
+// gorjeta chegar, o que vier primeiro).
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // POR QUE O DISPARO NÃO MORA NO APLICATIVO
@@ -99,7 +106,7 @@ Deno.serve(async (req) => {
     .from('rides')
     .select('id, status, price, toll_amount, airport_port_fee, tip_amount, distance_km, duration_min, ' +
             'origin_address, destination_address, completed_at, boarded_at, created_at, receipt_sent_at, ' +
-            'tip_payment_intent_id, tip_receipt_sent_at, passenger_id, driver_id')
+            'tip_payment_intent_id, tip_receipt_sent_at, passenger_id, driver_id, wait_fee_amount')
     .eq('id', rideId)
     .single();
 
@@ -136,7 +143,17 @@ Deno.serve(async (req) => {
   };
   // O idioma é o que o passageiro escolheu no app (cadastro/Perfil); sem escolha, inglês.
   const idioma = receiptLang(p?.language);
-  const partes = { passengerName: p?.full_name, driverName, vehicle };
+  // Nome completo e e-mail do passageiro vão no bloco "Cobrado de" (29/10/2026).
+  const partes = { passengerName: p?.full_name, passengerEmail: p?.email?.trim() ?? null, driverName, vehicle };
+
+  // Janela do recibo único: até 20 min depois do fim da corrida.
+  const JANELA_MS = 20 * 60_000;
+  const fimDaJanela = () =>
+    r.completed_at ? new Date(Date.parse(r.completed_at) + JANELA_MS).toISOString() : null;
+  const dentroDaJanela = (iso: string) => {
+    if (!r.completed_at) return false;
+    return Date.parse(iso) <= Date.parse(r.completed_at) + JANELA_MS;
+  };
 
   /** Entrega um recibo e, só se o provedor aceitar, grava a coluna de controle. */
   async function enviar(assunto: string, html: string, coluna: 'receipt_sent_at' | 'tip_receipt_sent_at') {
@@ -179,11 +196,9 @@ Deno.serve(async (req) => {
    * cobrança que o passageiro vai ver na fatura, e a gorjeta pode ter sido dada
    * horas ou um dia depois da corrida.
    */
-  async function recibodaGorjeta() {
-    if (!r.tip_payment_intent_id) return { skipped: 'no_tip' };
-    if (r.tip_receipt_sent_at && !force && !testTo) return { skipped: 'already_sent', at: r.tip_receipt_sent_at };
+  async function lerGorjeta() {
+    if (!r.tip_payment_intent_id) return { skipped: 'no_tip' as const };
     if (!STRIPE_SECRET_KEY) return { error: 'STRIPE_SECRET_KEY ausente — sem como ler a cobrança da gorjeta.' };
-
     const pr = await fetch(
       `https://api.stripe.com/v1/payment_intents/${r.tip_payment_intent_id}?expand[]=latest_charge`,
       { headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}` } },
@@ -195,13 +210,23 @@ Deno.serve(async (req) => {
     const cobranca = pi.latest_charge ?? {};
     const cartao = cobranca?.payment_method_details?.card;
     const marca = cartao?.brand ? String(cartao.brand).charAt(0).toUpperCase() + String(cartao.brand).slice(1) : null;
-    const gorjeta = {
-      rideId: r.id,
-      amount: (pi.amount_received ?? pi.amount ?? 0) / 100,
-      chargedAt: new Date(((cobranca?.created ?? pi.created) as number) * 1000).toISOString(),
-      rideCompletedAt: r.completed_at ?? null,
-      card: cartao?.last4 ? `${marca ?? 'Card'} •••• ${cartao.last4}` : null,
+    return {
+      gorjeta: {
+        rideId: r.id,
+        amount: (pi.amount_received ?? pi.amount ?? 0) / 100,
+        chargedAt: new Date(((cobranca?.created ?? pi.created) as number) * 1000).toISOString(),
+        rideCompletedAt: r.completed_at ?? null,
+        card: cartao?.last4 ? `${marca ?? 'Card'} •••• ${cartao.last4}` : null,
+      },
     };
+  }
+
+  async function recibodaGorjeta() {
+    if (!r.tip_payment_intent_id) return { skipped: 'no_tip' };
+    if (r.tip_receipt_sent_at && !force && !testTo) return { skipped: 'already_sent', at: r.tip_receipt_sent_at };
+    const lida = await lerGorjeta();
+    if (!('gorjeta' in lida) || !lida.gorjeta) return lida;
+    const gorjeta = lida.gorjeta;
     const res = await enviar(
       tipReceiptSubject(gorjeta, empresa, idioma), tipReceiptHtml(gorjeta, partes, empresa, idioma), 'tip_receipt_sent_at',
     );
@@ -209,24 +234,45 @@ Deno.serve(async (req) => {
   }
 
   if (kind === 'tip') {
+    // Gorjeta dentro da janela e recibo da corrida ainda não enviado: ele vai
+    // levar a gorjeta junto — não manda um segundo e-mail.
+    if (!r.receipt_sent_at && !force && !testTo && dentroDaJanela(new Date().toISOString())) {
+      return json({ kind: 'tip', skipped: 'goes_with_ride_receipt' });
+    }
     const out = await recibodaGorjeta();
     return json({ kind: 'tip', to: email, ...out }, 'error' in out ? 502 : 200);
   }
 
   if (r.receipt_sent_at && !force && !testTo) return json({ skipped: 'already_sent', at: r.receipt_sent_at });
 
-  // A gorjeta NÃO entra no recibo da corrida: ela é outra cobrança no cartão e
-  // tem recibo próprio. Somá-la aqui faria o total deste e-mail não bater com
-  // nenhuma linha da fatura do passageiro.
-  const semGorjeta = { ...r, tip_amount: null };
+  // ── Recibo único (viagem + gorjeta) ou só da viagem ─────────────────────
+  // A gorjeta entra neste recibo se foi cobrada até 20 min depois do fim da
+  // corrida e ainda não teve recibo próprio. Fora disso, ela tem o dela.
+  let comGorjeta: { amount: number } | null = null;
+  if (r.tip_payment_intent_id && !r.tip_receipt_sent_at) {
+    const lida = await lerGorjeta();
+    if ('gorjeta' in lida && lida.gorjeta && dentroDaJanela(lida.gorjeta.chargedAt)) comGorjeta = { amount: lida.gorjeta.amount };
+  }
+
+  // Sem gorjeta e com a janela ainda aberta: espera — a varredura volta aqui
+  // quando os 20 min passarem (ou o gatilho da gorjeta, se ela vier antes).
+  if (!comGorjeta && !force && !testTo && dentroDaJanela(new Date().toISOString())) {
+    return json({ skipped: 'tip_window_open', until: fimDaJanela() });
+  }
+
+  const recibo = { ...r, tip_amount: comGorjeta ? comGorjeta.amount : null };
   const res = await enviar(
-    receiptSubject(semGorjeta, empresa, idioma), receiptHtml(semGorjeta, partes, empresa, idioma), 'receipt_sent_at',
+    receiptSubject(recibo, empresa, idioma), receiptHtml(recibo, partes, empresa, idioma), 'receipt_sent_at',
   );
   if (!res.ok) return json({ error: 'Provedor recusou o envio.', status: res.status, detail: res.detail }, 502);
+  if (comGorjeta && !testTo) {
+    const { error: erroTip } = await admin
+      .from('rides').update({ tip_receipt_sent_at: new Date().toISOString() }).eq('id', rideId);
+    if (erroTip) console.error('[send-ride-receipt] recibo único enviado mas gorjeta NÃO marcada', rideId, erroTip);
+  }
 
-  // Gorjeta cobrada ANTES da conclusão (raro, mas possível): o gatilho da
-  // gorjeta exige corrida concluída, então o recibo dela sai daqui.
-  const tip = r.tip_payment_intent_id && !r.tip_receipt_sent_at ? await recibodaGorjeta() : null;
+  // Gorjeta fora da janela ainda sem recibo: sai o dela, separado.
+  const tip = !comGorjeta && r.tip_payment_intent_id && !r.tip_receipt_sent_at ? await recibodaGorjeta() : null;
 
   return json({ sent: true, to: email, id: res.id, ...(res.marcado ? {} : { warning: 'enviado, porém não marcado — risco de reenvio' }), ...(tip ? { tip } : {}) });
 });

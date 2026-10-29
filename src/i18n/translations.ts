@@ -537,6 +537,7 @@ export const translations: Record<Lang, Dict> = {
     'reminderNotif.drv.m15.bodyAt': '15 minutes to go — head out to pick up the passenger at {place}.',
 
     'activeRide.driverFallback': 'Driver',
+    'scheduled.newRide': 'Schedule a ride',
     'activeRide.callDriver': 'Call driver',
     'activeRide.callUnavailableMsg': 'Use the chat to talk to your driver.',
     'activeRide.callUnavailableTitle': 'Call unavailable',
@@ -1543,6 +1544,7 @@ export const translations: Record<Lang, Dict> = {
     'reminderNotif.drv.m15.bodyAt': 'Faltan 15 minutos — sal a recoger al pasajero en {place}.',
 
     'activeRide.driverFallback': 'Conductor',
+    'scheduled.newRide': 'Programar un viaje',
     'activeRide.callDriver': 'Llamar al conductor',
     'activeRide.callUnavailableMsg': 'Usa el chat para hablar con tu conductor.',
     'activeRide.callUnavailableTitle': 'Llamada no disponible',
@@ -2548,6 +2550,7 @@ export const translations: Record<Lang, Dict> = {
     'reminderNotif.drv.m15.bodyAt': 'Faltam 15 minutos — vá buscar o passageiro em {place}.',
 
     'activeRide.driverFallback': 'Motorista',
+    'scheduled.newRide': 'Agendar corrida',
     'activeRide.callDriver': 'Ligar para o motorista',
     'activeRide.callUnavailableMsg': 'Use o chat para falar com o motorista.',
     'activeRide.callUnavailableTitle': 'Ligação indisponível',

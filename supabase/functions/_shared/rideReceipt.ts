@@ -30,6 +30,8 @@ export interface ReceiptRide {
   toll_amount?: number | null;
   airport_port_fee?: number | null;
   tip_amount?: number | null;
+  /** Taxa de espera no embarque (0091) — cobrança à parte, mas parte da viagem. */
+  wait_fee_amount?: number | null;
   distance_km?: number | null;
   duration_min?: number | null;
   origin_address?: string | null;
@@ -59,6 +61,8 @@ export interface ReceiptTip {
 
 export interface ReceiptParties {
   passengerName?: string | null;
+  /** E-mail do passageiro, impresso no bloco "Cobrado de" junto do nome completo. */
+  passengerEmail?: string | null;
   driverName?: string | null;
   vehicle?: string | null;
 }
@@ -96,15 +100,17 @@ export function receiptFareLines(ride: ReceiptRide): { lines: ReceiptLine[]; tot
   const toll = round2(num(ride.toll_amount));
   const venue = round2(num(ride.airport_port_fee));
   const tip = round2(num(ride.tip_amount));
+  const wait = round2(num(ride.wait_fee_amount));
   const price = round2(num(ride.price));
   const base = round2(price - toll - venue);
 
   const lines: ReceiptLine[] = [{ label: 'Base fare', amount: base }];
   if (toll > 0) lines.push({ label: 'Tolls', amount: toll });
   if (venue > 0) lines.push({ label: 'Airport/Port fee', amount: venue });
+  if (wait > 0) lines.push({ label: 'Wait time', amount: wait });
   if (tip > 0) lines.push({ label: 'Tip', amount: tip });
 
-  return { lines, total: round2(price + tip) };
+  return { lines, total: round2(price + wait + tip) };
 }
 
 // ── IDIOMA ─────────────────────────────────────────────────────────────────
@@ -132,6 +138,8 @@ const TEXTOS = {
     driver: 'Driver', vehicle: 'Vehicle', total: 'Total', license: 'License',
     support: 'Questions about this ride? Reply to this email or write to',
     'Base fare': 'Base fare', Tolls: 'Tolls', 'Airport/Port fee': 'Airport/Port fee', Tip: 'Tip',
+    'Wait time': 'Wait time', billedTo: 'Billed to', name: 'Name', email: 'Email',
+    thanksWithTip: 'thanks for riding with us — and for the tip, which goes to your driver. Here is the receipt for your trip.',
   },
   es: {
     pickup: 'Recogida', dropoff: 'Llegada', card: 'Tarjeta',
@@ -144,6 +152,8 @@ const TEXTOS = {
     driver: 'Conductor', vehicle: 'Vehículo', total: 'Total', license: 'Licencia',
     support: '¿Preguntas sobre este viaje? Responde a este correo o escribe a',
     'Base fare': 'Tarifa base', Tolls: 'Peajes', 'Airport/Port fee': 'Tasa de aeropuerto/puerto', Tip: 'Propina',
+    'Wait time': 'Tiempo de espera', billedTo: 'Facturado a', name: 'Nombre', email: 'Correo',
+    thanksWithTip: 'gracias por viajar con nosotros — y por la propina, que va para tu conductor. Aquí está el recibo de tu viaje.',
   },
   pt: {
     pickup: 'Embarque', dropoff: 'Chegada', card: 'Cartão',
@@ -156,6 +166,8 @@ const TEXTOS = {
     driver: 'Motorista', vehicle: 'Veículo', total: 'Total', license: 'Licença',
     support: 'Dúvidas sobre esta corrida? Responda este e-mail ou escreva para',
     'Base fare': 'Tarifa base', Tolls: 'Pedágios', 'Airport/Port fee': 'Taxa de aeroporto/porto', Tip: 'Gorjeta',
+    'Wait time': 'Tempo de espera', billedTo: 'Cobrado de', name: 'Nome', email: 'E-mail',
+    thanksWithTip: 'obrigado por viajar com a gente — e pela gorjeta, que vai para o seu motorista. Aqui está o recibo da sua corrida.',
   },
 } as const;
 
@@ -234,11 +246,28 @@ function moldura(
   <h1 style="font-size:18px;margin:0 0 4px">${titulo}</h1>
   <p style="font-size:12px;color:#444;margin:0 0 18px">${licenca}</p>
   <p style="font-size:14px;margin:0 0 18px">${saudacao} ${frase}</p>
+  ${cobradoDe(T, parties)}
   ${miolo}
   ${suporte}
 </div>
 </div>
 </body></html>`;
+}
+
+/**
+ * Bloco "Cobrado de": nome completo e e-mail do passageiro (pedido do Edson,
+ * 29/10/2026). Recibo sem o nome de quem pagou não serve de comprovante para
+ * reembolso de despesa — que é para o que o passageiro executivo o usa.
+ */
+function cobradoDe(T: Textos, parties: ReceiptParties): string {
+  const nome = parties.passengerName?.trim();
+  const email = parties.passengerEmail?.trim();
+  if (!nome && !email) return '';
+  return `<table style="width:100%;border-collapse:collapse;margin:0 0 18px;background:#f7f7f9;border-radius:8px">
+    <tr><td colspan="2" style="padding:10px 12px 2px;font-size:11px;letter-spacing:1px;color:#888;text-transform:uppercase">${esc(T.billedTo)}</td></tr>
+    ${nome ? `<tr><td style="padding:2px 12px;font-size:13px;color:#666;width:30%">${esc(T.name)}</td><td style="padding:2px 12px;font-size:13px;color:#111;font-weight:600;text-align:right">${esc(nome)}</td></tr>` : ''}
+    ${email ? `<tr><td style="padding:2px 12px 10px;font-size:13px;color:#666">${esc(T.email)}</td><td style="padding:2px 12px 10px;font-size:13px;color:#111;font-weight:600;text-align:right">${esc(email)}</td></tr>` : ''}
+  </table>`;
 }
 
 const linhaTotal = (rotulo: string, valor: number) =>
@@ -285,7 +314,7 @@ export function receiptHtml(
     ${linhaTotal(T.total, total)}
   </table>`;
 
-  return moldura(T, lang, company, parties, T.title, T.thanks, miolo);
+  return moldura(T, lang, company, parties, T.title, num(ride.tip_amount) > 0 ? T.thanksWithTip : T.thanks, miolo);
 }
 
 /**

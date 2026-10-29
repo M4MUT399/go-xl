@@ -87,6 +87,8 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const lockedDriverName = screenRoute.params?.lockedDriverName;
   // 1ª corrida expressa (via QR): liberada só com cartão, sem cadastro completo.
   const isExpressFirstRide = screenRoute.params?.express === true;
+  // Aberta pela agenda ("＋ Agendar corrida"): só agendamento, sem "pedir agora".
+  const scheduleOnly = screenRoute.params?.scheduleOnly === true;
 
   const [destinationText, setDestinationText] = useState('');
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
@@ -707,10 +709,14 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
               {/* Botões lado a lado */}
               <View style={styles.actionRow}>
-                <TouchableOpacity style={styles.scheduleBtnInline} onPress={openScheduler}>
+                <TouchableOpacity
+                  style={[styles.scheduleBtnInline, scheduleOnly && styles.scheduleBtnFull]}
+                  onPress={openScheduler}
+                >
                   <Text style={styles.scheduleBtnInlineText}>🗓️</Text>
                   <Text style={styles.scheduleBtnInlineLabel}>{t('requestRide.schedule')}</Text>
                 </TouchableOpacity>
+                {!scheduleOnly && (
                 <TouchableOpacity
                   style={[styles.requestBtnInline, (loading || !displayPrice) && { opacity: 0.6 }]}
                   onPress={handleRequest}
@@ -721,6 +727,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                     : <Text style={styles.requestBtnText}>{t('requestRide.requestNow')}</Text>
                   }
                 </TouchableOpacity>
+                )}
               </View>
             </View>
           )}
@@ -961,6 +968,7 @@ function makeStyles(colors: AppTheme) {
       flexDirection: 'row',
       gap: 10,
     },
+    scheduleBtnFull: { flex: 1, borderColor: colors.accent, backgroundColor: colors.accent },
     scheduleBtnInline: {
       flex: 1,
       height: 50,

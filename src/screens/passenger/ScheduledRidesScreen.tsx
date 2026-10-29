@@ -249,6 +249,14 @@ export function ScheduledRidesScreen({ navigation }: Props) {
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <Text style={styles.title}>{t('scheduled.headerTitle')}</Text>
+        {/* Agendar daqui mesmo (29/10/2026) — antes a agenda só listava. */}
+        <TouchableOpacity
+          style={styles.newBtn}
+          onPress={() => navigation.navigate('RequestRide', { scheduleOnly: true })}
+          accessibilityLabel={t('scheduled.newRide', 'Schedule a ride')}
+        >
+          <Text style={styles.newBtnText}>＋ {t('scheduled.newRide', 'Schedule a ride')}</Text>
+        </TouchableOpacity>
       </View>
 
       {loading && rides.length === 0 ? (
@@ -276,6 +284,14 @@ export function ScheduledRidesScreen({ navigation }: Props) {
               <Text style={styles.emptyText}>
                 {loadFailed ? t('scheduled.activateError') : t('scheduled.emptyText')}
               </Text>
+              {!loadFailed && (
+                <TouchableOpacity
+                  style={[styles.newBtn, styles.newBtnBig]}
+                  onPress={() => navigation.navigate('RequestRide', { scheduleOnly: true })}
+                >
+                  <Text style={styles.newBtnText}>🗓️ {t('scheduled.newRide', 'Schedule a ride')}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           }
           renderItem={({ item }) => {
@@ -451,7 +467,12 @@ function makeStyles(colors: AppTheme) {
     header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
     back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     backText: { fontSize: 24, color: colors.text },
-    title: { fontSize: 22, fontWeight: '800', color: colors.text, marginLeft: 4 },
+    title: { fontSize: 22, fontWeight: '800', color: colors.text, marginLeft: 4, flex: 1 },
+    newBtn: {
+      backgroundColor: colors.accent, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8,
+    },
+    newBtnBig: { marginTop: 20, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 24 },
+    newBtnText: { color: '#1A1A2E', fontWeight: '800', fontSize: 14 },
     list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
     card: { backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 12 },
     cardConfirmed: { borderLeftWidth: 4, borderLeftColor: colors.success },
