@@ -583,30 +583,10 @@ export async function notifyPassengerRideCompleted(passengerId: string, rideId: 
 //
 // A quantidade de motoristas GoXL online NÃO entra no preço — só horário
 // (pico) e local (taxas de aeroporto/porto, P6).
-const UBER_XL_BASE_FARE   = 3.0;   // USD
-/** $1,21 da Uber XL + $0,25 de prêmio GoXL. Ver o bloco acima. */
-const UBER_XL_PER_MILE    = 1.46;  // USD por milha
-const UBER_XL_PER_MINUTE  = 0.2;   // USD por minuto
-const UBER_XL_BOOKING_FEE = 3.0;   // USD (taxa de serviço/booking)
-const UBER_XL_MIN_FARE    = 8.9;   // USD (piso da parte metrada)
-const GOXL_MARKUP         = 1.1;   // +10% sobre a Uber
-const AVG_SPEED_MPH       = 30;    // p/ estimar tempo quando não há rota
-
-export function estimatePrice(distanceKm: number, durationMin = 0, surgeMultiplier = 1.0) {
-  const miles = distanceKm * KM_TO_MILES;
-  const minutes = Math.max(0, durationMin);
-  // Parte metrada, com surge de pico e piso do mínimo da Uber.
-  const metered = UBER_XL_BASE_FARE + miles * UBER_XL_PER_MILE + minutes * UBER_XL_PER_MINUTE;
-  const surged = Math.max(metered * surgeMultiplier, UBER_XL_MIN_FARE);
-  const uberEquivalent = surged + UBER_XL_BOOKING_FEE;
-  // GoXL = tarifa Uber equivalente + 10%.
-  return Math.round(uberEquivalent * GOXL_MARKUP * 100) / 100;
-}
-
-export function estimateDuration(distanceKm: number) {
-  const miles = distanceKm * KM_TO_MILES;
-  return Math.ceil((miles / AVG_SPEED_MPH) * 60);
-}
+// A fórmula mora em src/lib/fare.ts (pura) para o servidor recalcular a tarifa
+// com a MESMA regra quando o passageiro muda a rota em curso (update-ride-route).
+import { estimatePrice, estimateDuration } from '../lib/fare';
+export { estimatePrice, estimateDuration };
 
 /** Voo e terminal de uma corrida para aeroporto (ver lib/airportTrip). */
 export interface FlightInfo {

@@ -136,6 +136,13 @@ export interface Ride {
   passenger_lat?: number | null;
   passenger_lng?: number | null;
   passenger_location_at?: string | null;
+  // Espera no embarque e mudança de rota em curso (migration 0091).
+  driver_arrived_at?: string | null;
+  wait_fee_minutes?: number | null;
+  wait_fee_amount?: number | null;
+  stops?: { lat: number; lng: number; address?: string; done_at?: string | null }[] | null;
+  route_change_count?: number | null;
+  fare_adjustment_amount?: number | null;
   // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
   driver_lat?: number;
   driver_lng?: number;
@@ -233,6 +240,7 @@ export type RootStackParamList = {
   QRCode: undefined;
   FindingDriver: { ride: Ride };
   ActiveRide: { ride: Ride };
+  EditRoute: { ride: Ride };
   RateRide: { ride: Ride };
   DriverRequest: { ride: Ride };
   DriverNavigate: { ride: Ride; initialDriverLocation?: { lat: number; lng: number } };

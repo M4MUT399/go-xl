@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Platform, Alert, Image, Dimensions, LayoutAnimation, UIManager, ActivityIndicator,
+  Platform, Alert, Image, Dimensions, LayoutAnimation, UIManager, ActivityIndicator, Linking,
 } from 'react-native';
 import MapView, { Marker, MarkerAnimated, AnimatedRegion, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -49,6 +49,8 @@ import { RouteStep } from '../../lib/routing';
 import { CarMarker } from '../../components/common/CarMarker';
 import { PassengerMarker } from '../../components/common/PassengerMarker';
 import { usePassengerLiveLocation } from '../../hooks/usePassengerLocation';
+import { useLiveRide, rideStops, nextStopIndex } from '../../hooks/useLiveRide';
+import { waitFeeFor, WAIT_FREE_MINUTES, WAIT_FEE_PER_MINUTE } from '../../lib/fare';
 import { ExternalNavBar } from '../../components/driver/ExternalNavBar';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
@@ -139,7 +141,10 @@ function formatStepDist(meters: number): { nowKey: string } | string {
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 export function DriverNavigateScreen({ navigation, route }: Props) {
-  const { ride, initialDriverLocation } = route.params;
+  const { ride: initialRide, initialDriverLocation } = route.params;
+  // A corrida é relida durante a viagem (destino/paradas mudados pelo
+  // passageiro, chegada, espera) — ver useLiveRide.
+  const ride = useLiveRide(initialRide);
   const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
@@ -354,14 +359,23 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
 
   const origin = rideOrigin(ride);
   const dest   = rideDestination(ride);
-  const target = phase === 'pickup' ? origin : dest;
+  // Paradas (0091): no trecho com o passageiro, o alvo é a próxima parada ainda
+  // não feita; acabadas as paradas, o destino.
+  const stops = rideStops(ride);
+  const stopIdx = nextStopIndex(ride);
+  const nextStop = stopIdx >= 0 ? stops[stopIdx] : null;
+  const target = phase === 'pickup'
+    ? origin
+    : nextStop ? { lat: nextStop.lat, lng: nextStop.lng, address: nextStop.address ?? '' } : dest;
 
   // O alvo do app de FORA é lido sem o FALLBACK de src/lib/ride.ts. O `target`
   // acima já teve um eventual nulo trocado pelo centro de Orlando, o que serve
   // para desenhar o mapa e NÃO serve para navegar: o Waze não sabe que a
   // coordenada é chute e guia o motorista até lá com voz e confiança. Com o
   // valor cru, o guarda da barra pode de fato disparar e ela some.
-  const alvoBruto = phase === 'pickup' ? rideOriginOrNull(ride) : rideDestinationOrNull(ride);
+  const alvoBruto = phase === 'pickup'
+    ? rideOriginOrNull(ride)
+    : nextStop ? { lat: nextStop.lat, lng: nextStop.lng, address: nextStop.address } : rideDestinationOrNull(ride);
   const alvoExterno = { lat: alvoBruto.lat, lng: alvoBruto.lng, label: alvoBruto.address };
 
   // ── Bloco 4: card de corrida clicável/expansível ──────────────────────────
@@ -828,6 +842,17 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       setPhase('dropoff');
       // Reseta throttle para recalcular rota ao destino
       lastRouteCoord.current = null;
+      // Espera no embarque: o servidor calcula (relógio dele) e cobra à parte.
+      chargeWaitFee();
+    } else if (nextStop) {
+      const { error } = await supabase.rpc('mark_stop_done', { p_ride_id: ride.id, p_index: stopIdx });
+      if (error) {
+        setLoading(false);
+        Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+        return;
+      }
+      lastRouteCoord.current = null;
+      requestServerRoute(ride.id);
     } else {
       const ok = await updateRideStatus(ride.id, 'completed' as RideStatus);
       if (!ok) {
@@ -849,7 +874,77 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
     setLoading(false);
   }
 
-  const buttonLabel = phase === 'pickup' ? t('driverNav.pickedUpPassenger') : t('driverNav.finishRide');
+  const buttonLabel = phase === 'pickup'
+    ? t('driverNav.pickedUpPassenger')
+    : nextStop ? t('driverNav.stopDone', 'Stop completed') : t('driverNav.finishRide');
+
+  // ── Espera no embarque (0091) ─────────────────────────────────────────────
+  // "Cheguei" grava driver_arrived_at no SERVIDOR (RPC). A partir dali o
+  // contador mostra a carência de 5 min e, depois, a taxa acumulada — o valor
+  // cobrado de verdade é calculado pelo servidor ao iniciar a corrida.
+  const [arriving, setArriving] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const arrivedAtMs = ride.driver_arrived_at ? Date.parse(ride.driver_arrived_at) : null;
+  useEffect(() => {
+    if (phase !== 'pickup' || arrivedAtMs == null) return;
+    const i = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(i);
+  }, [phase, arrivedAtMs]);
+  const waitElapsedSec = arrivedAtMs != null ? Math.max(0, Math.floor((nowMs - arrivedAtMs) / 1000)) : 0;
+  const freeLeftSec = Math.max(0, WAIT_FREE_MINUTES * 60 - waitElapsedSec);
+  const waitFeeNow = arrivedAtMs != null ? waitFeeFor(arrivedAtMs, nowMs) : { minutes: 0, amount: 0 };
+  const mmss = (sec: number) => `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, '0')}`;
+
+  async function handleArrived() {
+    setArriving(true);
+    const { error } = await supabase.rpc('mark_driver_arrived', { p_ride_id: ride.id });
+    setArriving(false);
+    if (error) {
+      const tooFar = /too_far|km from pickup/i.test(`${error.message} ${(error as { hint?: string }).hint ?? ''}`);
+      Alert.alert(t('common.error'), tooFar
+        ? t('driverNav.arrivedTooFar', 'You need to be at the pickup point to mark your arrival.')
+        : t('driverNav.statusUpdateFailed'));
+      return;
+    }
+    setNowMs(Date.now());
+    supabase.functions.invoke('send-ride-push', { body: { kind: 'driver_arrived', rideId: ride.id } }).catch(() => {});
+  }
+
+  async function chargeWaitFee() {
+    for (let tentativa = 0; tentativa < 3; tentativa += 1) {
+      const { error } = await supabase.functions.invoke('charge-wait-fee', { body: { rideId: ride.id } });
+      if (!error) return;
+      await new Promise((r) => setTimeout(r, 2000 * (tentativa + 1)));
+    }
+  }
+
+  // ── Ligar para o passageiro ───────────────────────────────────────────────
+  async function callPassenger() {
+    const { data, error } = await supabase.rpc('ride_contact_phone', { p_ride_id: ride.id });
+    const phone = typeof data === 'string' ? data.replace(/[^\d+]/g, '') : '';
+    if (error || !phone) {
+      Alert.alert(t('driverNav.callUnavailableTitle', 'Call unavailable'), t('driverNav.callUnavailableMsg', 'This passenger has no phone number on file. Use the chat.'));
+      return;
+    }
+    Linking.openURL(`tel:${phone}`).catch(() => {
+      Alert.alert(t('driverNav.callUnavailableTitle', 'Call unavailable'), phone);
+    });
+  }
+
+  // ── Mudança de rota pelo passageiro ───────────────────────────────────────
+  const routeChangesRef = useRef(ride.route_change_count ?? 0);
+  useEffect(() => {
+    const n = ride.route_change_count ?? 0;
+    if (n <= routeChangesRef.current) return;
+    routeChangesRef.current = n;
+    lastRouteCoord.current = null;
+    requestServerRoute(ride.id);
+    Alert.alert(
+      t('driverNav.routeChangedTitle', 'Route updated'),
+      t('driverNav.routeChangedMsg', 'The passenger changed the route. Navigation now follows the new stops/destination.'),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ride.route_change_count]);
 
   // ── Painel reduzido pós-aceite: cronômetro da corrida + velocidade atual ──
   // Marca o início no momento em que a corrida foi aceita (accepted_at); se por
@@ -1236,6 +1331,24 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
       >
         <Text style={styles.chatIcon}>💬</Text>
       </TouchableOpacity>
+      {/* Saída da navegação SEM encerrar a corrida: o motorista consulta o que
+          precisar e volta pela pílula "Voltar à corrida" (ReturnToRideBar). */}
+      <TouchableOpacity
+        style={[styles.chatBtn, styles.menuBtn]}
+        onPress={() => navigation.navigate('DriverTabs')}
+        accessibilityLabel={t('driverNav.menu', 'Menu')}
+      >
+        <Text style={styles.chatIcon}>☰</Text>
+      </TouchableOpacity>
+      {phase === 'pickup' && (
+        <TouchableOpacity
+          style={[styles.chatBtn, styles.callBtn]}
+          onPress={callPassenger}
+          accessibilityLabel={t('driverNav.callPassenger', 'Call passenger')}
+        >
+          <Text style={styles.chatIcon}>📞</Text>
+        </TouchableOpacity>
+      )}
       </View>
 
       {/* ── Banner de instrução de navegação ── */}
@@ -1370,6 +1483,36 @@ export function DriverNavigateScreen({ navigation, route }: Props) {
             o motorista sai para o outro app e volta com o estado intacto. */}
         <FlightInfoLine ride={ride} style={{ marginBottom: 8 }} />
 
+        {phase === 'pickup' && arrivedAtMs == null && (
+          <TouchableOpacity style={styles.arrivedBtn} onPress={handleArrived} disabled={arriving}>
+            {arriving
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Text style={styles.arrivedBtnText}>📍 {t('driverNav.imHere', "I've arrived")}</Text>}
+          </TouchableOpacity>
+        )}
+        {phase === 'pickup' && arrivedAtMs != null && (
+          <View style={styles.waitBox}>
+            <Text style={styles.waitText}>
+              {freeLeftSec > 0
+                ? `⏱️ ${t('driverNav.waitFree', 'Free waiting time')}: ${mmss(freeLeftSec)}`
+                : `⏱️ ${t('driverNav.waitPaid', 'Paid waiting')}: ${waitFeeNow.minutes} min · ${formatCurrency(waitFeeNow.amount)}`}
+            </Text>
+            <Text style={styles.waitSub}>
+              {t('driverNav.waitRule', 'After {free} min, {rate}/min is added until the ride starts.')
+                .replace('{free}', String(WAIT_FREE_MINUTES))
+                .replace('{rate}', formatCurrency(WAIT_FEE_PER_MINUTE))}
+            </Text>
+          </View>
+        )}
+        {phase === 'dropoff' && nextStop && (
+          <View style={styles.waitBox}>
+            <Text style={styles.waitText} numberOfLines={2}>
+              🛑 {t('driverNav.nextStop', 'Stop {n} of {total}')
+                .replace('{n}', String(stopIdx + 1)).replace('{total}', String(stops.length))}: {nextStop.address ?? ''}
+            </Text>
+          </View>
+        )}
+
         <ExternalNavBar
           target={alvoExterno}
         />
@@ -1455,6 +1598,26 @@ function makeStyles(colors: AppTheme) {
       elevation: 5,
     },
     chatIcon: { fontSize: 20 },
+    callBtn: { bottom: 124 },
+    menuBtn: { bottom: 70 },
+    arrivedBtn: {
+      borderWidth: 2,
+      borderColor: colors.accent,
+      borderRadius: 12,
+      paddingVertical: 12,
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    arrivedBtnText: { color: colors.text, fontWeight: '800', fontSize: 16 },
+    waitBox: {
+      backgroundColor: colors.gray[100],
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      marginBottom: 8,
+    },
+    waitText: { color: colors.text, fontWeight: '700', fontSize: 15 },
+    waitSub: { color: colors.gray[500], fontSize: 12, marginTop: 2 },
 
     // Instruction banner
     instructionBanner: {

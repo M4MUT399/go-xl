@@ -95,6 +95,10 @@ jest.mock('../../../lib/nav/backgroundLocationTask', () => ({
   stopDriverBackgroundLocation: () => Promise.resolve(),
   releaseRideBackgroundLocation: () => Promise.resolve(),
 }));
+jest.mock('../../../hooks/useLiveRide', () => ({
+  ...jest.requireActual('../../../hooks/useLiveRide'),
+  useLiveRide: (r: unknown) => r,
+}));
 jest.mock('../../../hooks/usePassengerLocation', () => ({
   usePassengerLiveLocation: () => null,
 }));

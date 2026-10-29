@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView, Share, ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView, Share, ActivityIndicator, Linking,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,6 +33,8 @@ import { nearestPointOnPath, splitPathAtSnap, fromMapCoord, toMapCoord } from '.
 import { parseSharedRoute } from '../../lib/nav/sharedRoute';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { useTranslation } from '../../i18n';
+import { waitFeeFor, WAIT_FREE_MINUTES, WAIT_FEE_PER_MINUTE } from '../../lib/fare';
+import { rideStops } from '../../hooks/useLiveRide';
 import { notifyInApp } from '../../lib/inAppNotify';
 
 type Props = {
@@ -404,6 +406,30 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
   const origin = rideOrigin(ride);
   const dest = rideDestination(ride);
+  const pendingStops = rideStops(ride).filter((s) => !s.done_at);
+
+  // ── Espera no embarque (0091): contador espelhado do motorista ───────────
+  const arrivedAtMs = ride.driver_arrived_at ? Date.parse(ride.driver_arrived_at) : null;
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    if (arrivedAtMs == null || ride.status === 'in_progress') return;
+    const i = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(i);
+  }, [arrivedAtMs, ride.status]);
+  const freeLeftSec = arrivedAtMs != null
+    ? Math.max(0, WAIT_FREE_MINUTES * 60 - Math.floor((nowMs - arrivedAtMs) / 1000)) : 0;
+  const waitNow = waitFeeFor(arrivedAtMs, nowMs);
+  const mmss = (sec: number) => `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, '0')}`;
+
+  async function callDriver() {
+    const { data, error } = await supabase.rpc('ride_contact_phone', { p_ride_id: ride.id });
+    const phone = typeof data === 'string' ? data.replace(/[^\d+]/g, '') : '';
+    if (error || !phone) {
+      Alert.alert(t('activeRide.callUnavailableTitle', 'Call unavailable'), t('activeRide.callUnavailableMsg', 'Use the chat to talk to your driver.'));
+      return;
+    }
+    Linking.openURL(`tel:${phone}`).catch(() => {});
+  }
 
   // ── Bloco 3 (paridade Uber): ROTA ÚNICA calculada no servidor ────────────────
   // Sob a flag `shared_route_v1`, a corrida traz a rota já pronta em
@@ -612,6 +638,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         <Marker coordinate={{ latitude: dest.lat, longitude: dest.lng }}>
           <View style={styles.markerDest} />
         </Marker>
+        {pendingStops.map((s, i) => (
+          <Marker key={`stop-${i}`} coordinate={{ latitude: s.lat, longitude: s.lng }} title={s.address}>
+            <View style={styles.markerStop} />
+          </Marker>
+        ))}
         {driverLoc && smoothMarkerEnabled && driverFix && (
           <SmoothMarker fix={driverFix} route={smoothRoute} anchor={{ x: 0.5, y: 0.5 }}>
             {(heading) => <CarMarker scale={0.75} heading={heading} />}
@@ -640,6 +671,15 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         )}
       </MapView>
 
+      {/* Saída SEM encerrar a corrida: o passageiro usa o app (ex.: agendar a
+          próxima viagem) e volta pelo aviso "corrida em andamento" da Home. */}
+      <TouchableOpacity
+        style={[styles.recenterBtn, styles.menuBtn]}
+        onPress={() => navigation.navigate('PassengerTabs')}
+        accessibilityLabel={t('activeRide.menu', 'Menu')}
+      >
+        <Text style={styles.recenterIcon}>☰</Text>
+      </TouchableOpacity>
       {driverLoc && (
         <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
           <Text style={styles.recenterIcon}>◎</Text>
@@ -747,8 +787,42 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             >
               <Text style={styles.actionIcon}>💬</Text>
             </TouchableOpacity>
+            {/* Desde 0091 existe para onde ligar: ride_contact_phone devolve o
+                número da OUTRA parte, só enquanto a corrida está ativa. */}
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={callDriver}
+              accessibilityLabel={t('activeRide.callDriver', 'Call driver')}
+            >
+              <Text style={styles.actionIcon}>📞</Text>
+            </TouchableOpacity>
           </View>
         </View>
+
+        {arrivedAtMs != null && ride.status !== 'in_progress' && (
+          <View style={styles.arrivedBox}>
+            <Text style={styles.arrivedTitle}>📍 {t('activeRide.driverArrived', 'Your driver has arrived')}</Text>
+            <Text style={styles.arrivedSub}>
+              {freeLeftSec > 0
+                ? t('activeRide.waitFreeLeft', 'Free waiting time left: {time}').replace('{time}', mmss(freeLeftSec))
+                : t('activeRide.waitFeeRunning', 'Waiting fee: {amount} ({min} min)')
+                    .replace('{amount}', formatCurrency(waitNow.amount)).replace('{min}', String(waitNow.minutes))}
+            </Text>
+            <Text style={styles.arrivedRule}>
+              {t('activeRide.waitRule', 'After {free} free minutes, {rate}/min is added until the ride starts.')
+                .replace('{free}', String(WAIT_FREE_MINUTES)).replace('{rate}', formatCurrency(WAIT_FEE_PER_MINUTE))}
+            </Text>
+          </View>
+        )}
+
+        {(ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress') && (
+          <TouchableOpacity style={styles.editRouteBtn} onPress={() => navigation.navigate('EditRoute', { ride })}>
+            <Text style={styles.editRouteText}>
+              🗺️ {t('activeRide.editRoute', 'Change destination / add stop')}
+              {pendingStops.length > 0 ? `  ·  ${pendingStops.length} ${t('activeRide.stopsCount', 'stop(s)')}` : ''}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {vehicle && (
           <Text style={styles.vehicleLabel}>{vehicle.model} • {vehicle.color}</Text>
@@ -803,6 +877,20 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
+    arrivedBox: {
+      backgroundColor: colors.gray[100], borderRadius: 12, padding: 12, marginTop: 12,
+      borderWidth: 1, borderColor: colors.accent,
+    },
+    arrivedTitle: { color: colors.text, fontWeight: '800', fontSize: 16 },
+    arrivedSub: { color: colors.text, fontSize: 15, marginTop: 4, fontWeight: '600' },
+    arrivedRule: { color: colors.gray[500], fontSize: 12, marginTop: 4 },
+    menuBtn: { left: 16, right: undefined },
+    editRouteBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 8 },
+    editRouteText: { color: colors.accent, fontWeight: '800', fontSize: 15 },
+    markerStop: {
+      width: 14, height: 14, borderRadius: 3, backgroundColor: colors.accent,
+      borderWidth: 2, borderColor: '#FFFFFF',
+    },
     container: { flex: 1 },
     mapArea: { flex: 1 },
     map: { flex: 1 },

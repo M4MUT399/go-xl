@@ -51,6 +51,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 // carregadas sob demanda via getComponent, para não pesar o bundle inicial.
 import { DriverRideProvider } from '../contexts/DriverRideContext';
 import { GlobalDriverRideOverlay } from '../components/driver/GlobalDriverRideOverlay';
+import { ReturnToRideBar } from '../components/driver/ReturnToRideBar';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -621,6 +622,7 @@ export function AppNavigator() {
               <Stack.Screen name="CompleteRegistration" component={CompleteRegistrationScreen} />
               <Stack.Screen name="FindingDriver" component={FindingDriverScreen} />
               <Stack.Screen name="ActiveRide" component={ActiveRideScreen} />
+              <Stack.Screen name="EditRoute" getComponent={() => require('../screens/passenger/EditRouteScreen').EditRouteScreen} />
               <Stack.Screen name="RateRide" component={RateRideScreen} />
               <Stack.Screen name="ScheduledRides" component={ScheduledRidesScreen} />
               <Stack.Screen name="TripDetails" getComponent={() => require('../screens/passenger/TripDetailsScreen').TripDetailsScreen} />
@@ -654,6 +656,7 @@ export function AppNavigator() {
         // como irmão dela, para nunca ser "congelado" por react-native-screens.
         <DriverRideProvider>
           {navigatorContent}
+          <ReturnToRideBar />
           <GlobalDriverRideOverlay />
         </DriverRideProvider>
       ) : (

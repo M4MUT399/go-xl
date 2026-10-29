@@ -77,7 +77,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { location } = useLocation();
-  const { requestRide, scheduleRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
+  const { requestRide, scheduleRide, activeRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
+  // Com uma corrida em andamento só dá para AGENDAR outra (não pedir agora).
+  const hasRideInProgress = !!activeRide && activeRide.status !== 'scheduled';
 
   const styles = makeStyles(colors);
 
@@ -91,6 +93,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   // A sugestão que virou o destino — guarda nome e tipos da Google, que é o
   // que diz se a corrida é para aeroporto.
   const [destPlace, setDestPlace] = useState<PlaceSuggestion | null>(null);
+  const [originPlace, setOriginPlace] = useState<PlaceSuggestion | null>(null);
   const [flightNumber, setFlightNumber] = useState('');
   const [airportTerminal, setAirportTerminal] = useState('');
   const [wideDest, setWideDest] = useState<{ q: string; list: PlaceSuggestion[] } | null>(null);
@@ -238,6 +241,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
     if (campo === 'origin') {
       setSelectedOrigin({ ...ponto, address: s.address });
+      setOriginPlace(s);
       setOriginText(s.shortName);
       setActiveField('destination');
     } else {
@@ -253,8 +257,22 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const effectiveOrigin: Location | null = selectedOrigin
     ?? (location ? { lat: location.lat, lng: location.lng, address: originAddress } : null);
 
-  // ── Corrida para aeroporto: voo + terminal obrigatórios ────────────────────
-  const airport = useMemo(() => {
+  // ── Corrida com aeroporto: voo + terminal obrigatórios ─────────────────────
+  // Vale para o DESTINO (deixar no terminal certo) e, desde 29/10/2026, também
+  // para o EMBARQUE no aeroporto (o motorista buscar no terminal certo e
+  // acompanhar o voo) — pedido imediato ou agendado. Se as duas pontas forem
+  // aeroporto, vale o embarque: é ali que o motorista precisa achar alguém.
+  const pickupAirport = useMemo(() => {
+    if (!effectiveOrigin) return null;
+    return detectAirport({
+      name: selectedOrigin ? originPlace?.shortName ?? '' : '',
+      address: effectiveOrigin.address ?? '',
+      types: selectedOrigin ? originPlace?.types : undefined,
+      lat: effectiveOrigin.lat,
+      lng: effectiveOrigin.lng,
+    });
+  }, [effectiveOrigin?.lat, effectiveOrigin?.lng, effectiveOrigin?.address, selectedOrigin, originPlace]);
+  const dropoffAirport = useMemo(() => {
     if (!selectedDest) return null;
     return detectAirport({
       name: destPlace?.shortName ?? '',
@@ -264,13 +282,16 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       lng: selectedDest.lng,
     });
   }, [selectedDest, destPlace]);
+  const airport = pickupAirport ?? dropoffAirport;
+  const airportIsPickup = !!pickupAirport;
+  const airportPlaceName = airportIsPickup ? originPlace?.shortName ?? '' : destPlace?.shortName ?? '';
 
   // Trocou de aeroporto (ou deixou de ser aeroporto): o terminal anterior não
   // vale mais. Pré-escolhe quando o nome do lugar já diz ("Terminal C") ou
   // quando o aeroporto só tem um.
   useEffect(() => {
-    setAirportTerminal(airport ? guessTerminal(airport, destPlace?.shortName ?? '') : '');
-  }, [airport?.code, airport?.name]);
+    setAirportTerminal(airport ? guessTerminal(airport, airportPlaceName) : '');
+  }, [airport?.code, airport?.name, airportIsPickup]);
 
   /** Mensagem do que falta no voo, ou null quando está tudo certo / não é aeroporto. */
   function flightProblem(): string | null {
@@ -344,6 +365,13 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   }, [selectedDest, selectedOrigin, location?.lat, location?.lng]);
 
   async function handleRequest() {
+    if (hasRideInProgress) {
+      Alert.alert(
+        t('requestRide.rideInProgressTitle', 'You have a ride in progress'),
+        t('requestRide.rideInProgressMsg', 'You can schedule a new ride now. To ride right away, finish the current one first.'),
+      );
+      return;
+    }
     if (!selectedDest) {
       Alert.alert(t('requestRide.attentionTitle'), t('requestRide.selectDestination'));
       return;
@@ -626,7 +654,9 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
               {airport && (
                 <View style={styles.flightBox}>
                   <Text style={styles.flightTitle}>{t('requestRide.flightTitle')}</Text>
-                  <Text style={styles.flightSub}>{t('requestRide.flightSub')}</Text>
+                  <Text style={styles.flightSub}>
+                    {t(airportIsPickup ? 'requestRide.flightSubPickup' : 'requestRide.flightSub')}
+                  </Text>
                   <Text style={styles.flightLabel}>{t('requestRide.flightNumber')}</Text>
                   <TextInput
                     style={[

@@ -325,6 +325,19 @@ export function HomeScreen({ navigation }: Props) {
                   <Text style={styles.searchArrowText}>→</Text>
                 </View>
               </TouchableOpacity>
+              {/* Com a corrida em andamento o passageiro continua podendo
+                  AGENDAR outra viagem (29/10/2026) — antes a busca sumia. */}
+              <TouchableOpacity
+                style={[styles.searchBox, { marginTop: 10 }]}
+                onPress={handleSearchFocus}
+                activeOpacity={0.9}
+              >
+                <View style={styles.originDot} />
+                <Text style={styles.searchPlaceholder}>{t('home.scheduleAnother', 'Schedule another ride')}</Text>
+                <View style={styles.searchArrow}>
+                  <Text style={styles.searchArrowText}>→</Text>
+                </View>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.searchContainer}>
