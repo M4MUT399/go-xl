@@ -151,11 +151,34 @@ async function main() {
     throw new Error('Passageiro está sem cartão salvo — não há como cobrar por aqui.');
   }
 
-  let cartao = '⟨não consegui ler o cartão⟩';
+  // O motivo da falha aparece. Antes este `catch` era vazio, e a linha do
+  // cartão dizia só "não consegui ler" — o que some com a informação exatamente
+  // no momento em que ela decide se vale tentar cobrar. Se o Stripe não devolve
+  // o método de pagamento com ESTA chave, a cobrança com o mesmo método e a
+  // mesma chave tende a falhar também; e uma tentativa que falha pode prender a
+  // chave de idempotência `charge_<rideId>` por 24h, bloqueando a retentativa.
+  //
+  // A causa mais comum é chave de modo trocado: um `pm_...` criado em live não
+  // é legível por uma `sk_test_`, e vice-versa. A mensagem do Stripe diz qual é.
+  let cartao = '⟨não consegui ler o método de pagamento⟩';
   try {
     const pm = await stripe.paymentMethods.retrieve(p.stripe_payment_method_id);
-    if (pm.card) cartao = `${pm.card.brand} •••• ${pm.card.last4} (val. ${pm.card.exp_month}/${pm.card.exp_year})`;
-  } catch { /* segue sem o detalhe do cartão */ }
+    if (pm.card) {
+      cartao = `${pm.card.brand} •••• ${pm.card.last4} (val. ${pm.card.exp_month}/${pm.card.exp_year})`;
+    } else {
+      // O `retrieve` deu CERTO e mesmo assim não há cartão: o método é de outro
+      // tipo (`link`, `us_bank_account`, …). A versão anterior caía no texto
+      // padrão e dizia "não consegui ler o cartão", o que manda quem lê procurar
+      // falha de permissão ou chave trocada — e não há falha nenhuma. Uma
+      // mensagem que descreve o desfecho errado custa mais caro que a ausência
+      // dela: foi o que aconteceu com a corrida da Jennifer Newton.
+      cartao = `tipo "${pm.type}" — NÃO é cartão`
+        + `\n               (a cobrança off_session pode exigir tratamento próprio para este tipo)`;
+    }
+  } catch (e) {
+    const motivo = e instanceof Error ? e.message : String(e);
+    cartao = `⟨não consegui ler o método de pagamento⟩\n               motivo: ${motivo}`;
+  }
 
   line();
   line(`passageiro ... ${p.full_name ?? nameOf.get(ride.passenger_id) ?? '—'}`);

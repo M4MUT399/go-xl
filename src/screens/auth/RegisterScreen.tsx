@@ -38,7 +38,7 @@ export function RegisterScreen({ navigation, route }: Props) {
 
   function chooseLang(l: Lang) {
     setSelectedLang(l);
-    setLang(l); // aplica imediatamente a tradução na tela
+    setLang(l, { explicit: true }); // aplica imediatamente a tradução na tela
   }
 
   async function handleRegister() {

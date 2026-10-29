@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
   TextInput, ScrollView, Alert, ActivityIndicator, Modal, Platform,
@@ -22,7 +22,13 @@ import { estimateAirportFees } from '../../lib/airportFees';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { useDebounce } from '../../hooks/useDebounce';
 import { useRoute } from '../../hooks/useRoute';
-import { searchAddresses, reverseGeocode, GeocodeResult } from '../../lib/geocoding';
+import {
+  searchPlaces, searchPlacesWide, mergeSuggestions, resolvePlace, reverseGeocode,
+  newSessionToken, PlaceSuggestion,
+} from '../../lib/geocoding';
+import {
+  detectAirport, guessTerminal, isValidFlightNumber, formatFlightNumber,
+} from '../../lib/airportTrip';
 import { hasPaymentCard, isProfileComplete } from '../../lib/onboarding';
 import { useTranslation } from '../../i18n';
 
@@ -31,13 +37,49 @@ type Props = {
   route: RouteProp<RootStackParamList, 'RequestRide'>;
 };
 
+// A régua do autocomplete é 300 ms do último toque até a lista na tela, e o
+// resto desse orçamento é rede (Edge Function `places-search` → Google). Um
+// debounce que sozinho estoura os 300 ms torna o critério inalcançável por
+// melhor que esteja a rede — era o caso do valor anterior, 450 ms. Baixar só
+// não custa a conta porque a busca é cobrada por SESSÃO (ver `newSessionToken`
+// em lib/geocoding): as teclas de uma mesma busca entram na mesma sessão.
+const AUTOCOMPLETE_DEBOUNCE_MS = 150;
+
+// Busca ampla (Text Search): pega hotel, clínica, consultório, loja pelo nome
+// — o que o autocomplete (máx. 5 predições, focado em endereço) deixa de fora.
+// É cobrada por chamada, então só sai quando a digitação assenta.
+const WIDE_SEARCH_DEBOUNCE_MS = 600;
+
+/**
+ * Lista exibida = autocomplete (rápido) + busca ampla (quando já chegou para o
+ * MESMO texto). Se a ampla trouxe lugares da Google, as linhas do fallback
+ * Nominatim saem — elas só existem porque o autocomplete veio vazio.
+ */
+function combinedList(
+  quick: PlaceSuggestion[],
+  wide: { q: string; list: PlaceSuggestion[] } | null,
+  query: string,
+): PlaceSuggestion[] {
+  if (!wide || wide.q !== query.trim()) return quick;
+  const wideHasGoogle = wide.list.some((w) => !!w.placeId);
+  const base = wideHasGoogle ? quick.filter((r) => !!r.placeId) : quick;
+  return mergeSuggestions(base, wide.list);
+}
+
+// O fallback Nominatim não tem placeId; o endereço é o que resta de estável.
+function rowKey(s: PlaceSuggestion): string {
+  return s.placeId || s.address;
+}
+
 export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const { t } = useTranslation();
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { location } = useLocation();
-  const { requestRide, scheduleRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
+  const { requestRide, scheduleRide, activeRide } = usePassengerRide(profile?.id, profile?.jurisdiction);
+  // Com uma corrida em andamento só dá para AGENDAR outra (não pedir agora).
+  const hasRideInProgress = !!activeRide && activeRide.status !== 'scheduled';
 
   const styles = makeStyles(colors);
 
@@ -45,18 +87,33 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const lockedDriverName = screenRoute.params?.lockedDriverName;
   // 1ª corrida expressa (via QR): liberada só com cartão, sem cadastro completo.
   const isExpressFirstRide = screenRoute.params?.express === true;
+  // Aberta pela agenda ("＋ Agendar corrida"): só agendamento, sem "pedir agora".
+  const scheduleOnly = screenRoute.params?.scheduleOnly === true;
 
   const [destinationText, setDestinationText] = useState('');
   const [selectedDest, setSelectedDest] = useState<Location | null>(null);
-  const [results, setResults] = useState<GeocodeResult[]>([]);
+  // A sugestão que virou o destino — guarda nome e tipos da Google, que é o
+  // que diz se a corrida é para aeroporto.
+  const [destPlace, setDestPlace] = useState<PlaceSuggestion | null>(null);
+  const [originPlace, setOriginPlace] = useState<PlaceSuggestion | null>(null);
+  const [flightNumber, setFlightNumber] = useState('');
+  const [airportTerminal, setAirportTerminal] = useState('');
+  const [wideDest, setWideDest] = useState<{ q: string; list: PlaceSuggestion[] } | null>(null);
+  const [wideOrigin, setWideOrigin] = useState<{ q: string; list: PlaceSuggestion[] } | null>(null);
+  const [wideDestSearching, setWideDestSearching] = useState(false);
+  const [wideOriginSearching, setWideOriginSearching] = useState(false);
+  const [results, setResults] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   // Endereço da localização GPS atual (reverse geocode). É o embarque padrão,
   // mas o passageiro pode sobrepor escolhendo outro ponto (selectedOrigin).
   const [originAddress, setOriginAddress] = useState(t('requestRide.currentLocation'));
   const [originText, setOriginText] = useState('');
   const [selectedOrigin, setSelectedOrigin] = useState<Location | null>(null);
-  const [originResults, setOriginResults] = useState<GeocodeResult[]>([]);
+  const [originResults, setOriginResults] = useState<PlaceSuggestion[]>([]);
   const [originSearching, setOriginSearching] = useState(false);
+  // Sugestão em que o passageiro tocou e que ainda está virando coordenada.
+  // Sem isto o toque fica sem resposta durante o `resolvePlace`.
+  const [resolvingPlaceId, setResolvingPlaceId] = useState<string | null>(null);
   // Qual campo está sendo editado agora — controla qual lista de sugestões
   // aparece embaixo. Começa em 'destination' pra manter o fluxo atual (o
   // passageiro já cai digitando o destino).
@@ -71,8 +128,16 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   const [tollAmount, setTollAmount] = useState<number>(0);
   const [venueFee, setVenueFee] = useState<number>(0);
 
-  const debouncedQuery = useDebounce(destinationText, 450);
-  const debouncedOriginQuery = useDebounce(originText, 450);
+  const debouncedQuery = useDebounce(destinationText, AUTOCOMPLETE_DEBOUNCE_MS);
+  const debouncedOriginQuery = useDebounce(originText, AUTOCOMPLETE_DEBOUNCE_MS);
+  const wideDestQuery = useDebounce(destinationText, WIDE_SEARCH_DEBOUNCE_MS);
+  const wideOriginQuery = useDebounce(originText, WIDE_SEARCH_DEBOUNCE_MS);
+
+  // Uma sessão de cobrança por campo, porque são duas buscas independentes.
+  // Cada uma vive até o `resolvePlace` que fecha a escolha e é trocada logo
+  // depois: token reusado depois de fechado volta a ser cobrado por tecla.
+  const destSessionRef = useRef(newSessionToken());
+  const originSessionRef = useRef(newSessionToken());
 
   useEffect(() => {
     if (location) {
@@ -89,7 +154,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     }
     let cancelled = false;
     setSearching(true);
-    searchAddresses(debouncedQuery, location ?? undefined).then((res) => {
+    searchPlaces(debouncedQuery, destSessionRef.current, location ?? undefined).then((res) => {
       if (!cancelled) {
         setResults(res);
         setSearching(false);
@@ -106,7 +171,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     }
     let cancelled = false;
     setOriginSearching(true);
-    searchAddresses(debouncedOriginQuery, location ?? undefined).then((res) => {
+    searchPlaces(debouncedOriginQuery, originSessionRef.current, location ?? undefined).then((res) => {
       if (!cancelled) {
         setOriginResults(res);
         setOriginSearching(false);
@@ -115,10 +180,132 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
     return () => { cancelled = true; };
   }, [debouncedOriginQuery, selectedOrigin, location?.lat, location?.lng]);
 
+  // Busca ampla do destino — sai quando a digitação assenta e soma à lista.
+  useEffect(() => {
+    const q = wideDestQuery.trim();
+    if (selectedDest || q.length < 3) {
+      setWideDest(null);
+      setWideDestSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setWideDestSearching(true);
+    searchPlacesWide(q, destSessionRef.current, location ?? undefined).then((list) => {
+      if (!cancelled) {
+        setWideDest({ q, list });
+        setWideDestSearching(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [wideDestQuery, selectedDest, location?.lat, location?.lng]);
+
+  // Busca ampla do embarque — mesmo padrão.
+  useEffect(() => {
+    const q = wideOriginQuery.trim();
+    if (selectedOrigin || q.length < 3) {
+      setWideOrigin(null);
+      setWideOriginSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setWideOriginSearching(true);
+    searchPlacesWide(q, originSessionRef.current, location ?? undefined).then((list) => {
+      if (!cancelled) {
+        setWideOrigin({ q, list });
+        setWideOriginSearching(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [wideOriginQuery, selectedOrigin, location?.lat, location?.lng]);
+
+  const destList = combinedList(results, wideDest, debouncedQuery);
+  const originList = combinedList(originResults, wideOrigin, debouncedOriginQuery);
+  // "Nenhum endereço" só depois que as DUAS buscas responderam — antes disso a
+  // ampla ainda pode achar o hotel/clínica que o autocomplete não achou.
+  const destStillSearching = searching || wideDestSearching || destinationText !== wideDestQuery;
+  const originStillSearching = originSearching || wideOriginSearching || originText !== wideOriginQuery;
+
+  // Escolher a sugestão virou uma espera: a predição do autocomplete não traz
+  // coordenada, ela só chega no `resolvePlace`. Se falhar, o passageiro precisa
+  // saber — um toque que não faz nada é pior do que um aviso.
+  async function escolherSugestao(s: PlaceSuggestion, campo: 'origin' | 'destination') {
+    const sessao = campo === 'origin' ? originSessionRef : destSessionRef;
+    setResolvingPlaceId(rowKey(s));
+    const ponto = await resolvePlace(s, sessao.current);
+    setResolvingPlaceId(null);
+
+    if (!ponto) {
+      Alert.alert(t('requestRide.errorTitle'), t('payment.genericError'));
+      return;
+    }
+    // Sessão fechada na Google — a próxima busca precisa de token novo.
+    sessao.current = newSessionToken();
+
+    if (campo === 'origin') {
+      setSelectedOrigin({ ...ponto, address: s.address });
+      setOriginPlace(s);
+      setOriginText(s.shortName);
+      setActiveField('destination');
+    } else {
+      setSelectedDest({ ...ponto, address: s.address });
+      setDestPlace(s);
+      setDestinationText(s.shortName);
+      Keyboard.dismiss();
+    }
+  }
+
   // Embarque efetivo: usa o ponto escolhido manualmente pelo passageiro
   // (selectedOrigin) ou, por padrão, a localização GPS atual.
   const effectiveOrigin: Location | null = selectedOrigin
     ?? (location ? { lat: location.lat, lng: location.lng, address: originAddress } : null);
+
+  // ── Corrida com aeroporto: voo + terminal obrigatórios ─────────────────────
+  // Vale para o DESTINO (deixar no terminal certo) e, desde 29/10/2026, também
+  // para o EMBARQUE no aeroporto (o motorista buscar no terminal certo e
+  // acompanhar o voo) — pedido imediato ou agendado. Se as duas pontas forem
+  // aeroporto, vale o embarque: é ali que o motorista precisa achar alguém.
+  const pickupAirport = useMemo(() => {
+    if (!effectiveOrigin) return null;
+    return detectAirport({
+      name: selectedOrigin ? originPlace?.shortName ?? '' : '',
+      address: effectiveOrigin.address ?? '',
+      types: selectedOrigin ? originPlace?.types : undefined,
+      lat: effectiveOrigin.lat,
+      lng: effectiveOrigin.lng,
+    });
+  }, [effectiveOrigin?.lat, effectiveOrigin?.lng, effectiveOrigin?.address, selectedOrigin, originPlace]);
+  const dropoffAirport = useMemo(() => {
+    if (!selectedDest) return null;
+    return detectAirport({
+      name: destPlace?.shortName ?? '',
+      address: selectedDest.address,
+      types: destPlace?.types,
+      lat: selectedDest.lat,
+      lng: selectedDest.lng,
+    });
+  }, [selectedDest, destPlace]);
+  const airport = pickupAirport ?? dropoffAirport;
+  const airportIsPickup = !!pickupAirport;
+  const airportPlaceName = airportIsPickup ? originPlace?.shortName ?? '' : destPlace?.shortName ?? '';
+
+  // Trocou de aeroporto (ou deixou de ser aeroporto): o terminal anterior não
+  // vale mais. Pré-escolhe quando o nome do lugar já diz ("Terminal C") ou
+  // quando o aeroporto só tem um.
+  useEffect(() => {
+    setAirportTerminal(airport ? guessTerminal(airport, airportPlaceName) : '');
+  }, [airport?.code, airport?.name, airportIsPickup]);
+
+  /** Mensagem do que falta no voo, ou null quando está tudo certo / não é aeroporto. */
+  function flightProblem(): string | null {
+    if (!airport) return null;
+    if (!flightNumber.trim() || !airportTerminal.trim()) return t('requestRide.flightRequired');
+    if (!isValidFlightNumber(flightNumber)) return t('requestRide.flightInvalid');
+    return null;
+  }
+
+  const flightOption = airport
+    ? { flight: { number: flightNumber, terminal: airportTerminal } }
+    : {};
 
   const { route } = useRoute(
     effectiveOrigin ? { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng } : null,
@@ -180,6 +367,13 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   }, [selectedDest, selectedOrigin, location?.lat, location?.lng]);
 
   async function handleRequest() {
+    if (hasRideInProgress) {
+      Alert.alert(
+        t('requestRide.rideInProgressTitle', 'You have a ride in progress'),
+        t('requestRide.rideInProgressMsg', 'You can schedule a new ride now. To ride right away, finish the current one first.'),
+      );
+      return;
+    }
     if (!selectedDest) {
       Alert.alert(t('requestRide.attentionTitle'), t('requestRide.selectDestination'));
       return;
@@ -189,6 +383,11 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
         t('requestRide.locationUnavailableTitle'),
         t('requestRide.locationUnavailableMessage'),
       );
+      return;
+    }
+    const faltaVoo = flightProblem();
+    if (faltaVoo) {
+      Alert.alert(t('requestRide.attentionTitle'), faltaVoo);
       return;
     }
     // Gate de cartão: toda corrida precisa de um cartão salvo. Envia para a
@@ -209,7 +408,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       origin,
       selectedDest,
       route ? { distanceKm: route.distanceKm, durationMin: route.durationMin } : undefined,
-      lockedDriverId ? { lockedDriverId } : undefined
+      { ...(lockedDriverId ? { lockedDriverId } : {}), ...flightOption }
     );
     setLoading(false);
     if (ride) {
@@ -221,6 +420,11 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
   }
 
   function openScheduler() {
+    const faltaVoo = flightProblem();
+    if (faltaVoo) {
+      Alert.alert(t('requestRide.attentionTitle'), faltaVoo);
+      return;
+    }
     setScheduledDate(new Date(Date.now() + 30 * 60 * 1000));
     setShowPicker(true);
   }
@@ -247,6 +451,12 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
 
   async function confirmSchedule() {
     if (!selectedDest || !effectiveOrigin) return;
+    const faltaVoo = flightProblem();
+    if (faltaVoo) {
+      setShowPicker(false);
+      Alert.alert(t('requestRide.attentionTitle'), faltaVoo);
+      return;
+    }
     if (scheduledDate.getTime() < Date.now() + 30 * 60 * 1000) {
       Alert.alert(t('requestRide.attentionTitle'), t('requestRide.scheduleMinAdvance'));
       return;
@@ -270,10 +480,17 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       selectedDest,
       scheduledDate,
       route ? { distanceKm: route.distanceKm, durationMin: route.durationMin } : undefined,
-      lockedDriverId ? { lockedDriverId } : undefined
+      { ...(lockedDriverId ? { lockedDriverId } : {}), ...flightOption }
     );
     setLoading(false);
     setShowPicker(false);
+    // Sobreposição com um agendamento que ele já tem. NÃO é "não foi possível
+    // agendar": vários agendamentos são permitidos, e dizer o motivo é a
+    // diferença entre o passageiro trocar o horário e concluir que o app quebrou.
+    if (ride === 'conflict') {
+      Alert.alert(t('requestRide.attentionTitle'), t('requestRide.scheduleConflictMessage'));
+      return;
+    }
     if (ride) {
       Alert.alert(
         t('requestRide.scheduleSuccessTitle'),
@@ -388,6 +605,7 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
             </View>
           </View>
 
+          <ScrollView style={styles.suggestionList} keyboardShouldPersistTaps="handled">
           {selectedDest && (
             <View style={styles.estimateCard}>
               {/* Linha de preço / loading */}
@@ -435,12 +653,70 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                 </View>
               )}
 
+              {airport && (
+                <View style={styles.flightBox}>
+                  <Text style={styles.flightTitle}>{t('requestRide.flightTitle')}</Text>
+                  <Text style={styles.flightSub}>
+                    {t(airportIsPickup ? 'requestRide.flightSubPickup' : 'requestRide.flightSub')}
+                  </Text>
+                  <Text style={styles.flightLabel}>{t('requestRide.flightNumber')}</Text>
+                  <TextInput
+                    style={[
+                      styles.flightInput,
+                      !!flightNumber.trim() && !isValidFlightNumber(flightNumber) && styles.flightInputBad,
+                    ]}
+                    value={flightNumber}
+                    onChangeText={setFlightNumber}
+                    onBlur={() => { if (isValidFlightNumber(flightNumber)) setFlightNumber(formatFlightNumber(flightNumber)); }}
+                    placeholder={t('requestRide.flightNumberPlaceholder')}
+                    placeholderTextColor={colors.gray[400]}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    maxLength={10}
+                    returnKeyType="done"
+                  />
+                  <Text style={styles.flightLabel}>
+                    {t('requestRide.terminal')}{airport.code ? ` · ${airport.code}` : ''}
+                  </Text>
+                  {airport.terminals ? (
+                    <View style={styles.terminalRow}>
+                      {airport.terminals.map((opt) => {
+                        const on = airportTerminal === opt;
+                        return (
+                          <TouchableOpacity
+                            key={opt}
+                            style={[styles.terminalChip, on && styles.terminalChipOn]}
+                            onPress={() => setAirportTerminal(opt)}
+                          >
+                            <Text style={[styles.terminalChipText, on && styles.terminalChipTextOn]}>{opt}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ) : (
+                    <TextInput
+                      style={styles.flightInput}
+                      value={airportTerminal}
+                      onChangeText={setAirportTerminal}
+                      placeholder={t('requestRide.terminalPlaceholder')}
+                      placeholderTextColor={colors.gray[400]}
+                      maxLength={60}
+                      returnKeyType="done"
+                    />
+                  )}
+                </View>
+              )}
+
               {/* Botões lado a lado */}
               <View style={styles.actionRow}>
-                <TouchableOpacity style={styles.scheduleBtnInline} onPress={openScheduler}>
+                <TouchableOpacity
+                  style={[styles.scheduleBtnInline, scheduleOnly && styles.scheduleBtnFull]}
+                  onPress={openScheduler}
+                >
                   <Text style={styles.scheduleBtnInlineText}>🗓️</Text>
                   <Text style={styles.scheduleBtnInlineLabel}>{t('requestRide.schedule')}</Text>
                 </TouchableOpacity>
+                {!scheduleOnly && (
                 <TouchableOpacity
                   style={[styles.requestBtnInline, (loading || !displayPrice) && { opacity: 0.6 }]}
                   onPress={handleRequest}
@@ -451,11 +727,11 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                     : <Text style={styles.requestBtnText}>{t('requestRide.requestNow')}</Text>
                   }
                 </TouchableOpacity>
+                )}
               </View>
             </View>
           )}
 
-          <ScrollView style={styles.suggestionList} keyboardShouldPersistTaps="handled">
             {activeField === 'origin' ? (
               <>
                 {!selectedOrigin && (
@@ -472,17 +748,18 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                     </View>
                   </TouchableOpacity>
                 )}
-                {originSearching && (
+                {originStillSearching && originText.trim().length >= 3 && !selectedOrigin && (
                   <View style={styles.searchingRow}>
                     <ActivityIndicator color={colors.accent} size="small" />
                     <Text style={styles.searchingText}>{t('requestRide.searchingAddresses')}</Text>
                   </View>
                 )}
-                {!selectedOrigin && !originSearching && originResults.map((d, i) => (
+                {!selectedOrigin && originList.map((d, i) => (
                   <TouchableOpacity
-                    key={`o-${d.lat}-${d.lng}-${i}`}
+                    key={`o-${rowKey(d)}-${i}`}
                     style={styles.suggestionItem}
-                    onPress={() => { setSelectedOrigin(d); setOriginText(d.shortName); setActiveField('destination'); }}
+                    disabled={resolvingPlaceId !== null}
+                    onPress={() => { escolherSugestao(d, 'origin'); }}
                   >
                     <Text style={styles.suggestionIcon}>📍</Text>
                     <View style={styles.suggestionTextWrap}>
@@ -492,25 +769,29 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                       </Text>
                       <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
                     </View>
+                    {resolvingPlaceId === rowKey(d) && (
+                      <ActivityIndicator color={colors.accent} size="small" />
+                    )}
                   </TouchableOpacity>
                 ))}
-                {!selectedOrigin && !originSearching && debouncedOriginQuery.trim().length >= 3 && originResults.length === 0 && (
+                {!selectedOrigin && !originStillSearching && debouncedOriginQuery.trim().length >= 3 && originList.length === 0 && (
                   <Text style={styles.noResults}>{t('requestRide.noAddressFound')}</Text>
                 )}
               </>
             ) : (
               <>
-                {searching && (
+                {destStillSearching && destinationText.trim().length >= 3 && !selectedDest && (
                   <View style={styles.searchingRow}>
                     <ActivityIndicator color={colors.accent} size="small" />
                     <Text style={styles.searchingText}>{t('requestRide.searchingAddresses')}</Text>
                   </View>
                 )}
-                {!selectedDest && !searching && results.map((d, i) => (
+                {!selectedDest && destList.map((d, i) => (
                   <TouchableOpacity
-                    key={`${d.lat}-${d.lng}-${i}`}
+                    key={`${rowKey(d)}-${i}`}
                     style={styles.suggestionItem}
-                    onPress={() => { setSelectedDest(d); setDestinationText(d.shortName); Keyboard.dismiss(); }}
+                    disabled={resolvingPlaceId !== null}
+                    onPress={() => { escolherSugestao(d, 'destination'); }}
                   >
                     <Text style={styles.suggestionIcon}>📍</Text>
                     <View style={styles.suggestionTextWrap}>
@@ -520,9 +801,12 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
                       </Text>
                       <Text style={styles.suggestionSub} numberOfLines={1}>{d.address}</Text>
                     </View>
+                    {resolvingPlaceId === rowKey(d) && (
+                      <ActivityIndicator color={colors.accent} size="small" />
+                    )}
                   </TouchableOpacity>
                 ))}
-                {!selectedDest && !searching && debouncedQuery.trim().length >= 3 && results.length === 0 && (
+                {!selectedDest && !destStillSearching && debouncedQuery.trim().length >= 3 && destList.length === 0 && (
                   <Text style={styles.noResults}>{t('requestRide.noAddressFound')}</Text>
                 )}
                 {!selectedDest && !searching && destinationText.trim().length < 3 && (
@@ -684,6 +968,7 @@ function makeStyles(colors: AppTheme) {
       flexDirection: 'row',
       gap: 10,
     },
+    scheduleBtnFull: { flex: 1, borderColor: colors.accent, backgroundColor: colors.accent },
     scheduleBtnInline: {
       flex: 1,
       height: 50,
@@ -797,6 +1082,39 @@ function makeStyles(colors: AppTheme) {
       borderWidth: 2,
       borderColor: colors.white,
     },
+    flightBox: {
+      backgroundColor: colors.gray[100],
+      borderRadius: 12,
+      padding: 12,
+      borderWidth: 1.5,
+      borderColor: colors.accent,
+    },
+    flightTitle: { fontSize: 14, fontWeight: '800', color: colors.text },
+    flightSub: { fontSize: 12, color: colors.gray[500], marginTop: 2, marginBottom: 6 },
+    flightLabel: { fontSize: 11, fontWeight: '700', color: colors.gray[600], marginTop: 8, marginBottom: 4, letterSpacing: 0.5 },
+    flightInput: {
+      height: 42,
+      backgroundColor: colors.background,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      fontSize: 15,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.gray[300],
+    },
+    flightInputBad: { borderColor: '#D9534F' },
+    terminalRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    terminalChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 18,
+      borderWidth: 1.5,
+      borderColor: colors.gray[300],
+      backgroundColor: colors.background,
+    },
+    terminalChipOn: { borderColor: colors.accent, backgroundColor: colors.accent },
+    terminalChipText: { fontSize: 13, fontWeight: '600', color: colors.text },
+    terminalChipTextOn: { color: colors.primary, fontWeight: '800' },
     surgeBadge: {
       backgroundColor: '#FFF3CD',
       borderRadius: 10,

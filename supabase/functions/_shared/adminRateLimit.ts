@@ -13,8 +13,16 @@
 //   const limited = await checkAdminRateLimit(admin, user.id, 'admin-waybills');
 //   if (!limited.allowed) return json({ error: limited.message }, 429);
 
+// `PromiseLike`, e não `Promise`, de propósito: o `rpc()` do supabase-js devolve
+// um `PostgrestFilterBuilder`, que é THENABLE mas não é uma `Promise` — não tem
+// `catch`, `finally` nem `Symbol.toStringTag`. Com `Promise` aqui, as CINCO
+// funções admin falhavam `deno check` com TS2345 na chamada de
+// `checkAdminRateLimit`. Como `tsconfig.json` exclui `supabase/functions`, nada
+// no CI olhava esses arquivos e o erro ficou invisível. O corpo abaixo só faz
+// `await`, que `PromiseLike` já satisfaz — a mudança é de TIPO, sem efeito em
+// tempo de execução.
 // deno-lint-ignore no-explicit-any
-type SupabaseClientLike = { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: any; error: any }> };
+type SupabaseClientLike = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: any; error: any }> };
 
 export interface RateLimitResult {
   allowed: boolean;

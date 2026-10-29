@@ -13,6 +13,15 @@ import type { TrustedContact } from '../types';
 export function useTrustedContacts(ownerId: string | undefined) {
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [loading, setLoading] = useState(true);
+  /**
+   * true quando a última leitura falhou. Sem isto, a tela mostrava o mesmo
+   * estado vazio ("nenhum contato de confiança") tanto para quem nunca cadastrou
+   * ninguém quanto para quem tem contatos e só não conseguiu lê-los — e o
+   * passageiro saía achando que precisava cadastrar tudo de novo, ou pior,
+   * confiando que o compartilhamento de viagem estava configurado quando a tela
+   * dizia que não.
+   */
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!ownerId) {
@@ -22,14 +31,23 @@ export function useTrustedContacts(ownerId: string | undefined) {
     }
     setLoading(true);
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('trusted_contacts')
         .select('id, owner_id, name, contact, created_at')
         .eq('owner_id', ownerId)
         .order('created_at', { ascending: true });
-      setContacts((data as TrustedContact[]) ?? []);
+      // O erro era descartado e o `?? []` zerava a lista — ver `loadFailed`.
+      // Na falha preservamos a última lista conhecida, que é mais honesta do que
+      // afirmar "você não tem contatos".
+      if (error) {
+        setLoadFailed(true);
+      } else {
+        setLoadFailed(false);
+        setContacts((data as TrustedContact[]) ?? []);
+      }
     } catch {
       /* mantém a lista atual */
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -77,5 +95,5 @@ export function useTrustedContacts(ownerId: string | undefined) {
     [ownerId],
   );
 
-  return { contacts, loading, refresh, addContact, removeContact };
+  return { contacts, loading, loadFailed, refresh, addContact, removeContact };
 }

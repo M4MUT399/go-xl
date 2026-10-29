@@ -110,7 +110,19 @@ describe('Critério (3): M1 e M2 aceitam P1 ao mesmo tempo → um só vence', ()
     const pool = drivers(2);
     s = reconcile(createRequest(s, { id: 'P1', pickup: PICKUP, createdAt: 0 }), pool, 0);
 
-    // Aceites concorrentes resolvidos em sequência atômica (compare-and-set).
+    // O QUE ISTO COBRE, E O QUE NÃO COBRE — a distinção importa porque o nome
+    // do arquivo promete mais do que ele pode entregar.
+    //
+    // COBRE: o compare-and-set do NÚCLEO PURO. Os dois aceites são aplicados em
+    // sequência sobre o estado encadeado; o segundo enxerga o primeiro e é
+    // recusado. É a garantia de que a regra do motor não elege dois vencedores.
+    //
+    // NÃO COBRE: a corrida de VERDADE, que é entre dois processos batendo no
+    // Postgres — o `upsert` de `persistDiff`, que o cabeçalho da 0071 (:40-55)
+    // declara ABERTA. Nenhuma linha das migrations 0064-0071 jamais executou
+    // nesta máquina (não há Postgres aqui), então esta suíte verde NÃO é
+    // evidência sobre aquela janela. Fechá-la é pendência de servidor, não de
+    // teste em JS.
     const first = accept(s, 'P1', 'M0');
     expect(first.outcome.result).toBe('ACCEPTED');
     const second = accept(first.state, 'P1', 'M1');
@@ -203,9 +215,15 @@ describe('Critério (6): carga — 50 pedidos, pool pequeno, sem deadlock/dup/or
     let guard = 0;
     while (s.requests.length > 0 && guard++ < 1000) {
       assertNoDoubleOffer(s); // nunca uma oferta duplicada
-      // Nenhuma oferta viva para motorista ocupado (orphan check).
+      // Nenhum pedido preso em OFFERING com a lista de ofertas VAZIA — esse é o
+      // estado que deixa um passageiro esperando sem que ninguém tenha sido
+      // chamado. (O comentário aqui dizia "nenhuma oferta viva para motorista
+      // ocupado (orphan check)", coisa que esta asserção nunca fez: ela não
+      // olha `busy`. Motorista em duas ofertas é `assertNoDoubleOffer`, logo
+      // acima; e neste laço `drivers(5)` vem todo com `busy: false`, então uma
+      // asserção sobre `busy` seria vácua aqui de qualquer forma.)
       for (const r of s.requests) {
-        if (r.status === 'OFFERING') expect(r.offers.length > 0).toBe(true);
+        if (r.status === 'OFFERING') expect(r.offers.length).toBeGreaterThan(0);
       }
       const off = offering(s);
       if (off.length === 0) { s = reconcile(s, pool, clock++); continue; }

@@ -67,6 +67,16 @@ export interface CompletedRide {
   distance_km: number;
   completed_at: string;
   destination_address: string;
+  /** Parte do motorista na TARIFA (já com pedágio, sem a comissão). */
+  driver_amount?: number | null;
+  /** Gorjeta do passageiro — vai INTEIRA ao motorista, fora do split. */
+  tip_amount?: number | null;
+  /** Tarifa realmente retida no cartão. `false` = nunca capturada ou estornada. */
+  paid?: boolean | null;
+  /** Quem pagou. O motorista precisa saber DE QUEM veio a gorjeta. */
+  passenger_id?: string | null;
+  /** Nome do passageiro, anexado numa consulta em lote a `profiles_public`. */
+  passenger_name?: string | null;
 }
 
 export function useDriverStats(driverId: string | undefined) {
@@ -85,7 +95,15 @@ export function useDriverStats(driverId: string | undefined) {
       const { data, error: queryError } = await withTimeout(
         supabase
           .from('rides')
-          .select('id, price, distance_km, completed_at, destination_address')
+          // driver_amount e tip_amount são o que o motorista REALMENTE recebe.
+          // Sem eles a tela caía no fallback price * DRIVER_SHARE, que ignora
+          // pedágio, taxa de aeroporto e gorjeta.
+          // `paid` entra porque uma corrida estornada mantém driver_amount
+          // preenchido: sem esta coluna a tela soma como ganho um dinheiro que
+          // o motorista não vai receber (o repasse exige paid = true).
+          // `passenger_id` entra para a lista poder dizer DE QUEM veio a gorjeta:
+          // sem isso o motorista via "+US$ 15" sem saber a quem agradecer.
+          .select('id, price, distance_km, completed_at, destination_address, driver_amount, tip_amount, paid, passenger_id')
           .eq('driver_id', driverId)
           .eq('status', 'completed')
           .order('completed_at', { ascending: false }),
@@ -93,7 +111,25 @@ export function useDriverStats(driverId: string | undefined) {
         'Não foi possível carregar suas corridas. Verifique sua conexão.'
       );
       if (queryError) throw queryError;
-      setRides((data as CompletedRide[]) ?? []);
+      const lista = (data as CompletedRide[]) ?? [];
+
+      // Nomes numa consulta EM LOTE, nunca um `.single()` por linha — mesmo
+      // padrão comprovado em ScheduledRidesScreen/useUpcomingScheduledRide. Um
+      // por card falhava em silêncio e deixava o fallback grudado.
+      //
+      // Falha aqui NÃO derruba a tela: o ganho é o dado principal e o nome é
+      // complemento. Sem ele a linha mostra só o valor, como antes.
+      const ids = Array.from(new Set(lista.map((r) => r.passenger_id).filter((x): x is string => !!x)));
+      if (ids.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles_public').select('id, full_name').in('id', ids);
+        const nomePor = new Map(
+          ((profs as { id: string; full_name: string | null }[]) ?? []).map((x) => [x.id, x.full_name]),
+        );
+        setRides(lista.map((r) => ({ ...r, passenger_name: nomePor.get(r.passenger_id ?? '') ?? null })));
+        return;
+      }
+      setRides(lista);
     } catch (e: any) {
       console.error('[useDriverStats] falha ao buscar corridas:', e);
       setError(e?.message ?? 'Não foi possível carregar suas corridas.');

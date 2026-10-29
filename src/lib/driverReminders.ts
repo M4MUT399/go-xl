@@ -19,6 +19,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { ensureNotificationPermissions } from './notifications';
 import { reportError } from './errorReporting';
+import { currentAppLang, reminderChannelName, reminderText } from './reminderText';
+import type { Lang } from '../i18n/translations';
 
 const PREFS_KEY = '@goxl:driver_reminder_prefs';
 const ID_PREFIX = 'goxl-sched-';
@@ -35,14 +37,18 @@ export type ReminderPrefs = Record<ReminderKey, boolean>;
  */
 export const MANDATORY_REMINDER_KEYS: ReminderKey[] = ['m30', 'm15'];
 
-/** Ordem de exibição = ordem cronológica dos avisos (mais cedo → mais tarde). */
+/**
+ * Ordem de exibição = ordem cronológica dos avisos (mais cedo → mais tarde).
+ *
+ * `label`/`desc` são só referência em português — a tela de preferências usa
+ * `t('reminder.label_*')`/`t('reminder.desc_*')`. O texto da NOTIFICAÇÃO sai de
+ * `reminderNotif.drv.*` em src/i18n/translations.ts, no idioma atual do app.
+ */
 export const REMINDER_OFFSETS: {
   key: ReminderKey;
   minutes: number;
   label: string;
   desc: string;
-  title: string;
-  body: (place: string) => string;
   mandatory: boolean;
 }[] = [
   {
@@ -50,8 +56,6 @@ export const REMINDER_OFFSETS: {
     minutes: 120,
     label: '2 horas antes',
     desc: 'Aviso antecipado para você se organizar',
-    title: '🗓️ Corrida agendada em 2 horas',
-    body: (p) => `Você tem uma corrida agendada em 2 horas${p ? ` — embarque em ${p}` : ''}.`,
     mandatory: false,
   },
   {
@@ -59,8 +63,6 @@ export const REMINDER_OFFSETS: {
     minutes: 60,
     label: '1 hora antes',
     desc: 'Hora de começar a se preparar',
-    title: '🗓️ Corrida agendada em 1 hora',
-    body: (p) => `Você tem uma corrida agendada em 1 hora${p ? ` — embarque em ${p}` : ''}.`,
     mandatory: false,
   },
   {
@@ -68,8 +70,6 @@ export const REMINDER_OFFSETS: {
     minutes: 30,
     label: '30 minutos antes',
     desc: 'Obrigatório — fique pronto para sair',
-    title: '⏰ Corrida agendada em 30 minutos',
-    body: (p) => `Faltam 30 minutos para sua corrida agendada${p ? ` — embarque em ${p}` : ''}. Prepare-se.`,
     mandatory: true,
   },
   {
@@ -77,8 +77,6 @@ export const REMINDER_OFFSETS: {
     minutes: 15,
     label: '15 minutos antes',
     desc: 'Obrigatório — último aviso, vá buscar o passageiro',
-    title: '🚗 Corrida agendada em 15 minutos',
-    body: (p) => `Faltam 15 minutos${p ? ` — vá buscar o passageiro em ${p}` : ''}.`,
     mandatory: true,
   },
 ];
@@ -117,11 +115,11 @@ export async function saveReminderPrefs(prefs: ReminderPrefs): Promise<void> {
 // ─── Agendamento ────────────────────────────────────────────────────────────────
 
 /** Canal Android dedicado — o motorista pode ajustá-lo nas configs do sistema. */
-async function ensureReminderChannel(): Promise<void> {
+async function ensureReminderChannel(lang: Lang): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
     await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: 'Lembretes de agendamento',
+      name: reminderChannelName(lang),
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 200, 150, 200],
       lightColor: '#C9A84C',
@@ -160,7 +158,8 @@ export async function syncDriverReminders(driverId: string | undefined): Promise
   try {
     const granted = await ensureNotificationPermissions();
     if (!granted) return;
-    await ensureReminderChannel();
+    const lang = await currentAppLang();
+    await ensureReminderChannel(lang);
 
     const prefs = await loadReminderPrefs();
 
@@ -195,11 +194,12 @@ export async function syncDriverReminders(driverId: string | undefined): Promise
         if (fireMs <= now + 5_000) continue;
 
         try {
+          const text = reminderText(lang, 'drv', off.key, place);
           await Notifications.scheduleNotificationAsync({
             identifier: `${ID_PREFIX}${ride.id}-${off.key}`,
             content: {
-              title: off.title,
-              body: off.body(place),
+              title: text.title,
+              body: text.body,
               sound: 'default',
               data: { type: 'sched_reminder', rideId: ride.id, offset: off.minutes },
             },

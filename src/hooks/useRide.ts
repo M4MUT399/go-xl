@@ -4,17 +4,20 @@ import { supabase } from '../lib/supabase';
 import { dismissRideNotifications } from '../lib/notifications';
 import { KM_TO_MILES, formatCurrency } from '../lib/format';
 import { getSurgeInfo } from '../lib/surge';
-import { calculateSplit } from '../lib/split';
+import { composeRideSplit } from '../lib/split';
 import { estimateTollAmount } from '../lib/tolls';
 import { estimateAirportFees } from '../lib/airportFees';
+import { normalizeFlightNumber } from '../lib/airportTrip';
 import { getRoute } from '../lib/routing';
 import { logRideOfferEvent } from '../lib/rideOfferEvents';
 import { canReceiveNewRideOffer } from '../lib/rideDispatch';
-import { resolveRevocation, type RideRevokeReason } from '../lib/rideRevocation';
+import { resolveRevocation, decideOfferSilence, type RideRevokeReason } from '../lib/rideRevocation';
 import { offerAlertManager } from '../lib/offerAlertManager';
 import { arriveOffer, resolveOffer, queueHasOffer } from '../lib/offerQueue';
 import { decideOfferAction, livePendingOffers, type OfferRow } from '../lib/dispatchClientBridge';
 import { getConfig } from '../lib/systemConfig';
+import { passengerScheduleConflict } from '../lib/scheduleConflict';
+import { cancellationPolicy } from '../lib/cancellation';
 import { useFeatureFlag } from './useFeatureFlag';
 import { reportError } from '../lib/errorReporting';
 import { withTimeout } from '../lib/withTimeout';
@@ -59,8 +62,8 @@ async function chargeRide(rideId: string): Promise<{ ok: boolean; error?: string
 
 /**
  * Reaplica a divisão de receita de uma corrida com a fatia REAL do motorista que
- * a assumiu (profiles.driver_share_percent), decidida no onboarding — 85% para os
- * 100 primeiros motoristas, 80% do 101º em diante.
+ * a assumiu (profiles.driver_share_percent), gravada no onboarding — 80% para
+ * todos desde a 0089 (plataforma 20%).
  *
  * Por que aqui e não no pedido: no `requestRide`/`scheduleRide` o motorista ainda
  * é desconhecido (pool aberto), então o split é gravado com o padrão. Quando um
@@ -68,32 +71,32 @@ async function chargeRide(rideId: string): Promise<{ ok: boolean; error?: string
  * platform_fee com a fatia dele. O passageiro paga sempre o mesmo `price`; isto só
  * ajusta quanto o motorista recebe no repasse semanal.
  *
- * Fire-and-forget (best-effort): se o motorista ainda não tem faixa definida
- * (share == null) ou algo falhar, o split padrão já gravado permanece — nunca
- * bloqueia o aceite nem o pagamento.
+ * O CÁLCULO NÃO MORA MAIS AQUI — E NEM DEPENDE MAIS DESTA CHAMADA. Até a
+ * migração 0065 esta função lia price/toll/fee, calculava driver_amount no
+ * telefone e escrevia direto em `rides`: o valor do repasse semanal era um
+ * número que o app do MOTORISTA mandava, e qualquer um com o token dele fazia
+ * `update rides set driver_amount = 5000`.
+ *
+ * A 0065 tirou o cliente do circuito por inteiro. O split é calculado pelo
+ * trigger `guard_ride_money_fields`, na MESMA linha e no MESMO statement do
+ * UPDATE de aceite (ou do INSERT, no caminho do QR, em que a corrida já nasce
+ * com driver_id). Isso fecha a janela que existia entre "a corrida virou minha"
+ * e "meu percentual foi aplicado" — janela em que `charge-ride` já tinha
+ * marcado paid = true e um saque/cron podia reservar a corrida com o padrão de
+ * 80%, congelando o motorista de 85% num valor errado para sempre. Perda de
+ * rede ou crash do app entre o UPDATE e esta RPC dava o mesmo estrago.
+ *
+ * Esta chamada continua aqui como CINTO E SUSPENSÓRIO: `apply_driver_split` é
+ * idempotente e hoje é um no-op no caminho feliz. Ela ainda serve para (a)
+ * reparar corridas aceitas antes da 0065 e (b) recalcular quando a faixa de
+ * comissão é atribuída DEPOIS do aceite (assign_driver_tier roda no webhook
+ * account.updated do Stripe). O erro é aguardado e reportado, mas NÃO derruba o
+ * aceite — o split já está gravado pelo trigger de qualquer forma.
  */
-async function applyDriverSplit(rideId: string, driverId: string): Promise<void> {
+async function applyDriverSplit(rideId: string): Promise<void> {
   try {
-    const [{ data: prof }, { data: ride }] = await Promise.all([
-      supabase.from('profiles').select('driver_share_percent').eq('id', driverId).single(),
-      supabase.from('rides').select('price, toll_amount, airport_port_fee').eq('id', rideId).single(),
-    ]);
-    const share = (prof as { driver_share_percent: number | null } | null)?.driver_share_percent;
-    if (share == null) return; // sem faixa definida — mantém o split padrão gravado
-    const r = ride as { price: number | null; toll_amount: number | null; airport_port_fee: number | null } | null;
-    if (!r) return;
-    const toll = Number(r.toll_amount) || 0;
-    const venueFee = Number(r.airport_port_fee) || 0;
-    // O split incide só sobre a tarifa (pedágio é pass-through ao motorista; taxa
-    // de aeroporto/porto é regulatória e fica com a plataforma).
-    const fare = Math.round(((Number(r.price) || 0) - toll - venueFee) * 100) / 100;
-    const split = calculateSplit(fare, Number(share));
-    const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
-    const platformFee = Math.round((split.platformFee + venueFee) * 100) / 100;
-    await supabase
-      .from('rides')
-      .update({ driver_amount: driverAmount, platform_fee: platformFee })
-      .eq('id', rideId);
+    const { error } = await supabase.rpc('apply_driver_split', { p_ride_id: rideId });
+    if (error) reportError(error, { op: 'applyDriverSplit.rpc', rideId });
   } catch (e) {
     reportError(e, { op: 'applyDriverSplit', rideId });
   }
@@ -117,6 +120,127 @@ export async function tipRide(rideId: string, amountCents: number): Promise<{ ok
   } catch (e) {
     return { ok: false, error: String(e) };
   }
+}
+
+/**
+ * Cancela uma corrida AGENDADA. Autônoma (fora de hook) porque DUAS telas
+ * precisam dela: a lista de agendamentos e a de detalhes da viagem, aberta pelo
+ * histórico. Enquanto ela morava só dentro de `useScheduledRides`, a segunda
+ * tela simplesmente não oferecia cancelamento — o defeito relatado com print.
+ *
+ * Cancelamento ATÔMICO: o `.not('status','in',...)` garante que só cancelamos o
+ * que ainda está em pé, e o `.select().maybeSingle()` diz se o UPDATE bateu de
+ * fato. Sem isso, um UPDATE que não afeta linha nenhuma volta como sucesso e
+ * emitiríamos revogação de uma corrida que já tinha acabado.
+ *
+ * NÃO cobra nada. A tarifa do cancelamento tardio é anunciada pela tela
+ * (`src/lib/cancellation.ts`) e não executada em lugar nenhum — está escrito lá
+ * por quê.
+ */
+export async function cancelScheduledRide(rideId: string, reason?: string): Promise<boolean> {
+  const { data: updated, error } = await supabase
+    .from('rides')
+    .update({
+      status: 'cancelled' as RideStatus,
+      cancelled_at: new Date().toISOString(),
+      ...(reason ? { cancellation_reason: reason } : {}),
+    })
+    .eq('id', rideId)
+    .not('status', 'in', '(completed,cancelled)')
+    .select('id')
+    .maybeSingle();
+
+  // Erro explícito: o agendamento NÃO foi cancelado. Devolvemos a falha para a
+  // tela poder dizê-la ao passageiro, em vez de sumir com o card e mentir.
+  if (error) {
+    reportError(error, { op: 'scheduled.cancel', rideId });
+    return false;
+  }
+  // Para o alarme de TODOS os motoristas que tenham esse agendamento como oferta.
+  if (updated) broadcastRideRevoked(rideId, 'cancelled');
+  // `updated == null` sem erro = já estava finalizada/cancelada; do ponto de
+  // vista do passageiro o agendamento não está mais ativo, então é sucesso.
+  return true;
+}
+
+/** Motivo gravado na linha quando o passageiro cancela dentro da última hora. */
+export const LATE_CANCEL_REASON = 'passenger_late_cancel';
+
+/** O que aconteceu num cancelamento — a tela precisa dizer a verdade ao passageiro. */
+export type CancelScheduleOutcome =
+  /** Cancelado dentro da janela grátis. Nada foi cobrado. */
+  | { ok: true; charged: false }
+  /** Cancelado na última hora e a tarifa FOI cobrada. */
+  | { ok: true; charged: true; amountDollars: number }
+  /** Cancelado na última hora e a cobrança FALHOU — a corrida foi cancelada assim mesmo. */
+  | { ok: true; charged: false; chargeError: string }
+  /** O servidor recusou o cancelamento. A corrida continua de pé. */
+  | { ok: false };
+
+/**
+ * Cancela um agendamento APLICANDO A POLÍTICA: grátis com mais de 1h de
+ * antecedência, tarifa integral dentro da última hora (`src/lib/cancellation.ts`).
+ *
+ * ── A ORDEM É CANCELAR PRIMEIRO, COBRAR DEPOIS. E ISSO É DELIBERADO ─────────
+ *
+ * O instinto é o contrário — cobrar antes, como `activate` faz. Lá está certo:
+ * se o cartão recusa, a corrida NÃO começa, e o pior desfecho é ninguém sair do
+ * lugar. Aqui os desfechos não são simétricos:
+ *
+ *   • cobrar primeiro e o cancelamento falhar → passageiro COBRADO com a
+ *     corrida ainda de pé e o motorista a caminho. Dinheiro tirado por um
+ *     serviço que segue agendado;
+ *   • cancelar primeiro e a cobrança falhar → a plataforma perde a multa. O
+ *     motorista fica sabendo cedo, que é o que mais importa para ele.
+ *
+ * O segundo é o erro reversível, e é o mesmo raciocínio já escrito em
+ * `cancelRide` sobre o estorno: trocar dinheiro retido por passageiro trancado
+ * não é conserto, é mudar de vítima.
+ *
+ * ── FALHA DE COBRANÇA NÃO TRANCA O CANCELAMENTO ────────────────────────────
+ *
+ * Se a cobrança falhar, a corrida JÁ FOI cancelada e assim fica. Bloquear o
+ * cancelamento porque o cartão recusou produziria o pior desfecho possível para
+ * o motorista: o passageiro não consegue cancelar, não avisa ninguém, e
+ * simplesmente não aparece — viagem perdida E sem multa. A falha volta no
+ * retorno para a tela poder dizê-la.
+ *
+ * ⚠️ COBRA MESMO SEM MOTORISTA DESIGNADO. A regra do produto é por RELÓGIO, não
+ * por motorista: dentro da última hora, cobra. Vale registrar que o texto que a
+ * tela mostra (`scheduled.policyChargedBody1`) diz "um motorista já confirmou
+ * esta corrida" — quando não há motorista, a multa é receita da plataforma sem
+ * ninguém para compensar, e o rótulo mente. É candidato natural a disputa de
+ * cartão. Se o produto quiser restringir a multa aos agendamentos JÁ
+ * CONFIRMADOS, o lugar de mudar é aqui e em `cancellation.ts`, não na cópia.
+ */
+export async function cancelScheduledRideWithPolicy(
+  ride: { id: string; scheduled_for?: string | null; price?: number | null },
+  nowMs: number = Date.now(),
+): Promise<CancelScheduleOutcome> {
+  const politica = cancellationPolicy(ride, nowMs);
+
+  const cancelou = await cancelScheduledRide(
+    ride.id,
+    politica.free ? undefined : LATE_CANCEL_REASON,
+  );
+  if (!cancelou) return { ok: false };
+
+  if (politica.free) return { ok: true, charged: false };
+
+  // Multa. `charge-ride` cobra `rides.price` — a tarifa integral, que é
+  // exatamente o que a política anuncia — e é idempotente pelos dois lados
+  // (flag `paid` no banco + idempotencyKey no Stripe), então um duplo-toque não
+  // cobra duas vezes.
+  const charge = await chargeRide(ride.id);
+  if (!charge.ok) {
+    reportError(charge.error, { op: 'lateCancel.charge', rideId: ride.id });
+    return { ok: true, charged: false, chargeError: charge.error ?? 'falha na cobrança' };
+  }
+  // A corrida fica `cancelled` com `paid = true`: é a multa retida de propósito,
+  // e é `cancellation_reason` que distingue isso de uma corrida cobrada e
+  // abandonada. O repasse semanal leva o `driver_amount` ao motorista quando há
+  // um designado — que é a compensação que a política promete.
+  return { ok: true, charged: true, amountDollars: politica.chargeDollars };
 }
 
 /** Extorna o pagamento de uma corrida via Edge Function. */
@@ -143,14 +267,14 @@ async function refundRide(rideId: string): Promise<{ ok: boolean; error?: string
  * Chama a Edge Function `send-ride-push` — todo o envio de push de corrida
  * (leitura de push_token e chamada à API do Expo) roda no servidor, com
  * templates fixos por `kind`. O client nunca mais lê push_token de outro
- * usuário nem manda título/corpo livre; só `kind` + `rideId` (+ ids-alvo no
- * broadcast). Best-effort: falhas são engolidas, nunca bloqueiam o fluxo de
- * corrida (mesma filosofia do antigo sendPushAsync).
+ * usuário nem manda título/corpo livre nem a lista de alvos — só `kind` +
+ * `rideId` (+ `exceptDriverId`, que é o próprio chamador se excluindo, não uma
+ * escolha sobre terceiros). Best-effort: falhas são engolidas, nunca bloqueiam o
+ * fluxo de corrida (mesma filosofia do antigo sendPushAsync).
  */
 async function invokeRidePush(body: {
   kind: string;
   rideId: string;
-  driverIds?: string[];
   exceptDriverId?: string;
 }): Promise<void> {
   try {
@@ -187,48 +311,30 @@ async function dispatchEngineCreate(rideId: string): Promise<boolean> {
   }
 }
 
-async function notifyOnlineDrivers(
-  destination: string,
-  price: number,
-  destinationCoords?: { lat: number; lng: number },
-  rideId?: string
-) {
-  const { data: online } = await supabase
-    .from('driver_locations')
-    .select('driver_id')
-    .eq('is_online', true);
+async function notifyOnlineDrivers(rideId: string) {
+  if (!rideId) return;
 
-  let driverIds = ((online as { driver_id: string }[]) ?? []).map((d) => d.driver_id);
-  if (driverIds.length === 0) return;
-
-  // Não incomoda motoristas já a caminho/em corrida com outro passageiro —
-  // salvo se o destino desta nova chamada for igual (ou a até 1km) do
-  // destino final da corrida ativa deles, ou se faltarem <=5min para
-  // terminá-la (mesma regra usada no realtime — ver canReceiveNewRideOffer).
-  const { data: busyRows } = await supabase
-    .from('rides')
-    .select('driver_id, status, destination_lat, destination_lng, destination_address, driver_eta_min')
-    .in('driver_id', driverIds)
-    .in('status', ['accepted', 'driver_en_route', 'in_progress']);
-
-  const busyByDriver = new Map<string, { status: string; destination_lat?: number; destination_lng?: number; destination_address?: string; driver_eta_min?: number }>();
-  for (const r of (busyRows as { driver_id?: string; status: string; destination_lat?: number; destination_lng?: number; destination_address?: string; driver_eta_min?: number }[]) ?? []) {
-    if (r.driver_id) busyByDriver.set(r.driver_id, r);
-  }
-
-  driverIds = driverIds.filter((id) =>
-    canReceiveNewRideOffer(busyByDriver.get(id) ?? null, {
-      destination_address: destination,
-      destination_lat: destinationCoords?.lat,
-      destination_lng: destinationCoords?.lng,
-    })
-  );
-  if (driverIds.length === 0 || !rideId) return;
-
-  // Título/corpo agora são templates fixos no servidor — a Edge Function
-  // busca destination/price direto na linha de `rides`, o client só informa
-  // QUEM notificar (o filtro de disponibilidade acima continua client-side).
-  await invokeRidePush({ kind: 'new_ride_broadcast', rideId, driverIds });
+  // O client NÃO manda mais a lista de alvos. Ele diz só qual corrida abriu; o
+  // leque é derivado no servidor (send-ride-push, com a service key).
+  //
+  // Antes, esta função consultava `driver_locations` e mandava os ids junto.
+  // Duas consequências, e a segunda é a grave:
+  //
+  //   • o servidor gravava PROVA DE OFERTA sobre uma lista de origem do
+  //     cliente — quem controlasse o app escolhia quem ganhava direito de
+  //     cobrança (isso saiu; a autorização hoje é derivada no charge-ride);
+  //   • e este `return` antecipado dava ao CLIENTE o poder de cancelar a
+  //     distribuição inteira: leitura vazia, RLS mudando de baixo, rede caindo
+  //     no meio — qualquer um deles e a corrida nascia sem NENHUM push, sem
+  //     erro nenhum aparecer. Agora a requisição sempre sai; se não houver
+  //     ninguém online, quem constata isso é o servidor.
+  //
+  // Título/corpo são templates fixos no servidor, que lê destination/price
+  // direto da linha de `rides`. E quem de fato recebe o toque também é decidido
+  // lá: o filtro de "não incomoda motorista já a caminho" precisa enxergar a
+  // corrida ativa de OUTRO passageiro com OUTRO motorista, e a RLS de `rides`
+  // (0067) não mostra isso ao passageiro — nem deve.
+  await invokeRidePush({ kind: 'new_ride_broadcast', rideId });
 }
 
 /** Notifica apenas o motorista vinculado ao QR code (não transmite para todos). */
@@ -383,17 +489,11 @@ export async function broadcastRideRevoked(rideId: string, reason: RideRevokeRea
 async function pushSilentRevokeToOnlineDrivers(rideId: string, exceptDriverId?: string) {
   if (!rideId) return;
   try {
-    const { data: online } = await supabase
-      .from('driver_locations')
-      .select('driver_id')
-      .eq('is_online', true);
-
-    const driverIds = ((online as { driver_id: string }[]) ?? [])
-      .map((d) => d.driver_id)
-      .filter((id) => id !== exceptDriverId);
-    if (driverIds.length === 0) return;
-
-    await invokeRidePush({ kind: 'silent_revoke', rideId, driverIds, exceptDriverId });
+    // Mesma mudança do `notifyOnlineDrivers`: o leque sai do servidor. Aqui o
+    // `return` antecipado sobre lista vazia era pior que lá — silenciar é o que
+    // impede o telefone dos outros motoristas de continuar tocando por uma
+    // corrida que já tem dono.
+    await invokeRidePush({ kind: 'silent_revoke', rideId, exceptDriverId });
   } catch (e) {
     reportError(e, { op: 'pushSilentRevokeToOnlineDrivers' });
   }
@@ -460,34 +560,50 @@ export async function notifyPassengerRideCompleted(passengerId: string, rideId: 
   await invokeRidePush({ kind: 'ride_completed', rideId });
 }
 
-// ── Tarifa GoXL — espelha a Uber XL (Orlando, FL) + 10% ─────────────────────
+// ── Tarifa GoXL — Uber XL (Orlando, FL) + $0,25/milha, tudo + 10% ───────────
 // Referência Uber XL Orlando: base $3,00 · $1,21/milha · $0,20/min · mínimo
-// $8,90 · booking fee $3,00. Decisão de produto: GoXL cobra exatamente 10%
-// acima da tarifa Uber equivalente. O surge (pico) incide sobre a parte
-// metrada (base + distância + tempo). A quantidade de motoristas GoXL online
-// NÃO entra no preço — só horário (pico) e local (taxas de aeroporto/porto, P6).
-const UBER_XL_BASE_FARE   = 3.0;   // USD
-const UBER_XL_PER_MILE    = 1.21;  // USD por milha
-const UBER_XL_PER_MINUTE  = 0.2;   // USD por minuto
-const UBER_XL_BOOKING_FEE = 3.0;   // USD (taxa de serviço/booking)
-const UBER_XL_MIN_FARE    = 8.9;   // USD (piso da parte metrada)
-const GOXL_MARKUP         = 1.1;   // +10% sobre a Uber
-const AVG_SPEED_MPH       = 30;    // p/ estimar tempo quando não há rota
+// $8,90 · booking fee $3,00.
+//
+// Sobre essa referência incidem, nesta ordem:
+//   1. o PRÊMIO DE MILHA de $0,25, embutido na tarifa por milha (1,21 → 1,46);
+//   2. o surge de pico, sobre a parte metrada (base + distância + tempo);
+//   3. o markup de 10% da GoXL, sobre o total.
+//
+// ── O QUE O PASSAGEIRO PAGA A MAIS, DE FATO ────────────────────────────────
+//
+// O prêmio foi posto na tarifa BASE por decisão de produto (27/08/2026), então
+// ele é multiplicado pelas duas etapas seguintes. Na prática:
+//
+//   hora normal   +$0,25 × 1,10        = +$0,275 por milha
+//   pico (1,3×)   +$0,25 × 1,3 × 1,10  = +$0,3575 por milha
+//
+// Ou seja: NÃO são $0,25 líquidos na conta do passageiro. Se um dia a intenção
+// virar "exatamente $0,25 por milha, sempre", o lugar do acréscimo deixa de ser
+// aqui e passa a ser depois do markup, em `estimatePrice`.
+//
+// A quantidade de motoristas GoXL online NÃO entra no preço — só horário
+// (pico) e local (taxas de aeroporto/porto, P6).
+// A fórmula mora em src/lib/fare.ts (pura) para o servidor recalcular a tarifa
+// com a MESMA regra quando o passageiro muda a rota em curso (update-ride-route).
+import { estimatePrice, estimateDuration } from '../lib/fare';
+export { estimatePrice, estimateDuration };
 
-export function estimatePrice(distanceKm: number, durationMin = 0, surgeMultiplier = 1.0) {
-  const miles = distanceKm * KM_TO_MILES;
-  const minutes = Math.max(0, durationMin);
-  // Parte metrada, com surge de pico e piso do mínimo da Uber.
-  const metered = UBER_XL_BASE_FARE + miles * UBER_XL_PER_MILE + minutes * UBER_XL_PER_MINUTE;
-  const surged = Math.max(metered * surgeMultiplier, UBER_XL_MIN_FARE);
-  const uberEquivalent = surged + UBER_XL_BOOKING_FEE;
-  // GoXL = tarifa Uber equivalente + 10%.
-  return Math.round(uberEquivalent * GOXL_MARKUP * 100) / 100;
+/** Voo e terminal de uma corrida para aeroporto (ver lib/airportTrip). */
+export interface FlightInfo {
+  number: string;
+  terminal: string;
 }
 
-export function estimateDuration(distanceKm: number) {
-  const miles = distanceKm * KM_TO_MILES;
-  return Math.ceil((miles / AVG_SPEED_MPH) * 60);
+// As colunas só entram no insert quando há voo: corrida comum continua com o
+// payload de sempre, e por isso não depende da migration 0088 estar aplicada.
+function flightColumns(
+  flight?: FlightInfo
+): { flight_number?: string; airport_terminal?: string } {
+  if (!flight) return {};
+  return {
+    flight_number: normalizeFlightNumber(flight.number),
+    airport_terminal: flight.terminal.trim(),
+  };
 }
 
 const ACTIVE_RIDE_STATUSES: RideStatus[] = ['requesting', 'accepted', 'driver_en_route', 'in_progress'];
@@ -507,7 +623,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
   // exatamente o bug relatado pelo testador do Android.
   const refreshActiveRide = useCallback(async () => {
     if (!passengerId) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('rides')
       .select('*')
       .eq('passenger_id', passengerId)
@@ -515,6 +631,17 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    // O erro era descartado e o `?? null` LIMPAVA a corrida ativa: uma falha de
+    // rede/RLS ficava indistinguível de "você não tem corrida em andamento". O
+    // passageiro voltava para a home no meio da viagem, via a tela de pedir
+    // corrida como se nada estivesse acontecendo, e podia pedir uma segunda
+    // corrida (e ser cobrado duas vezes) enquanto a primeira seguia ativa no
+    // banco, com o motorista a caminho. Na falha preservamos o que já sabíamos —
+    // só o servidor RESPONDENDO "não há corrida" zera o estado.
+    if (error) {
+      reportError(error, { op: 'refreshActiveRide', passengerId });
+      return;
+    }
     setActiveRide((data as Ride) ?? null);
   }, [passengerId]);
 
@@ -563,7 +690,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
     origin: Location,
     destination: Location,
     routeInfo?: { distanceKm: number; durationMin: number },
-    options?: { lockedDriverId?: string }
+    options?: { lockedDriverId?: string; flight?: FlightInfo }
   ): Promise<Ride | null> => {
     if (!passengerId) return null;
 
@@ -588,9 +715,17 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       { lat: destination.lat, lng: destination.lng },
     );
     const price = Math.round((fare + toll + venueFee) * 100) / 100;
-    const split = calculateSplit(fare);
-    const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
-    const platformFee = Math.round((split.platformFee + venueFee) * 100) / 100;
+    // Split PADRÃO (80%): no pedido o motorista ainda é desconhecido (pool
+    // aberto).
+    //
+    // Contra uma base COM a 0065 aplicada, estes dois campos são DESCARTADOS no
+    // insert (o trigger guard_ride_money_fields zera as colunas de dinheiro do
+    // cliente) e o valor real é calculado no servidor quando o motorista entra
+    // na corrida. Continuam no payload de propósito: contra uma base ainda SEM
+    // a 0065 — a janela entre publicar o app e aplicar a migração — são eles que
+    // mantêm o repasse funcionando. É o único arranjo que sobrevive às duas
+    // ordens de deploy.
+    const { driverAmount, platformFee } = composeRideSplit(price, toll, venueFee);
 
     const insertPayload = {
       passenger_id: passengerId,
@@ -610,6 +745,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       platform_fee: platformFee,
       // QR: pré-vincula o motorista; ele ainda precisa aceitar
       ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
+      ...flightColumns(options?.flight),
     };
 
     const { error: insertError } = await supabase
@@ -652,7 +788,7 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       const useV2 = await getConfig('dispatch_engine_v2', jurisdiction);
       const handledByEngine = useV2 ? await dispatchEngineCreate((data as Ride).id) : false;
       if (!handledByEngine) {
-        notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
+        notifyOnlineDrivers((data as Ride).id);
       }
     }
     return data as Ride;
@@ -663,8 +799,8 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
     destination: Location,
     scheduledFor: Date,
     routeInfo?: { distanceKm: number; durationMin: number },
-    options?: { lockedDriverId?: string }
-  ): Promise<Ride | null> => {
+    options?: { lockedDriverId?: string; flight?: FlightInfo }
+  ): Promise<Ride | null | 'conflict'> => {
     if (!passengerId) return null;
 
     const distanceKm = routeInfo?.distanceKm ?? haversineDistance(
@@ -685,9 +821,9 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       { lat: destination.lat, lng: destination.lng },
     );
     const price = Math.round((fare + toll + venueFee) * 100) / 100;
-    const split = calculateSplit(fare);
-    const driverAmount = Math.round((split.driverAmount + toll) * 100) / 100;
-    const platformFee = Math.round((split.platformFee + venueFee) * 100) / 100;
+    // Split padrão — mesma regra do requestRide, inclusive quanto ao descarte
+    // pelo servidor com a 0065 aplicada (ver comentário lá).
+    const { driverAmount, platformFee } = composeRideSplit(price, toll, venueFee);
 
     const insertPayload = {
       passenger_id: passengerId,
@@ -708,7 +844,38 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       platform_fee: platformFee,
       // QR: pré-vincula o motorista; ele ainda precisa aceitar/recusar o agendamento
       ...(options?.lockedDriverId ? { driver_id: options.lockedDriverId } : {}),
+      ...flightColumns(options?.flight),
     };
+
+    // ── Vários agendamentos, sim; dois no mesmo horário, não ─────────────────
+    //
+    // Regra de produto: o passageiro pode ter quantas corridas marcadas quiser,
+    // desde que não se sobreponham no tempo. A regra do MOTORISTA
+    // (`checkScheduleConflict`) não serve aqui — ela soma deslocamento entre
+    // corridas e 20 min de folga porque é o mesmo carro atendendo as duas, e
+    // recusaria coisa legítima do passageiro. Ver `passengerScheduleConflict`.
+    //
+    // FALHA DE LEITURA NÃO BARRA O AGENDAMENTO. Se esta consulta cair (rede,
+    // RLS), seguimos e criamos a corrida. Os dois erros possíveis não têm o
+    // mesmo tamanho: uma sobreposição que escapa é reversível — o passageiro
+    // cancela um dos dois, de graça até 60 min antes (ScheduledRidesScreen) —,
+    // enquanto recusar por falha de rede transforma instabilidade em "o app não
+    // me deixa mais agendar", que é exatamente o defeito relatado.
+    const { data: jaMarcadas, error: conflitoErr } = await supabase
+      .from('rides')
+      .select('id, scheduled_for, duration_min')
+      .eq('passenger_id', passengerId)
+      .eq('status', 'scheduled');
+
+    if (conflitoErr) {
+      reportError(conflitoErr, { op: 'scheduleRide.conflictCheck', passengerId });
+    } else {
+      const conflito = passengerScheduleConflict(
+        { scheduled_for: scheduledFor.toISOString(), duration_min: duration },
+        (jaMarcadas ?? []) as { id: string; scheduled_for: string | null; duration_min: number | null }[],
+      );
+      if (conflito.conflict) return 'conflict';
+    }
 
     const { error: insertError } = await supabase
       .from('rides')
@@ -743,34 +910,80 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
       notifySpecificDriverScheduled(options.lockedDriverId, destination.address, price, scheduledFor, (data as Ride).id);
     } else {
       // Notifica motoristas online imediatamente — igual ao requestRide
-      notifyOnlineDrivers(destination.address, price, { lat: destination.lat, lng: destination.lng }, (data as Ride).id);
+      notifyOnlineDrivers((data as Ride).id);
     }
     return data as Ride;
   }, [passengerId]);
 
-  const cancelRide = useCallback(async (rideId: string) => {
+  // Devolve se o cancelamento foi REALMENTE confirmado pelo servidor. Antes esta
+  // função era `Promise<void>` e chamava `setActiveRide(null)` incondicionalmente:
+  // com o UPDATE recusado (rede caída, RLS, corrida já finalizada) a corrida sumia
+  // da tela do passageiro e as telas que chamam isto navegavam para a home como se
+  // estivesse cancelada — enquanto no banco ela seguia ativa, com o motorista a
+  // caminho e a tarifa retida. O preço deste retorno é que todo chamador precisa
+  // tratar o `false`; é exatamente o ponto.
+  const cancelRide = useCallback(async (rideId: string): Promise<boolean> => {
     // Descobre se já havia motorista designado ANTES do update — para avisá-lo
     // diretamente (canal pessoal) que a corrida aceita foi cancelada.
     const { data: rideRow } = await supabase
       .from('rides')
-      .select('driver_id')
+      .select('driver_id, paid')
       .eq('id', rideId)
       .maybeSingle();
-    const assignedDriverId = (rideRow as { driver_id: string | null } | null)?.driver_id ?? null;
+    const row = rideRow as { driver_id: string | null; paid: boolean | null } | null;
+    const assignedDriverId = row?.driver_id ?? null;
 
-    // Extorna o pagamento se a corrida já tiver sido cobrada
-    await refundRide(rideId);
+    // Extorna o pagamento se a corrida já tiver sido cobrada.
+    //
+    // O resultado era DESCARTADO aqui, enquanto o lado do MOTORISTA já aborta
+    // (DriverNavigateScreen: "const refund = await refundRide(...); if
+    // (!refund.ok) return"). A assimetria é o defeito: pelo caminho do
+    // passageiro, uma falha do estorno cancelava a corrida assim mesmo e o
+    // dinheiro seguia retido no cartão dele, sem aviso a ninguém. É o mesmo
+    // dinheiro e a mesma promessa — tem que ser a mesma regra.
+    //
+    // MAS o abort só pode valer quando existe dinheiro em jogo. Uma versão
+    // anterior deste bloco barrava o cancelamento sempre que `refundRide`
+    // falhasse, justificando-se em que `refund-ride` devolve `no_charge: true`
+    // para corrida sem cobrança (refund-ride:208). O raciocínio tinha um buraco:
+    // isso só vale quando a Edge Function RESPONDE. Fora do ar (5xx, cold start,
+    // 401), `refundRide` cai no catch e devolve `ok: false` para TODA corrida,
+    // cobrada ou não — e aí o passageiro em `FindingDriverScreen` ficava PRESO,
+    // porque lá o `beforeRemove` dá `preventDefault()` e o cancelamento é a
+    // única saída da tela (FindingDriverScreen:161,191-193). Trocar dinheiro
+    // retido por passageiro trancado não é conserto, é mudar de vítima.
+    //
+    // Por isso o gate é `paid`, lido no mesmo SELECT acima — sem round-trip
+    // extra. Não cobrada: não há o que estornar, cancela direto e o
+    // `refund-ride` sequer é chamado. Cobrada: aí sim o estorno é condição, e a
+    // regra fica idêntica à do motorista (DriverNavigateScreen:772-782).
+    if (row?.paid === true) {
+      const refund = await refundRide(rideId);
+      if (!refund.ok) {
+        reportError(new Error(refund.error ?? 'refund failed'), { op: 'cancelRide.refund', rideId });
+        return false;
+      }
+    }
 
     // Cancelamento atômico: só marca como cancelada se ainda não terminou/cancelou.
     // `.select().maybeSingle()` só retorna linha quando o UPDATE realmente afetou
     // algo — assim só emitimos a revogação quando o cancelamento de fato ocorreu.
-    const { data: updated } = await supabase
+    const { data: updated, error: updateError } = await supabase
       .from('rides')
       .update({ status: 'cancelled' as RideStatus })
       .eq('id', rideId)
       .not('status', 'in', '(completed,cancelled)')
       .select('id')
       .maybeSingle();
+
+    // Erro explícito do servidor: a corrida NÃO foi cancelada. Manter
+    // `activeRide` é o que preserva a verdade na tela (o passageiro continua
+    // vendo a corrida em andamento) e permite tentar de novo.
+    if (updateError) {
+      reportError(updateError, { op: 'cancelRide.update', rideId });
+      return false;
+    }
+
     setActiveRide(null);
 
     if (updated) {
@@ -803,6 +1016,11 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
         }
       }
     }
+
+    // `updated == null` sem erro = o UPDATE não bateu em nenhuma linha porque a
+    // corrida já estava completed/cancelled. Também é "não está mais ativa",
+    // então sair da tela é honesto.
+    return true;
   }, [jurisdiction]);
 
   return { activeRide, loadingActive, refreshActiveRide, requestRide, scheduleRide, cancelRide };
@@ -811,6 +1029,8 @@ export function usePassengerRide(passengerId: string | undefined, jurisdiction: 
 export function useScheduledRides(passengerId: string | undefined, jurisdiction: string = 'global') {
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  /** true quando a última leitura da agenda falhou — ver `refresh` abaixo. */
+  const [loadFailed, setLoadFailed] = useState(false);
   // Debounce de reivindicação: evita que um duplo-toque dispare duas chamadas
   // simultâneas de claim para a MESMA corrida (idempotência no cliente, além da
   // garantia atômica no banco). Guardado por rideId.
@@ -819,13 +1039,20 @@ export function useScheduledRides(passengerId: string | undefined, jurisdiction:
   const refresh = useCallback(async () => {
     if (!passengerId) return;
     setLoading(true);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('rides')
       .select('*')
       .eq('passenger_id', passengerId)
       .eq('status', 'scheduled')
       .order('scheduled_for', { ascending: true });
-    setRides((data as RideRecord[]) ?? []);
+    // O erro era descartado e o `?? []` esvaziava a lista: uma falha de rede ou
+    // de RLS ficava visualmente idêntica a "você não tem nenhum agendamento".
+    // O passageiro concluía que a viagem marcada para amanhã tinha sumido — e
+    // ela continuava lá, com a política de cancelamento correndo. Agora, na
+    // falha, PRESERVAMOS a última lista conhecida e marcamos `loadFailed` para
+    // a tela poder avisar que os dados podem estar desatualizados.
+    setLoadFailed(!!error);
+    if (!error) setRides((data as RideRecord[]) ?? []);
     setLoading(false);
   }, [passengerId]);
 
@@ -870,18 +1097,27 @@ export function useScheduledRides(passengerId: string | undefined, jurisdiction:
     if (data) {
       const ride = data as Ride;
       if (preAssigned) {
+        // SPLIT DO AGENDAMENTO PRÉ-CONFIRMADO. Esta era a única porta de
+        // aceite que NUNCA reaplicava a fatia real do motorista: a agendada
+        // travada por QR nasce com driver_id preenchido e vai daqui direto para
+        // 'accepted', sem passar por acceptRide/confirmScheduledRide, que eram
+        // os únicos lugares que chamavam applyDriverSplit. Resultado do buraco:
+        // o split ficava no padrão gravado no insert (80%) e um motorista de
+        // 85% era pago a menos, em silêncio, em toda corrida agendada por QR.
+        //
+        // Roda no app do PASSAGEIRO — por isso apply_driver_split aceita as
+        // duas pontas da corrida (ver a migração 0065). Ele não escolhe nada:
+        // o valor sai inteiro do servidor.
+        await applyDriverSplit(ride.id);
         // Notifica o motorista pré-confirmado
         notifyPassenger(ride.passenger_id, ride.id); // reutiliza lógica de push
       } else {
         // Pool aberto (agendada ativada agora → requesting): mesma regra do
         // requestRide — motor v2 quando ligado, com fallback ao leque legado.
-        const dest = ride.destination_address ?? ride.destination?.address ?? 'Destino';
-        const destLat = ride.destination_lat ?? ride.destination?.lat;
-        const destLng = ride.destination_lng ?? ride.destination?.lng;
         const useV2 = await getConfig('dispatch_engine_v2', jurisdiction);
         const handledByEngine = useV2 ? await dispatchEngineCreate(ride.id) : false;
         if (!handledByEngine) {
-          notifyOnlineDrivers(dest, Number(ride.price) || 0, destLat != null && destLng != null ? { lat: destLat, lng: destLng } : undefined, ride.id);
+          notifyOnlineDrivers(ride.id);
         }
       }
     }
@@ -918,7 +1154,7 @@ export function useScheduledRides(passengerId: string | undefined, jurisdiction:
 
       const ride = data as Ride;
       // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
-      applyDriverSplit(rideId, driverId);
+      await applyDriverSplit(rideId);
       // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora.
       broadcastRideRevoked(rideId, 'taken', driverId);
       // Avisa o passageiro — mesma notificação usada pela confirmação via popup
@@ -932,24 +1168,23 @@ export function useScheduledRides(passengerId: string | undefined, jurisdiction:
     }
   }, []);
 
-  const cancel = useCallback(async (rideId: string) => {
-    // Cancelamento atômico: só cancela se a corrida ainda não terminou/cancelou.
-    // `.select().maybeSingle()` retorna a linha só quando o UPDATE realmente bateu,
-    // então detectamos "cancelei agora" vs. "já estava finalizada" — sem isso um
-    // UPDATE que não afeta nada volta como sucesso e emitiríamos revogação à toa.
-    const { data: updated } = await supabase
-      .from('rides')
-      .update({ status: 'cancelled' as RideStatus })
-      .eq('id', rideId)
-      .not('status', 'in', '(completed,cancelled)')
-      .select('id')
-      .maybeSingle();
-    await refresh();
-    // Para o alarme de TODOS os motoristas que tenham esse agendamento como oferta.
-    if (updated) broadcastRideRevoked(rideId, 'cancelled');
+  /**
+   * Devolve se o cancelamento foi de fato aceito pelo servidor. Antes era
+   * `Promise<void>` e o erro do UPDATE era descartado: a tela chamava isto sem
+   * `await` e o card do agendamento continuava lá, sem explicação nenhuma. Pior,
+   * dentro da janela de 60 min o cancelamento é COBRADO — o passageiro tocava
+   * "cancelar mesmo assim", não via nada mudar, tocava de novo, e seguia sem
+   * saber se ia ser cobrado uma vez, duas ou nenhuma.
+   */
+  const cancel = useCallback(async (rideId: string): Promise<boolean> => {
+    const ok = await cancelScheduledRide(rideId);
+    // Só relemos a lista quando o servidor confirmou: num erro nada mudou, e um
+    // refresh à toa só pisca a tela.
+    if (ok) await refresh();
+    return ok;
   }, [refresh]);
 
-  return { rides, loading, refresh, activate, cancel, claimScheduledRide };
+  return { rides, loading, loadFailed, refresh, activate, cancel, claimScheduledRide };
 }
 
 export function useDriverRide(driverId: string | undefined, jurisdiction: string = 'global') {
@@ -976,8 +1211,24 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
   const [offerQueue, setOfferQueue] = useState<Ride[]>([]);
   const pendingRide = offerQueue.length > 0 ? offerQueue[0] : null;
   // Espelho síncrono da fila para leitura dentro de handlers/intervals.
+  //
+  // Atribuído EM RENDER, como `multiOfferRef` logo acima. Antes a sincronia
+  // morava num `useEffect(..., [offerQueue])`, que roda DEPOIS do commit: se um
+  // `ride_offer_revoked` chegasse ENTRE O COMMIT E O FLUSH DO EFEITO PASSIVO,
+  // `queueHasOffer(offerQueueRef.current, ...)` respondia sobre a fila ANTERIOR
+  // — `offerInQueue: false` para uma oferta que está na fila. Em modo multi isso
+  // é exatamente `silenceThisOffer = false`: o telefone segue tocando por uma
+  // corrida já dada a outro motorista, que é o defeito que `decideOfferSilence`
+  // existe para evitar, reentrando pela porta do chamador.
+  //
+  // O QUE ISTO **NÃO** FECHA, para ninguém confiar demais: a janela do MESMO
+  // macrotask. `setOfferQueue` é assíncrono e em lote, e o render só acontece
+  // numa tarefa posterior — um evento que chegue antes desse render lê o ref
+  // velho exatamente como antes. Essa janela não é fechável por ref; fechá-la
+  // exigiria a fila viver no próprio ref (fonte da verdade) com o `useState`
+  // servindo só para pintar.
   const offerQueueRef = useRef<Ride[]>([]);
-  useEffect(() => { offerQueueRef.current = offerQueue; }, [offerQueue]);
+  offerQueueRef.current = offerQueue;
 
   // Remove uma oferta por id (de qualquer posição da fila) — se era a cabeça, a
   // próxima assume automaticamente. Idempotente (id ausente = no-op).
@@ -1032,24 +1283,35 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
   // registraria o log de auditoria duas vezes. Chave = `${rideId}:${reason}`.
   const handledRevocations = useRef<Set<string>>(new Set());
 
-  // Mantém ref sincronizada para usar dentro de setInterval sem stale closure
+  // Mantém ref sincronizada para usar dentro de setInterval sem stale closure.
+  // Em render, pelo mesmo motivo do `offerQueueRef` acima: `pendingRide` é a
+  // CABEÇA de `offerQueue`, e as duas entradas de `decideOfferSilence`
+  // precisam vir do MESMO commit — se uma for velha e a outra nova, a decisão
+  // é tomada sobre um estado que nunca existiu.
+  pendingRideIdRef.current = pendingRide?.id ?? null;
+
   useEffect(() => {
-    pendingRideIdRef.current = pendingRide?.id ?? null;
     if (__DEV__) console.log(`[${Platform.OS}][dispatch] pendingRide agora =`, pendingRide?.id ?? 'null');
   }, [pendingRide?.id]);
 
-  useEffect(() => {
-    pendingScheduledRideIdRef.current = pendingScheduledRide?.id ?? null;
-  }, [pendingScheduledRide?.id]);
-
-  // Mantém ref da corrida ativa sincronizada — usada para decidir, fora de
-  // qualquer closure de handler, se uma NOVA chamada de corrida pode chegar
-  // ao motorista (ver canReceiveNewRideOffer): uma vez que ele inicia o
-  // deslocamento de uma corrida (agendada ou não), fica bloqueado para novas
-  // chamadas até faltar <=5min para terminar, salvo destino igual/perto (1km).
-  useEffect(() => {
-    activeRideRef.current = activeRide;
-  }, [activeRide]);
+  // As outras DUAS entradas de `resolveRevocation` (:1616-1618). Também em
+  // render, e não em `useEffect`, pelo mesmo motivo — mas registrar por que a
+  // meia-correção era pior que não ter corrigido nada:
+  //
+  // enquanto só `pendingRideIdRef` vinha do render e estes dois vinham do
+  // efeito, uma única chamada de `resolveRevocation` misturava commits. No
+  // aceite, `setActiveRide(ride)` e a saída da oferta da fila caem no MESMO
+  // lote; depois do commit, `pendingRideIdRef` já é `null` e `activeRideRef`
+  // ainda é `null` porque o efeito passivo não rodou. Um broadcast
+  // `'cancelled'` nessa janela decide sobre um estado que nunca existiu e
+  // devolve `endActiveRide: false` — o motorista segue navegando para uma
+  // corrida cancelada.
+  //
+  // `activeRideRef` também alimenta `canReceiveNewRideOffer` (:1219, :1280,
+  // :1417, :1465, :1527): uma vez iniciado o deslocamento, o motorista fica
+  // bloqueado para novas chamadas até faltar <=5min, salvo destino igual/perto.
+  pendingScheduledRideIdRef.current = pendingScheduledRide?.id ?? null;
+  activeRideRef.current = activeRide;
 
   // ─── OfferAlertManager: fechar o card sob ordem do dono único do alerta ──────
   // O singleton (watchdog de 20s, revogação, etc.) pode decidir encerrar uma
@@ -1526,30 +1788,30 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
       // Dedupe: broadcastRideRevoked emite dois eventos no aceite
       // (ride_offer_revoked + ride_taken legado) — só auditamos uma vez.
       const key = `${rideId}:${reason}`;
-      const firstTime = !handledRevocations.current.has(key);
+      const alreadyHandled = handledRevocations.current.has(key);
       handledRevocations.current.add(key);
 
-      // Remove esta oferta se ela estiver na fila do motorista. Com a flag on, a
-      // oferta revogada pode estar na CAUDA (não só na cabeça) — resolveRevocation
-      // só enxerga a cabeça (pendingRideId), então cobrimos a cauda via a fila.
-      const clearThisOffer = multiOfferRef.current
-        ? queueHasOffer(offerQueueRef.current, rideId ?? '')
-        : actions.clearPendingRide;
-      if (clearThisOffer && rideId) {
+      // A regra em si mora em `decideOfferSilence` (src/lib/rideRevocation.ts),
+      // pura e com teste próprio. Aqui ficam só os efeitos.
+      const silence = decideOfferSilence({
+        reason,
+        multiOffer: multiOfferRef.current,
+        offerInQueue: queueHasOffer(offerQueueRef.current, rideId ?? ''),
+        clearPendingRide: actions.clearPendingRide,
+        alreadyHandled,
+      });
+      if (silence.silenceThisOffer && rideId) {
         // TERMINAL: para o som/vibração/watchdog e lapida o id AGORA — sem
         // depender do unmount do card (que pode atrasar). stopAll também dispensa
         // a notificação e fecha o card via forceClose (remove da fila e promove a
         // próxima); mantemos o dismissOffer explícito para o caso raro de o
         // callback ainda não estar registrado. Só remove ESTA oferta — as demais
         // da fila permanecem.
-        offerAlertManager.stopAll(
-          rideId,
-          reason === 'taken' ? 'taken' : reason === 'expired' ? 'expired' : 'revoked'
-        );
+        offerAlertManager.stopAll(rideId, silence.alertReason);
         dismissOffer(rideId);
         // Dispensa também a notificação de oferta da bandeja/lockscreen (item 3).
         dismissRideNotifications(rideId);
-        if (firstTime) {
+        if (silence.logTakenByOther) {
           logRideOfferEvent(rideId, driverId, 'taken_by_other', { reason });
         }
       }
@@ -1702,10 +1964,12 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
 
     let ride = data as Ride;
 
-    // 2b) Reaplica a fatia real deste motorista ao split (fire-and-forget) — o
-    //     driver_id agora é conhecido, então driver_amount/platform_fee passam a
-    //     refletir a faixa de comissão dele (85% ou 80%).
-    applyDriverSplit(rideId, driverId!);
+    // 2b) Reaplica a fatia real deste motorista ao split — o driver_id agora é
+    //     conhecido, então driver_amount/platform_fee passam a refletir a faixa
+    //     de comissão dele (85% ou 80%). Awaited: o RPC é uma ida rápida ao
+    //     banco e um split errado é dinheiro errado no repasse; um erro aqui
+    //     precisa aparecer na telemetria, não sumir.
+    await applyDriverSplit(rideId);
 
     // 3) Calcula o ETA até o embarque para gravar em rides — assim o passageiro
     //    recebe o tempo estimado junto com o aviso de "motorista a caminho".
@@ -1782,7 +2046,7 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
     const ride = data as Ride;
 
     // Reaplica a fatia deste motorista ao split (driver_id agora é conhecido).
-    applyDriverSplit(ride.id, driverId!);
+    await applyDriverSplit(ride.id);
 
     // Remove o card da aba "Agenda" e do popup dos DEMAIS motoristas na hora
     // (mesmo mecanismo usado em acceptRide para corridas imediatas).
@@ -1821,7 +2085,7 @@ export function useDriverRide(driverId: string | undefined, jurisdiction: string
     const ride = data as Ride;
     // Reaplica a fatia deste motorista ao split (agendamento travado por QR:
     // driver_id já era dele desde a criação, mas o split fora gravado no padrão).
-    applyDriverSplit(ride.id, driverId!);
+    await applyDriverSplit(ride.id);
     // Broadcast direto para o passageiro (mais confiável que push/postgres_changes)
     broadcastToPassenger(ride.passenger_id, ride.id);
     // Tenta push remoto como fallback

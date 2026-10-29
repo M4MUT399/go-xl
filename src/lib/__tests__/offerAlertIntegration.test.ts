@@ -32,43 +32,86 @@ jest.mock('../notifications', () => ({
 }));
 
 import { OfferAlertManager } from '../offerAlertManager';
-import { resolveRevocation, type RevocationEvent } from '../rideRevocation';
+import { resolveRevocation, decideOfferSilence, type RevocationEvent } from '../rideRevocation';
+import { arriveOffer, resolveOffer, queueHasOffer } from '../offerQueue';
 
 const RIDE = 'ride-fanout-1';
 
-/** Um "aparelho": manager próprio + estado de oferta + card (forceClose). */
+/**
+ * Um "aparelho": manager próprio + fila de ofertas + card (forceClose).
+ *
+ * `onBroadcast` REPLICA a ordem de chamadas de `useRide.handleRevocation`
+ * (`src/hooks/useRide.ts`, ~:1600) e NÃO decide nada por conta própria. Isso é
+ * o ponto do arquivo, e uma versão anterior errava exatamente aqui: ela
+ * reimplementava o ternário de motivo à mão, e com isso ficava CEGA para
+ * `decideOfferSilence`. Estava provado — com `silenceThisOffer` fixado em
+ * `false` (nenhum motorista jamais para de tocar por revogação: o bug inteiro
+ * de volta), esta suíte passava 4/4. Ela testava a cópia, não a regra.
+ *
+ * Qualquer decisão nova que apareça no handler tem de entrar na função pura e
+ * ser chamada daqui — não reescrita abaixo.
+ */
 class Client {
   manager = new OfferAlertManager();
-  pendingRideId: string | null = null;
+  /** Espelha `offerQueue` do useDriverRide; a CABEÇA é o card visível. */
+  offerQueue: { id: string }[] = [];
   cardClosed = false;
+  /** Dedupe `${rideId}:${reason}`, como `handledRevocations` no hook. */
+  handled = new Set<string>();
+  /** Auditorias 'taken_by_other' emitidas — uma por perda de corrida. */
+  logged: string[] = [];
   stopAll = jest.spyOn(this.manager, 'stopAll');
 
-  constructor(readonly driverId: string) {
-    // O forceClose do manager fecha o card e zera o pendingRide (como no
+  constructor(readonly driverId: string, readonly multiOffer = false) {
+    // O forceClose do manager fecha o card e tira a oferta da fila (como no
     // useDriverRide). É assim que o watchdog/stopAll mantêm card e som juntos.
     this.manager.registerForceClose((rideId) => {
-      if (this.pendingRideId === rideId) {
-        this.pendingRideId = null;
+      if (queueHasOffer(this.offerQueue, rideId)) {
+        this.offerQueue = resolveOffer(this.offerQueue, rideId);
         this.cardClosed = true;
       }
     });
   }
 
-  /** A oferta chega: card aparece e o alarme começa. */
+  /** A cabeça da fila é o que o motorista vê/ouve agora. */
+  get pendingRideId(): string | null {
+    return this.offerQueue.length > 0 ? this.offerQueue[0].id : null;
+  }
+
+  /**
+   * Espelha `useRideCallAlert` (src/hooks/useRideCallAlert.ts:21-34): o alarme
+   * é dirigido pelo CARD, e o card mostra só a CABEÇA da fila. Uma oferta na
+   * cauda NÃO toca — o `OfferAlertManager` é de propósito um slot único
+   * (`offerAlertManager.ts:135-137`: oferta nova encerra a anterior). Modelar
+   * `startAlert` por oferta que chega, e não por cabeça, seria inventar um
+   * defeito que o app não tem.
+   */
+  private alerting: string | null = null;
+  private syncAlert() {
+    const head = this.pendingRideId;
+    if (head === this.alerting) return;
+    if (this.alerting) this.manager.stopAll(this.alerting, 'card_unmounted');
+    this.alerting = head;
+    if (head) this.manager.startAlert(head);
+  }
+
+  /** A oferta chega: entra na fila; se virar cabeça, o card aparece e toca. */
   receiveOffer(rideId: string) {
-    this.pendingRideId = rideId;
+    this.offerQueue = arriveOffer(this.offerQueue, { id: rideId }, this.multiOffer);
     this.cardClosed = false;
-    this.manager.startAlert(rideId);
+    this.syncAlert();
   }
 
   /** ACEITAR (vencedor): silêncio local imediato ANTES de avisar a rede. */
   accept(rideId: string) {
     this.manager.stopAll(rideId, 'accepted');
+    this.syncAlert(); // o card sai da tela na hora, não no broadcast
   }
 
   /** RECUSAR: silêncio local imediato, sem depender de rede. */
   decline(rideId: string) {
     this.manager.stopAll(rideId, 'declined');
+    this.syncAlert();
   }
 
   /** Recebe um evento do canal `ride-offers` e decide como useDriverRide. */
@@ -79,12 +122,26 @@ class Client {
       pendingScheduledRideId: null,
       activeRideId: null,
     });
-    if (actions.clearPendingRide) {
-      this.manager.stopAll(
-        event.rideId!,
-        event.reason === 'taken' ? 'taken' : event.reason === 'expired' ? 'expired' : 'revoked'
-      );
+
+    const key = `${event.rideId}:${event.reason}`;
+    const alreadyHandled = this.handled.has(key);
+    this.handled.add(key);
+
+    const silence = decideOfferSilence({
+      reason: event.reason,
+      multiOffer: this.multiOffer,
+      offerInQueue: queueHasOffer(this.offerQueue, event.rideId ?? ''),
+      clearPendingRide: actions.clearPendingRide,
+      alreadyHandled,
+    });
+
+    if (silence.silenceThisOffer && event.rideId) {
+      this.manager.stopAll(event.rideId, silence.alertReason);
+      this.offerQueue = resolveOffer(this.offerQueue, event.rideId);
+      if (silence.logTakenByOther) this.logged.push(event.rideId);
     }
+    // A cabeça pode ter mudado: a próxima da fila assume o card.
+    this.syncAlert();
   }
 
   get isRinging() {
@@ -111,7 +168,13 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-describe('fan-out: 1 aceita → os outros 3 silenciam em <2s', () => {
+// NÃO há asserção de tempo de parede aqui. Sob `jest.useFakeTimers()` o
+// `Date.now()` fica congelado, então qualquer `expect(elapsed).toBeLessThan(...)`
+// compara 0 com o limite e não pode falhar. O contrato de <2s é medida de campo
+// (dispositivo real, rede real) e continua PENDENTE — ver a lista de métricas
+// não observadas. O que estes testes provam é a ORDEM: o silenciamento acontece
+// no mesmo tick do aceite, sem depender de timer.
+describe('fan-out: 1 aceita → os outros 3 silenciam no mesmo tick', () => {
   it('todos os não-vencedores chamam stopAll e fecham o card imediatamente', () => {
     const clients = [new Client('drv-0'), new Client('drv-1'), new Client('drv-2'), new Client('drv-3')];
     const bus = makeBus(clients);
@@ -121,13 +184,8 @@ describe('fan-out: 1 aceita → os outros 3 silenciam em <2s', () => {
     expect(clients.every((c) => c.isRinging)).toBe(true);
 
     // drv-0 aceita: silêncio local + avisa a rede (broadcast 'taken').
-    const t0 = Date.now();
     clients[0].accept(RIDE);
     bus.broadcastRevoked(RIDE, 'drv-0', 'taken');
-    const elapsed = Date.now() - t0;
-
-    // Contrato de tempo: silenciamento síncrono, muito abaixo de 2s.
-    expect(elapsed).toBeLessThan(2000);
 
     // Vencedor: parou pelo aceite (o eco do próprio 'taken' NÃO o limpa de novo).
     expect(clients[0].stopAll).toHaveBeenCalledWith(RIDE, 'accepted');
@@ -167,10 +225,8 @@ describe('fan-out com uma RECUSA antes do aceite', () => {
     clients[3].stopAll.mockClear();
 
     // drv-0 aceita → broadcast.
-    const t0 = Date.now();
     clients[0].accept(RIDE);
     bus.broadcastRevoked(RIDE, 'drv-0', 'taken');
-    expect(Date.now() - t0).toBeLessThan(2000);
 
     // drv-1 e drv-2 silenciam pela revogação.
     for (const c of [clients[1], clients[2]]) {
@@ -183,6 +239,64 @@ describe('fan-out com uma RECUSA antes do aceite', () => {
     expect(clients[3].isRinging).toBe(false);
     // Ninguém segue tocando.
     expect(clients.every((c) => !c.isRinging)).toBe(true);
+  });
+});
+
+describe('fan-out com FILA (multiOffer): a revogada pode estar na CAUDA', () => {
+  // Sem este bloco, o modo multi fica sem cobertura nenhuma no fan-out e a
+  // regra `multiOffer ? offerInQueue : clearPendingRide` vira meia-morta:
+  // no slot único as duas entradas coincidem, então inverter o ternário passa
+  // por todos os outros testes deste arquivo. Aqui elas divergem de propósito.
+  const OUTRA = 'ride-fanout-2';
+
+  it('a oferta da CAUDA revogada some sem calar a CABEÇA, que segue tocando', () => {
+    const drv = new Client('drv-1', true);
+    drv.receiveOffer(RIDE); // cabeça: o card que ele vê
+    drv.receiveOffer(OUTRA); // cauda: enfileirada, sem cancelar a primeira
+    expect(drv.offerQueue.map((o) => o.id)).toEqual([RIDE, OUTRA]);
+
+    // OUTRA é aceita por outro motorista. `resolveRevocation` só compara com a
+    // CABEÇA, então `clearPendingRide` é false: quem tem de mandar aqui é a
+    // presença na fila.
+    drv.onBroadcast({ rideId: OUTRA, by: 'drv-9', reason: 'taken' });
+
+    expect(drv.offerQueue.map((o) => o.id)).toEqual([RIDE]);
+    expect(drv.stopAll).toHaveBeenCalledWith(OUTRA, 'taken');
+    expect(drv.isRinging).toBe(true); // a cabeça NÃO foi calada junto
+  });
+
+  it('a CABEÇA revogada cala e promove a próxima da fila', () => {
+    const drv = new Client('drv-1', true);
+    drv.receiveOffer(RIDE);
+    drv.receiveOffer(OUTRA);
+
+    drv.onBroadcast({ rideId: RIDE, by: 'drv-9', reason: 'taken' });
+
+    expect(drv.stopAll).toHaveBeenCalledWith(RIDE, 'taken');
+    expect(drv.pendingRideId).toBe(OUTRA);
+  });
+});
+
+describe('o aceite emite DOIS eventos: silencia sempre, audita uma vez', () => {
+  it('evento repetido ainda cala o som, mas não conta a perda duas vezes', () => {
+    const drv = new Client('drv-1');
+    drv.receiveOffer(RIDE);
+
+    drv.onBroadcast({ rideId: RIDE, by: 'drv-0', reason: 'taken' });
+    expect(drv.logged).toEqual([RIDE]);
+    expect(drv.isRinging).toBe(false);
+
+    // Realtime reentrega o MESMO evento e, nesse meio-tempo, um poll atrasado
+    // trouxe o card de volta. O segundo evento tem de conseguir calar de novo —
+    // silenciar é idempotente e inofensivo; deixar tocando é o defeito.
+    drv.offerQueue = [{ id: RIDE }];
+    drv.stopAll.mockClear();
+    drv.onBroadcast({ rideId: RIDE, by: 'drv-0', reason: 'taken' });
+
+    expect(drv.stopAll).toHaveBeenCalledWith(RIDE, 'taken');
+    expect(drv.offerQueue).toEqual([]);
+    // ...mas a auditoria continua com UMA perda, não duas.
+    expect(drv.logged).toEqual([RIDE]);
   });
 });
 

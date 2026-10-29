@@ -121,6 +121,7 @@ interface RideRow {
   origin_lng: number;
   destination_lat: number;
   destination_lng: number;
+  stops: { lat: number; lng: number; done_at?: string | null }[] | null;
 }
 
 Deno.serve(async (req) => {
@@ -150,7 +151,7 @@ Deno.serve(async (req) => {
 
     const { data: ride, error: rideErr } = await admin
       .from('rides')
-      .select('driver_id, status, driver_lat, driver_lng, origin_lat, origin_lng, destination_lat, destination_lng')
+      .select('driver_id, status, driver_lat, driver_lng, origin_lat, origin_lng, destination_lat, destination_lng, stops')
       .eq('id', rideId)
       .maybeSingle();
     if (rideErr || !ride) return json({ error: 'Corrida não encontrada' }, 404);
@@ -166,8 +167,11 @@ Deno.serve(async (req) => {
     const start = r.driver_lat != null && r.driver_lng != null
       ? { lat: r.driver_lat, lng: r.driver_lng }
       : { lat: r.origin_lat, lng: r.origin_lng };
+    // Com paradas (0091), o alvo do trecho em curso é a PRIMEIRA parada ainda
+    // não concluída; acabadas as paradas, o destino.
+    const nextStop = (r.stops ?? []).find((s) => !s.done_at);
     const target = r.status === 'in_progress'
-      ? { lat: r.destination_lat, lng: r.destination_lng }
+      ? (nextStop ? { lat: nextStop.lat, lng: nextStop.lng } : { lat: r.destination_lat, lng: r.destination_lng })
       : { lat: r.origin_lat, lng: r.origin_lng };
 
     // Google (ETA com trânsito) com fallback automático para OSRM — geometria

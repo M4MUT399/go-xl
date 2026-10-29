@@ -88,23 +88,42 @@ Deno.serve(async (req) => {
       await stripe.customers.update(customerId, {
         invoice_settings: { default_payment_method: next.id },
       });
+      // Mesmo par de colunas que o stripe-webhook grava (0078): sem elas, um
+      // método sem cartão promovido a padrão aqui voltaria a ficar invisível na
+      // tela — o defeito seria reintroduzido pelo caminho de REMOVER cartão.
+      const rotulo = next.card
+        ? `${next.card.brand} •••• ${next.card.last4}`
+        : next.type === 'link'
+          ? `Link${next.link?.email ? ` · ${next.link.email}` : ''}`
+          : next.type;
+
       await admin.from('profiles').update({
         stripe_payment_method_id: next.id,
         card_last4: next.card?.last4 ?? null,
         card_brand: next.card?.brand ?? null,
+        payment_method_type: next.type,
+        payment_method_label: rotulo,
       }).eq('id', user.id);
 
       return json({
         ok: true,
-        newDefault: { id: next.id, last4: next.card?.last4 ?? '', brand: next.card?.brand ?? '' },
+        newDefault: {
+          id: next.id,
+          last4: next.card?.last4 ?? '',
+          brand: next.card?.brand ?? '',
+          type: next.type,
+          label: rotulo,
+        },
       });
     }
 
-    // Não sobrou nenhum cartão.
+    // Não sobrou nenhum método.
     await admin.from('profiles').update({
       stripe_payment_method_id: null,
       card_last4: null,
       card_brand: null,
+      payment_method_type: null,
+      payment_method_label: null,
     }).eq('id', user.id);
 
     return json({ ok: true, newDefault: null });

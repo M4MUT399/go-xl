@@ -11,8 +11,27 @@
 //   permitida mesmo assim — faz sentido oferecer, já que o motorista está
 //   indo para aquela região de qualquer forma.
 //
-// Isolado de React/Supabase de propósito: pura e testável sem mocks.
-import { haversineKm, type LatLng } from './airportFees';
+// Este módulo NÃO PODE IMPORTAR NADA. Ele é re-exportado para o runtime Deno
+// por `supabase/functions/_shared/rideDispatch.ts`, e lá um import relativo sem
+// extensão `.ts` não resolve — a regra tem de rodar igual no cliente e na Edge
+// Function `send-ride-push`, que é quem de fato aplica o filtro (ver
+// driversFreeForOffer). Mesma restrição — e mesmo motivo — de dispatchEngine.ts.
+
+type LatLng = { lat: number; lng: number };
+
+const EARTH_KM = 6371;
+const toRad = (deg: number) => (deg * Math.PI) / 180;
+
+/** Distância em km entre dois pontos (haversine). Mesma fórmula de airportFees. */
+function haversineKm(a: LatLng, b: LatLng): number {
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
 
 /** Status de corrida em que o motorista já está comprometido/ocupado. */
 const BUSY_STATUSES = new Set(['accepted', 'driver_en_route', 'in_progress']);
@@ -82,4 +101,28 @@ export function canReceiveNewRideOffer(
   if (withinRadius(activeRide, offer)) return true;
 
   return false;
+}
+
+/** Linha de `rides` em status ocupado, já com o motorista a que pertence. */
+export type BusyRideRow = ActiveRideForDispatch & { driver_id?: string | null };
+
+/**
+ * Dos `driverIds` considerados, quais podem receber ESTA oferta agora.
+ *
+ * Só o SERVIDOR consegue montar `busyRides`: a RLS de `rides` (migration 0067)
+ * expõe ao passageiro apenas o pool aberto e as corridas dele — nunca a corrida
+ * ativa de outro passageiro com outro motorista. Um filtro equivalente no
+ * cliente lê sempre uma lista vazia e libera todo mundo, que é exatamente como
+ * esta regra ficou inerte enquanto morava em `notifyOnlineDrivers`.
+ */
+export function driversFreeForOffer(
+  driverIds: string[],
+  busyRides: BusyRideRow[] | null | undefined,
+  offer: RideOfferForDispatch
+): string[] {
+  const busyByDriver = new Map<string, BusyRideRow>();
+  for (const row of busyRides ?? []) {
+    if (row.driver_id) busyByDriver.set(row.driver_id, row);
+  }
+  return driverIds.filter((id) => canReceiveNewRideOffer(busyByDriver.get(id) ?? null, offer));
 }

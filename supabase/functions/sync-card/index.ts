@@ -87,11 +87,14 @@ Deno.serve(async (req) => {
     let pmId = (customer.invoice_settings?.default_payment_method as string) ?? '';
 
     if (!pmId) {
-      const pms = await stripe.paymentMethods.list({
-        customer: customerId,
-        type: 'card',
-        limit: 1,
-      });
+      // SEM `type: 'card'`. Este é o caminho DETERMINÍSTICO — a tela o chama
+      // logo depois do Checkout, sem esperar o webhook —, e o filtro fazia com
+      // que um método que não é cartão simplesmente não fosse encontrado:
+      // `found: false`, perfil sem método, e o passageiro achando que o
+      // cadastro falhou. Quando o Link JÁ era o padrão do Customer, o `pmId`
+      // vinha do `invoice_settings` acima e o filtro nem era alcançado — que é
+      // como o perfil da corrida f28f2887 acabou com Link salvo e a tela vazia.
+      const pms = await stripe.customers.listPaymentMethods(customerId, { limit: 1 });
       if (pms.data.length) pmId = pms.data[0].id;
     }
 
@@ -107,6 +110,15 @@ Deno.serve(async (req) => {
     const pm   = await stripe.paymentMethods.retrieve(pmId);
     const card = pm.card;
 
+    // Mesmo par que o stripe-webhook e o remove-card gravam (migration 0078).
+    // `card_last4`/`card_brand` continuam como estavam, para a build do app em
+    // campo; estes dois é que dizem a verdade quando não há cartão.
+    const pmRotulo = pm.card
+      ? `${pm.card.brand} •••• ${pm.card.last4}`
+      : pm.type === 'link'
+        ? `Link${pm.link?.email ? ` · ${pm.link.email}` : ''}`
+        : pm.type;
+
     // ── Grava no perfil (upsert preservando os campos já existentes) ─────────
     await admin.from('profiles').upsert({
       id:                       user.id,
@@ -121,6 +133,8 @@ Deno.serve(async (req) => {
       stripe_payment_method_id: pmId,
       card_last4:               card?.last4 ?? null,
       card_brand:               card?.brand ?? null,
+      payment_method_type:      pm.type,
+      payment_method_label:     pmRotulo,
     }, { onConflict: 'id' });
 
     return json({

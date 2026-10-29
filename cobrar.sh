@@ -1,8 +1,10 @@
 #!/bin/zsh
 # cobrar.sh — atalho para cobrar a tarifa de uma corrida que rodou sem cobrança.
 #
-#   ./cobrar.sh        → só MOSTRA o que seria cobrado (não cobra nada)
-#   ./cobrar.sh sim    → cobra de verdade
+#   ./cobrar.sh "Daniel Perry"       → só MOSTRA o que seria cobrado (não cobra)
+#   ./cobrar.sh "Daniel Perry" sim   → cobra de verdade
+#
+# Aceita o nome do passageiro ou o id da corrida.
 #
 # A chave do Stripe vem de supabase/scripts/.env (gravada uma vez por
 # salvar_chave.sh). O clipboard não é mais usado para nada: copiar qualquer
@@ -20,10 +22,17 @@ if ! grep -q '^STRIPE_SECRET_KEY=' supabase/scripts/.env 2>/dev/null; then
   exit 1
 fi
 
-if [ "$1" = "sim" ]; then
+ALVO="$1"
+if [ -z "$ALVO" ]; then
+  echo "PAREI: falta dizer QUEM cobrar."
+  echo 'Exemplo:  /Users/mamute99/cobrar "Daniel Perry"'
+  exit 1
+fi
+
+if [ "$2" = "sim" ]; then
   deno run --allow-env --allow-net --allow-read \
-    --node-modules-dir=auto supabase/scripts/charge_unpaid_ride.ts "Jeff Reina" --confirm
+    --node-modules-dir=auto supabase/scripts/charge_unpaid_ride.ts "$ALVO" --confirm
 else
   deno run --allow-env --allow-net --allow-read \
-    --node-modules-dir=auto supabase/scripts/charge_unpaid_ride.ts "Jeff Reina"
+    --node-modules-dir=auto supabase/scripts/charge_unpaid_ride.ts "$ALVO"
 fi

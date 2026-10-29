@@ -7,10 +7,27 @@ export { LANGUAGES };
 export type { Lang };
 
 const STORAGE_KEY = '@goxl:lang';
+// Escolha FEITA PELO USUÁRIO num seletor que ainda não chegou ao perfil (ex.: na
+// tela de Login, antes de haver sessão). O AppNavigator consome isto quando o
+// perfil carrega e grava em profiles.language — é de lá que o e-mail de recibo
+// tira o idioma. Sem isto o login sobrescrevia a escolha com o "en" do perfil.
+const PENDING_SYNC_KEY = '@goxl:lang_pending_sync';
+
+/** Lê e apaga a escolha explícita de idioma ainda não sincronizada com o perfil. */
+export async function consumeExplicitLangChoice(): Promise<Lang | null> {
+  try {
+    const v = (await AsyncStorage.getItem(PENDING_SYNC_KEY)) as Lang | null;
+    if (v) await AsyncStorage.removeItem(PENDING_SYNC_KEY);
+    return v && translations[v] ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 type I18nContextValue = {
   lang: Lang;
-  setLang: (l: Lang) => void;
+  /** `explicit`: o usuário escolheu num seletor — vai para o perfil no próximo carregamento. */
+  setLang: (l: Lang, opts?: { explicit?: boolean }) => void;
   t: (key: string, fallback?: string) => string;
 };
 
@@ -44,9 +61,10 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  const setLang = useCallback((l: Lang) => {
+  const setLang = useCallback((l: Lang, opts?: { explicit?: boolean }) => {
     setLangState(l);
     AsyncStorage.setItem(STORAGE_KEY, l).catch(() => {});
+    if (opts?.explicit) AsyncStorage.setItem(PENDING_SYNC_KEY, l).catch(() => {});
   }, []);
 
   const t = useCallback(

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView, Share,
+  View, Text, StyleSheet, TouchableOpacity, Platform, Alert, ScrollView, Share, ActivityIndicator, Linking,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,7 +19,13 @@ import { useTripShare } from '../../hooks/useTripShare';
 import { useDriverBoardingConfirmation } from '../../hooks/useDriverBoardingConfirmation';
 import { useCameraController } from '../../hooks/useCameraController';
 import { KM_TO_MILES, formatCurrency } from '../../lib/format';
+import { telemetryFreshness, staleMinutes } from '../../lib/telemetryFreshness';
 import { CarMarker } from '../../components/common/CarMarker';
+import { PassengerMarker } from '../../components/common/PassengerMarker';
+import {
+  usePublishPassengerLocation,
+  PASSENGER_PUBLISH_STATUSES,
+} from '../../hooks/usePassengerLocation';
 import { SmoothMarker } from '../../components/common/SmoothMarker';
 import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 import type { MarkerFix } from '../../lib/nav/smoothMarker';
@@ -27,6 +33,8 @@ import { nearestPointOnPath, splitPathAtSnap, fromMapCoord, toMapCoord } from '.
 import { parseSharedRoute } from '../../lib/nav/sharedRoute';
 import { rideOrigin, rideDestination } from '../../lib/ride';
 import { useTranslation } from '../../i18n';
+import { waitFeeFor, WAIT_FREE_MINUTES, WAIT_FEE_PER_MINUTE } from '../../lib/fare';
+import { rideStops } from '../../hooks/useLiveRide';
 import { notifyInApp } from '../../lib/inAppNotify';
 
 type Props = {
@@ -64,11 +72,19 @@ export function ActiveRideScreen({ navigation, route }: Props) {
   // inteiro) — bug conhecido do react-native-maps. `onMapReady` garante que só
   // recentralizamos depois que o mapa está de fato pronto para receber câmera.
   const [mapReady, setMapReady] = useState(false);
+  // Até o embarque, o passageiro publica a própria posição para o motorista
+  // achá-lo (0090) e se vê no mapa junto do carro, estilo Uber.
+  const myLive = usePublishPassengerLocation(
+    ride.id,
+    (PASSENGER_PUBLISH_STATUSES as readonly string[]).includes(ride.status),
+  );
 
   const styles = makeStyles(colors);
 
   useChatAlert(ride.id, profile?.id, isFocused, t('activeRide.driverFallback'));
   const [driverName, setDriverName] = useState(t('activeRide.driverFallback'));
+  /** Nota REAL do motorista; `null` = ainda não carregou ou ele não tem nota. */
+  const [driverRating, setDriverRating] = useState<number | null>(null);
   const vehicle = useDriverVehicle(ride.driver_id);
 
   const canCancel = ride.status === 'accepted' || ride.status === 'driver_en_route';
@@ -160,7 +176,21 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     })();
   }, [profile?.trip_autoshare, profile?.trip_autoshare_contact_id, canShare, createShare]);
 
+  // O cancelamento faz vários round-trips (leitura da corrida, refund-ride,
+  // UPDATE, dispatch-engine) — bem acima dos 400 ms. Antes o Alert fechava e a
+  // tela ficava idêntica durante todo esse tempo, sem nada indicando que algo
+  // estava acontecendo; o passageiro tocava "Cancelar corrida" de novo.
+  const [cancelling, setCancelling] = useState(false);
+  /** true quando o último polling de telemetria falhou — ver `fetchTelemetry`. */
+  const [telemetryStale, setTelemetryStale] = useState(false);
+  // Há quanto tempo estamos olhando para a MESMA coordenada. É o reserva de
+  // `driver_telemetry_at` enquanto houver motorista com build anterior à 0086:
+  // sem carimbo não dá para medir idade, então medimos imobilidade.
+  const posicaoParadaDesde = useRef<{ lat: number; lng: number; desdeMs: number } | null>(null);
+  const [staleMin, setStaleMin] = useState(0);
+
   function handleCancel() {
+    if (cancelling) return;
     Alert.alert(t('activeRide.cancelRideTitle'), t('activeRide.cancelRideMessage'), [
       { text: t('activeRide.no'), style: 'cancel' },
       {
@@ -172,22 +202,50 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           // motorista — mesmo que o realtime/polling atualize `ride.status`
           // antes do `navigation.reset` desmontar a tela.
           selfCancelledRef.current = true;
-          await cancelRide(ride.id);
+          setCancelling(true);
+          const ok = await cancelRide(ride.id);
+          setCancelling(false);
+          if (!ok) {
+            // Cancelamento NÃO confirmado pelo servidor: sair da tela aqui
+            // afirmaria uma corrida cancelada que continua ativa no banco, com
+            // o motorista a caminho e a tarifa retida no cartão. Ficamos na
+            // tela para o passageiro tentar de novo.
+            selfCancelledRef.current = false;
+            // PENDÊNCIA DE PRODUTO: não existe chave própria para "não
+            // conseguimos cancelar sua corrida". Reusamos
+            // `driverNav.statusUpdateFailed` ("We could not update the ride
+            // status. Check your connection and try again."), que é verdadeira
+            // nos dois modos de falha (rede e recusa do servidor) e existe em
+            // en/es/pt. O ideal seria `activeRide.cancelFailed`: "Não
+            // conseguimos cancelar sua corrida. Ela continua ativa — tente de
+            // novo." — src/i18n/translations.ts está sob edição do dono.
+            Alert.alert(t('common.error'), t('driverNav.statusUpdateFailed'));
+            return;
+          }
           navigation.reset({ index: 0, routes: [{ name: 'PassengerTabs' }] });
         },
       },
     ]);
   }
 
+  // Lemos também a NOTA do motorista. Antes só o nome vinha daqui e a estrela
+  // ao lado dele renderizava `profile?.rating ?? '4.9'` — ou seja, a nota do
+  // PRÓPRIO PASSAGEIRO logado, e um "4.9" inventado quando ela não existia. O
+  // passageiro olhava para um número que ele podia usar para decidir se entra no
+  // carro e esse número não tinha nenhuma relação com o motorista. Quando a nota
+  // real não existe (motorista novo, ainda sem avaliações) não inventamos nada:
+  // a estrela some — ver `driverRating` na renderização.
   useEffect(() => {
     if (ride.driver_id) {
       supabase
         .from('profiles_public')
-        .select('full_name')
+        .select('full_name, rating')
         .eq('id', ride.driver_id)
         .single()
         .then(({ data }) => {
-          if (data) setDriverName(data.full_name);
+          if (!data) return;
+          setDriverName(data.full_name);
+          setDriverRating(typeof data.rating === 'number' ? data.rating : null);
         });
     }
   }, [ride.driver_id]);
@@ -214,11 +272,38 @@ export function ActiveRideScreen({ navigation, route }: Props) {
     if (ride.status === 'completed' || ride.status === 'cancelled') return;
 
     async function fetchTelemetry() {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('rides')
-        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,status,driver_id,route_polyline,route_version,route_eta_min,route_distance_km')
+        .select('driver_lat,driver_lng,driver_heading,driver_eta_min,driver_eta_km,driver_telemetry_at,status,driver_id,route_polyline,route_version,route_eta_min,route_distance_km')
         .eq('id', ride.id)
         .maybeSingle();
+      // O erro era descartado: com o polling falhando, o carro parava no mapa e o
+      // ETA congelava no último número lido — mas a tela continuava mostrando
+      // "chega às 14:32" com a mesma confiança de quando o dado era fresco. O
+      // passageiro esperava na calçada por um horário que já tinha passado.
+      // Não temos como esconder o número (é o único que existe), então marcamos
+      // que ele está velho e deixamos a própria tela dizer isso.
+      // A FRESCURA agora é decidida pela regra, não pela ausência de erro. Antes
+      // bastava a consulta responder 200 para a tela tratar o número como atual
+      // — e uma linha CONGELADA responde 200 igualzinho. Foi assim que um ETA de
+      // minutos atrás foi mostrado como "chega às 11:30" para um passageiro cujo
+      // voo embarcava às 12:30 (26/09/2026). Ver src/lib/telemetryFreshness.ts.
+      const agora = Date.now();
+      if (data) {
+        const anterior = posicaoParadaDesde.current;
+        const mudou = !anterior || anterior.lat !== data.driver_lat || anterior.lng !== data.driver_lng;
+        if (mudou && data.driver_lat != null && data.driver_lng != null) {
+          posicaoParadaDesde.current = { lat: data.driver_lat, lng: data.driver_lng, desdeMs: agora };
+        }
+      }
+      const veredito = telemetryFreshness(
+        { driver_telemetry_at: data?.driver_telemetry_at, driver_lat: data?.driver_lat, driver_lng: data?.driver_lng },
+        agora,
+        { queryFailed: !!error, unchangedSinceMs: posicaoParadaDesde.current?.desdeMs ?? null },
+      );
+      setTelemetryStale(veredito.stale);
+      setStaleMin(veredito.stale ? staleMinutes(veredito.ageMs) : 0);
+      if (error) return;
       if (data) setRide((prev) => ({ ...prev, ...data }));
     }
 
@@ -321,6 +406,30 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
   const origin = rideOrigin(ride);
   const dest = rideDestination(ride);
+  const pendingStops = rideStops(ride).filter((s) => !s.done_at);
+
+  // ── Espera no embarque (0091): contador espelhado do motorista ───────────
+  const arrivedAtMs = ride.driver_arrived_at ? Date.parse(ride.driver_arrived_at) : null;
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    if (arrivedAtMs == null || ride.status === 'in_progress') return;
+    const i = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(i);
+  }, [arrivedAtMs, ride.status]);
+  const freeLeftSec = arrivedAtMs != null
+    ? Math.max(0, WAIT_FREE_MINUTES * 60 - Math.floor((nowMs - arrivedAtMs) / 1000)) : 0;
+  const waitNow = waitFeeFor(arrivedAtMs, nowMs);
+  const mmss = (sec: number) => `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, '0')}`;
+
+  async function callDriver() {
+    const { data, error } = await supabase.rpc('ride_contact_phone', { p_ride_id: ride.id });
+    const phone = typeof data === 'string' ? data.replace(/[^\d+]/g, '') : '';
+    if (error || !phone) {
+      Alert.alert(t('activeRide.callUnavailableTitle', 'Call unavailable'), t('activeRide.callUnavailableMsg', 'Use the chat to talk to your driver.'));
+      return;
+    }
+    Linking.openURL(`tel:${phone}`).catch(() => {});
+  }
 
   // ── Bloco 3 (paridade Uber): ROTA ÚNICA calculada no servidor ────────────────
   // Sob a flag `shared_route_v1`, a corrida traz a rota já pronta em
@@ -529,6 +638,11 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         <Marker coordinate={{ latitude: dest.lat, longitude: dest.lng }}>
           <View style={styles.markerDest} />
         </Marker>
+        {pendingStops.map((s, i) => (
+          <Marker key={`stop-${i}`} coordinate={{ latitude: s.lat, longitude: s.lng }} title={s.address}>
+            <View style={styles.markerStop} />
+          </Marker>
+        ))}
         {driverLoc && smoothMarkerEnabled && driverFix && (
           <SmoothMarker fix={driverFix} route={smoothRoute} anchor={{ x: 0.5, y: 0.5 }}>
             {(heading) => <CarMarker scale={0.75} heading={heading} />}
@@ -543,8 +657,29 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             <CarMarker scale={0.75} heading={driverLoc.heading ?? 0} />
           </Marker>
         )}
+        {myLive && (
+          <Marker
+            coordinate={{ latitude: myLive.lat, longitude: myLive.lng }}
+            anchor={{ x: 0.5, y: 0.25 }}
+            // Android rasteriza o marcador num bitmap: sem rastrear, o texto
+            // do nome pode sair em branco no primeiro quadro.
+            tracksViewChanges={Platform.OS === 'android'}
+            zIndex={6}
+          >
+            <PassengerMarker label={t('activeRide.you')} />
+          </Marker>
+        )}
       </MapView>
 
+      {/* Saída SEM encerrar a corrida: o passageiro usa o app (ex.: agendar a
+          próxima viagem) e volta pelo aviso "corrida em andamento" da Home. */}
+      <TouchableOpacity
+        style={[styles.recenterBtn, styles.menuBtn]}
+        onPress={() => navigation.navigate('PassengerTabs')}
+        accessibilityLabel={t('activeRide.menu', 'Menu')}
+      >
+        <Text style={styles.recenterIcon}>☰</Text>
+      </TouchableOpacity>
       {driverLoc && (
         <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
           <Text style={styles.recenterIcon}>◎</Text>
@@ -555,21 +690,43 @@ export function ActiveRideScreen({ navigation, route }: Props) {
       <View style={[styles.bottomSheet, Platform.OS === 'android' && { paddingBottom: 32 + insets.bottom }]}>
         <View style={styles.handle} />
 
-        {/* ── Caixa preta ETA (idêntica à do motorista) ── */}
+        {/*
+          Caixa preta ETA (idêntica à do motorista). Com a telemetria travada,
+          os números ficam esmaecidos e a linha de baixo troca o horário de
+          chegada por um aviso de conexão: continuar exibindo "chega às 14:32"
+          com o mesmo destaque de um dado fresco é a mentira mais cara desta
+          tela, porque é por ela que o passageiro decide quando descer.
+          PENDÊNCIA DE PRODUTO: o texto certo seria `activeRide.etaStale` =
+          "Sem conexão — a previsão pode estar desatualizada." Reusamos
+          `payment.connectError` ("não foi possível conectar, verifique sua
+          conexão"), que existe em en/es/pt e é verdadeiro aqui —
+          src/i18n/translations.ts está sob edição do dono.
+        */}
         <View style={styles.etaCard}>
-          <View style={styles.etaMain}>
+          <View style={[styles.etaMain, telemetryStale && styles.etaStale]}>
+            {/*
+              O "~" é o que carrega o aviso quando a telemetria trava. Ele não
+              depende de cor nem de opacidade (que reprovavam a WCAG AA aqui —
+              ver `etaStale`), não precisa de tradução, e diz exatamente o que
+              houve: o número é aproximado, é a última leitura, não o valor de
+              agora.
+            */}
             <Text style={styles.etaMinutes}>
-              {hasEta ? String(etaMin) : '—'}
+              {hasEta ? `${telemetryStale ? '~' : ''}${etaMin}` : '—'}
             </Text>
             <Text style={styles.etaUnit}>min</Text>
             <View style={styles.etaSep} />
             <Text style={styles.etaDist}>
-              {etaKm != null ? (etaKm * KM_TO_MILES).toFixed(1) : '—'}
+              {etaKm != null
+                ? `${telemetryStale ? '~' : ''}${(etaKm * KM_TO_MILES).toFixed(1)}`
+                : '—'}
             </Text>
             <Text style={styles.etaDistUnit}>mi</Text>
           </View>
           <Text style={styles.etaArrival}>
-            {etaArrival
+            {telemetryStale
+              ? t('activeRide.etaStale').replace('{min}', String(staleMin || 1))
+              : etaArrival
               ? `${ride.status === 'in_progress' ? t('activeRide.estimatedArrival') : t('activeRide.arrivalAtPickup')}: ${etaArrival.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
               : ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress'
                 ? t('activeRide.calculatingRoute')
@@ -594,10 +751,16 @@ export function ActiveRideScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{driverName}</Text>
-            <View style={styles.ratingRow}>
-              <Text style={styles.star}>★</Text>
-              <Text style={styles.ratingText}>{profile?.rating ?? '4.9'}</Text>
-            </View>
+            {/* Só mostramos a estrela quando existe uma nota REAL do motorista —
+                ver o efeito que busca `profiles_public.rating`. Antes isto exibia
+                a nota do passageiro logado (ou um "4.9" fixo) como se fosse a
+                dele. */}
+            {driverRating != null && (
+              <View style={styles.ratingRow}>
+                <Text style={styles.star}>★</Text>
+                <Text style={styles.ratingText}>{driverRating.toFixed(1)}</Text>
+              </View>
+            )}
           </View>
           {vehicle && (
             <View style={styles.plateBox}>
@@ -605,17 +768,61 @@ export function ActiveRideScreen({ navigation, route }: Props) {
             </View>
           )}
           <View style={styles.driverActions}>
-            <TouchableOpacity style={styles.actionBtn}>
-              <Text style={styles.actionIcon}>📞</Text>
-            </TouchableOpacity>
+            {/*
+              O botão de telefone (📞) foi REMOVIDO daqui, não desabilitado: ele
+              nunca teve `onPress`. Era um botão com aparência de ativo, ao lado
+              do de chat que funciona, prometendo ligar para o motorista — o
+              passageiro tocava e nada acontecia, o que na hora de "estou na
+              esquina errada" é exatamente quando ele mais precisa de resposta.
+              Não há para onde ligar: o app não expõe o telefone do motorista em
+              lugar nenhum (`profiles_public` — migration 0049 — só publica nome,
+              foto, nota, tipo e driver_code, justamente para não vazar contato).
+              PENDÊNCIA DE PRODUTO: a chamada mascarada (estilo Twilio/Uber) é uma
+              funcionalidade que não existe no backend; enquanto não existir, o
+              chat é o único canal honesto e é o que fica.
+            */}
             <TouchableOpacity
               style={styles.actionBtn}
               onPress={() => navigation.navigate('Chat', { rideId: ride.id, title: driverName })}
             >
               <Text style={styles.actionIcon}>💬</Text>
             </TouchableOpacity>
+            {/* Desde 0091 existe para onde ligar: ride_contact_phone devolve o
+                número da OUTRA parte, só enquanto a corrida está ativa. */}
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={callDriver}
+              accessibilityLabel={t('activeRide.callDriver', 'Call driver')}
+            >
+              <Text style={styles.actionIcon}>📞</Text>
+            </TouchableOpacity>
           </View>
         </View>
+
+        {arrivedAtMs != null && ride.status !== 'in_progress' && (
+          <View style={styles.arrivedBox}>
+            <Text style={styles.arrivedTitle}>📍 {t('activeRide.driverArrived', 'Your driver has arrived')}</Text>
+            <Text style={styles.arrivedSub}>
+              {freeLeftSec > 0
+                ? t('activeRide.waitFreeLeft', 'Free waiting time left: {time}').replace('{time}', mmss(freeLeftSec))
+                : t('activeRide.waitFeeRunning', 'Waiting fee: {amount} ({min} min)')
+                    .replace('{amount}', formatCurrency(waitNow.amount)).replace('{min}', String(waitNow.minutes))}
+            </Text>
+            <Text style={styles.arrivedRule}>
+              {t('activeRide.waitRule', 'After {free} free minutes, {rate}/min is added until the ride starts.')
+                .replace('{free}', String(WAIT_FREE_MINUTES)).replace('{rate}', formatCurrency(WAIT_FEE_PER_MINUTE))}
+            </Text>
+          </View>
+        )}
+
+        {(ride.status === 'accepted' || ride.status === 'driver_en_route' || ride.status === 'in_progress') && (
+          <TouchableOpacity style={styles.editRouteBtn} onPress={() => navigation.navigate('EditRoute', { ride })}>
+            <Text style={styles.editRouteText}>
+              🗺️ {t('activeRide.editRoute', 'Change destination / add stop')}
+              {pendingStops.length > 0 ? `  ·  ${pendingStops.length} ${t('activeRide.stopsCount', 'stop(s)')}` : ''}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {vehicle && (
           <Text style={styles.vehicleLabel}>{vehicle.model} • {vehicle.color}</Text>
@@ -657,8 +864,10 @@ export function ActiveRideScreen({ navigation, route }: Props) {
         )}
 
         {canCancel && (
-          <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
-            <Text style={styles.cancelBtnText}>{t('activeRide.cancelRideTitle')}</Text>
+          <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel} disabled={cancelling}>
+            {cancelling
+              ? <ActivityIndicator size="small" color={colors.error} />
+              : <Text style={styles.cancelBtnText}>{t('activeRide.cancelRideTitle')}</Text>}
           </TouchableOpacity>
         )}
       </View>
@@ -668,6 +877,20 @@ export function ActiveRideScreen({ navigation, route }: Props) {
 
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
+    arrivedBox: {
+      backgroundColor: colors.gray[100], borderRadius: 12, padding: 12, marginTop: 12,
+      borderWidth: 1, borderColor: colors.accent,
+    },
+    arrivedTitle: { color: colors.text, fontWeight: '800', fontSize: 16 },
+    arrivedSub: { color: colors.text, fontSize: 15, marginTop: 4, fontWeight: '600' },
+    arrivedRule: { color: colors.gray[500], fontSize: 12, marginTop: 4 },
+    menuBtn: { left: 16, right: undefined },
+    editRouteBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 8 },
+    editRouteText: { color: colors.accent, fontWeight: '800', fontSize: 15 },
+    markerStop: {
+      width: 14, height: 14, borderRadius: 3, backgroundColor: colors.accent,
+      borderWidth: 2, borderColor: '#FFFFFF',
+    },
     container: { flex: 1 },
     mapArea: { flex: 1 },
     map: { flex: 1 },
@@ -725,6 +948,25 @@ function makeStyles(colors: AppTheme) {
       gap: 6,
       marginBottom: 6,
     },
+    // Esmaece o número quando ele parou de ser atualizado: é o sinal visual de
+    // "isto aqui é a última leitura, não o valor de agora".
+    //
+    // POR QUE 0.75 E NÃO 0.45. Opacidade come contraste, e aqui ela reprovava a
+    // WCAG AA. Dentro do `etaMain`, quem manda é `etaUnit`/`etaDistUnit`, em
+    // `accent` (#C9A84C) sobre o `etaCard` em `primary` (#1A1A2E): 7.46:1 opaco,
+    // 3.51:1 a 0.6, e só volta a cruzar 4.5:1 a partir de α ≈ 0.72 (4.75:1 a
+    // 0.75). Ou seja: a faixa em que a opacidade sozinha "avisa" é justamente a
+    // faixa em que ela deixa de ser legível — opacidade é o mecanismo errado
+    // para este aviso. Por isso o sinal de verdade passou a ser o "~" no número
+    // e a linha de baixo trocada pelo aviso de conexão; o esmaecimento fica só
+    // como reforço, no nível que passa na AA.
+    //
+    // ATENÇÃO ao ler isto como "o cartão está resolvido": este bloco fala SÓ do
+    // alfa. As duas piores reprovações deste cartão não eram de opacidade e sim
+    // de cor — `etaDist` a 1.63:1 e `etaArrival` a 2.67:1 no tema escuro, ambas
+    // OPACAS. Estão corrigidas nos próprios estilos, com a conta lá. Fundo fixo
+    // pede cor fixa: cinza relativo ao tema inverte e reprova em um dos dois.
+    etaStale: { opacity: 0.75 },
     etaMinutes: {
       fontSize: 48,
       fontWeight: '900',
@@ -746,7 +988,14 @@ function makeStyles(colors: AppTheme) {
     etaDist: {
       fontSize: 20,
       fontWeight: '700',
-      color: colors.gray[300],
+      // Era `colors.gray[300]`, e isso reprovava a WCAG AA sem que ninguém
+      // percebesse: o fundo deste cartão é `colors.primary` (#1A1A2E) nos DOIS
+      // temas, mas `gray[300]` INVERTE — #D4D4D4 no claro (11.5:1), #3A3D5C no
+      // escuro (1.63:1). Ou seja, no modo escuro o número da distância era
+      // praticamente invisível, opaco, sem nada a ver com o estado stale.
+      // Qualquer cinza relativo ao tema tem esse defeito aqui; sobre fundo fixo,
+      // a cor tem que ser fixa. Branco dá 17.06:1 e casa com `etaMinutes`.
+      color: colors.white,
     },
     etaDistUnit: {
       fontSize: 18,
@@ -756,7 +1005,13 @@ function makeStyles(colors: AppTheme) {
     },
     etaArrival: {
       fontSize: 13,
-      color: colors.gray[400],
+      // Mesmo defeito do `etaDist`, e aqui doía mais: esta é a linha que carrega
+      // o AVISO de conexão quando a telemetria trava. Com `colors.gray[400]` ela
+      // ficava a 2.67:1 no tema escuro (#5A5D7A sobre #1A1A2E) — o aviso de que
+      // o dado é velho era o texto menos legível do cartão. Fixo em #D4D4D4
+      // (11.5:1 sobre #1A1A2E), porque o fundo é fixo nos dois temas. Texto de
+      // 13dp é "normal" para a WCAG, então o piso aqui é 4.5:1, não 3:1.
+      color: '#D4D4D4',
       fontWeight: '600',
     },
 

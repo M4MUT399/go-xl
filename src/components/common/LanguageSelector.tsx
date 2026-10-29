@@ -19,7 +19,7 @@ export function LanguageSelector({ value, onChange, label }: Props) {
   const styles = makeStyles(colors);
 
   function choose(code: Lang) {
-    setLang(code); // aplica imediatamente o idioma global
+    setLang(code, { explicit: true }); // aplica já e marca para ir ao perfil (idioma do recibo)
     onChange?.(code); // callback extra (ex.: persistir no perfil)
   }
 

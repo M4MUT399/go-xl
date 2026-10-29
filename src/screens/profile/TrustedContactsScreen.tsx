@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Switch, Alert,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
+import { BackButton } from '../../components/common/BackButton';
 import { useTranslation } from '../../i18n';
 import { useAuth } from '../../hooks/useAuth';
 import { useTrustedContacts } from '../../hooks/useTrustedContacts';
@@ -27,7 +28,7 @@ export function TrustedContactsScreen({ navigation }: Props) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const { profile, patchProfile } = useAuth();
-  const { contacts, loading, addContact, removeContact } = useTrustedContacts(profile?.id);
+  const { contacts, loading, loadFailed, addContact, removeContact } = useTrustedContacts(profile?.id);
 
   const [name, setName] = useState('');
   const [label, setLabel] = useState('');
@@ -37,6 +38,22 @@ export function TrustedContactsScreen({ navigation }: Props) {
 
   const autoshare = profile?.trip_autoshare ?? false;
   const autoContactId = profile?.trip_autoshare_contact_id ?? null;
+
+  // Trava de escrita em voo para as DUAS funções abaixo — elas gravam as MESMAS
+  // colunas (`trip_autoshare`, `trip_autoshare_contact_id`), então uma trava só
+  // para cada uma não resolveria nada.
+  //
+  // O defeito sem ela: cada chamada captura no fecho o valor de rollback vigente
+  // quando começou. Dois toques rápidos criam dois UPDATEs concorrentes com
+  // instantâneos DIFERENTES; se o primeiro falhar depois de o segundo ter
+  // gravado, o rollback do primeiro escreve por cima um estado local que já não
+  // corresponde ao banco. A chave passa a mostrar o contrário do que o servidor
+  // tem — e esta é a chave que promete que alguém está acompanhando a viagem.
+  //
+  // Ignorar o segundo toque (em vez de enfileirar) é o certo aqui: o usuário vê
+  // a chave parada no valor em gravação, que é a verdade em curso, e o toque
+  // seguinte vale assim que o servidor responder.
+  const autoshareWriteRef = useRef(false);
 
   async function handleAdd() {
     if (!name.trim()) {
@@ -65,19 +82,54 @@ export function TrustedContactsScreen({ navigation }: Props) {
         style: 'destructive',
         onPress: async () => {
           const ok = await removeContact(id);
+          // A falha do DELETE era engolida: o contato continuava na lista, sem
+          // explicação, e o passageiro achava que o toque não tinha "pegado".
+          if (!ok) {
+            Alert.alert(t('trustedContacts.alertTitle'), t('trustedContacts.saveError'));
+            return;
+          }
           // Se o contato removido era o escolhido para auto-compartilhar, limpa a
           // preferência para não apontar para um id inexistente.
-          if (ok && autoContactId === id && profile?.id) {
+          //
+          // Este é o TERCEIRO escritor de `trip_autoshare_contact_id`, e por isso
+          // ele entra na MESMA `autoshareWriteRef` das outras duas: sem isso, um
+          // `toggleAutoshare` em voo poderia gravar por cima justamente o id do
+          // contato que acabou de ser apagado. E o `error` não pode ser
+          // descartado — se este UPDATE falhar em silêncio, o perfil segue
+          // prometendo compartilhar a viagem com um contato que não existe mais,
+          // que é a pior forma desta tela mentir.
+          if (autoContactId === id && profile?.id && !autoshareWriteRef.current) {
             patchProfile({ trip_autoshare_contact_id: null });
-            await supabase.from('profiles').update({ trip_autoshare_contact_id: null }).eq('id', profile.id);
+            autoshareWriteRef.current = true;
+            try {
+              const { error } = await supabase
+                .from('profiles').update({ trip_autoshare_contact_id: null }).eq('id', profile.id);
+              if (error) {
+                patchProfile({ trip_autoshare_contact_id: autoContactId });
+                Alert.alert(t('trustedContacts.alertTitle'), t('trustedContacts.saveError'));
+              }
+            } finally {
+              autoshareWriteRef.current = false;
+            }
           }
         },
       },
     ]);
   }
 
+  /**
+   * Esta é a chave mais perigosa da tela: ela promete que TODA viagem futura
+   * será compartilhada automaticamente com o contato de emergência escolhido.
+   * O `patchProfile` é otimista (vira na hora, só no estado local) e o UPDATE que
+   * vinha depois tinha o erro DESCARTADO — com RLS ou rede falhando, a chave
+   * ficava verde, o passageiro entrava no carro de um estranho acreditando que
+   * alguém estava acompanhando a viagem, e no banco `trip_autoshare` continuava
+   * false. Agora, quando o servidor não confirma, desfazemos o patch local (a
+   * chave volta) e dizemos que não deu — feio, mas é a única coisa verdadeira.
+   */
   async function toggleAutoshare(on: boolean) {
     if (!profile?.id) return;
+    if (autoshareWriteRef.current) return;
     // Ligar sem nenhum contato cadastrado não faz sentido — orienta a cadastrar.
     if (on && contacts.length === 0) {
       Alert.alert(t('trustedContacts.autoTitle'), t('trustedContacts.autoNeedContact'));
@@ -86,24 +138,56 @@ export function TrustedContactsScreen({ navigation }: Props) {
     // Ao ligar sem contato escolhido, assume o primeiro da lista por conveniência.
     const nextContactId = on ? (autoContactId ?? contacts[0]?.id ?? null) : autoContactId;
     patchProfile({ trip_autoshare: on, trip_autoshare_contact_id: nextContactId });
-    await supabase
-      .from('profiles')
-      .update({ trip_autoshare: on, trip_autoshare_contact_id: nextContactId })
-      .eq('id', profile.id);
+    autoshareWriteRef.current = true;
+    // `try/finally`: hoje o postgrest-js captura a falha de fetch e resolve com
+    // `{ error }` em vez de rejeitar, então um `await` cru não deixaria a trava
+    // presa. Mas isso é propriedade da biblioteca, não deste código — basta
+    // alguém encadear `.throwOnError()` amanhã para a tela travar PARA SEMPRE,
+    // sem nenhum sintoma que aponte para cá.
+    let error;
+    try {
+      ({ error } = await supabase
+        .from('profiles')
+        .update({ trip_autoshare: on, trip_autoshare_contact_id: nextContactId })
+        .eq('id', profile.id));
+    } finally {
+      autoshareWriteRef.current = false;
+    }
+    if (error) {
+      patchProfile({ trip_autoshare: autoshare, trip_autoshare_contact_id: autoContactId });
+      // PENDÊNCIA DE PRODUTO: o ideal seria `trustedContacts.autoshareError` =
+      // "Não foi possível alterar o compartilhamento automático. Tente de novo."
+      // Reusamos `trustedContacts.saveError`, o texto genérico de falha de
+      // gravação desta mesma tela — translations.ts está sob edição do dono.
+      Alert.alert(t('trustedContacts.alertTitle'), t('trustedContacts.saveError'));
+    }
   }
 
   async function chooseAutoContact(id: string) {
     if (!profile?.id) return;
+    if (autoshareWriteRef.current) return;
     patchProfile({ trip_autoshare_contact_id: id });
-    await supabase.from('profiles').update({ trip_autoshare_contact_id: id }).eq('id', profile.id);
+    autoshareWriteRef.current = true;
+    let error;
+    try {
+      ({ error } = await supabase
+        .from('profiles').update({ trip_autoshare_contact_id: id }).eq('id', profile.id));
+    } finally {
+      autoshareWriteRef.current = false;
+    }
+    // Mesmo problema do toggle: a bolinha do rádio pulava para o novo contato
+    // mesmo quando a gravação falhava, e a viagem seguiria sendo compartilhada
+    // com o contato ANTERIOR (ou com ninguém).
+    if (error) {
+      patchProfile({ trip_autoshare_contact_id: autoContactId });
+      Alert.alert(t('trustedContacts.alertTitle'), t('trustedContacts.saveError'));
+    }
   }
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity style={styles.back} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← {t('common.back')}</Text>
-        </TouchableOpacity>
+        <BackButton onPress={() => navigation.goBack()} />
 
         <Text style={styles.title}>{t('trustedContacts.title')}</Text>
         <Text style={styles.subtitle}>{t('trustedContacts.subtitle')}</Text>
@@ -151,7 +235,14 @@ export function TrustedContactsScreen({ navigation }: Props) {
           {loading ? (
             <Text style={styles.empty}>{t('trustedContacts.loading')}</Text>
           ) : contacts.length === 0 ? (
-            <Text style={styles.empty}>{t('trustedContacts.empty')}</Text>
+            // Falha de leitura mostrava exatamente o mesmo texto de "você ainda
+            // não cadastrou ninguém" — ver `loadFailed` em useTrustedContacts.
+            // PENDÊNCIA DE PRODUTO: falta `trustedContacts.loadError` = "Não foi
+            // possível carregar seus contatos." Reusamos `trustedContacts.saveError`
+            // (falha genérica desta tela) porque translations.ts é do dono.
+            <Text style={styles.empty}>
+              {loadFailed ? t('trustedContacts.saveError') : t('trustedContacts.empty')}
+            </Text>
           ) : (
             contacts.map((c, i) => (
               <View key={c.id} style={[styles.row, i < contacts.length - 1 && styles.rowBorder]}>
@@ -199,8 +290,6 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
     scroll: { padding: 24 },
-    back: { marginBottom: 20, alignSelf: 'flex-start' },
-    backText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
     title: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 6 },
     subtitle: { fontSize: 14, color: colors.gray[500], marginBottom: 24, lineHeight: 20 },
     sectionLabel: {

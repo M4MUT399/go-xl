@@ -9,21 +9,16 @@ import { RootStackParamList } from '../types';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
+import { descreverFormaDePagamento, eCartao, temFormaDePagamento } from '../lib/paymentMethod';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'Payment'> };
 
 const SUPABASE_URL    = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SETUP_CARD_URL  = `${SUPABASE_URL}/functions/v1/setup-card`;
 
-const BRAND_LABEL: Record<string, string> = {
-  visa:       'Visa',
-  mastercard: 'Mastercard',
-  amex:       'Amex',
-  discover:   'Discover',
-  jcb:        'JCB',
-  diners:     'Diners',
-  unionpay:   'UnionPay',
-};
+// A tabela de marcas mudou para src/lib/paymentMethod.ts, junto com a regra de
+// como um método é descrito — ter duas cópias em telas diferentes é como um
+// passageiro passa a ver rótulos distintos conforme o caminho que percorreu.
 
 export function PaymentScreen({ navigation }: Props) {
   const { profile, refreshProfile } = useAuth();
@@ -31,8 +26,14 @@ export function PaymentScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
 
   const styles = makeStyles(colors);
-  const hasCard = !!profile?.stripe_payment_method_id;
-  const brandLabel = profile?.card_brand ? (BRAND_LABEL[profile.card_brand] ?? profile.card_brand.toUpperCase()) : 'CARTÃO';
+  // `temFormaDePagamento`/`descreverFormaDePagamento` no lugar de ler
+  // `card_brand`/`card_last4` direto: as duas colunas ficam NULAS para método
+  // que não é cartão, e esta tela renderizava "CARTÃO •••• •••• •••• " com o
+  // fim vazio — foi assim que a passageira da corrida f28f2887 concluiu que não
+  // tinha nada salvo, tendo método anexado, padrão e cobrável.
+  const hasCard = temFormaDePagamento(profile);
+  const metodoLabel = descreverFormaDePagamento(profile);
+  const metodoECartao = eCartao(profile);
 
   async function handleAddCard() {
     setLoading(true);
@@ -81,13 +82,19 @@ export function PaymentScreen({ navigation }: Props) {
       <View style={styles.content}>
         <View style={styles.card}>
           {hasCard ? (
-            /* ── Cartão salvo ── */
+            /* ── Forma de pagamento salva (cartão OU carteira) ── */
             <>
-              <Text style={styles.cardEmoji}>💳</Text>
-              <Text style={styles.cardBrandText}>{brandLabel}</Text>
-              <Text style={styles.cardNumber}>•••• •••• •••• {profile?.card_last4}</Text>
+              <Text style={styles.cardEmoji}>{metodoECartao ? '💳' : '🔗'}</Text>
+              <Text style={styles.cardBrandText}>{metodoLabel}</Text>
+              {/* Os quatro grupos de bolinhas só fazem sentido para cartão. Numa
+                  carteira eles desenhavam um número que não existe. */}
+              {metodoECartao && profile?.card_last4 ? (
+                <Text style={styles.cardNumber}>•••• •••• •••• {profile.card_last4}</Text>
+              ) : null}
               <Text style={styles.cardInfo}>
-                Seu cartão é debitado automaticamente quando o motorista aceitar a corrida.
+                {metodoECartao
+                  ? 'Seu cartão é debitado automaticamente quando o motorista aceitar a corrida.'
+                  : 'Sua forma de pagamento é debitada automaticamente quando o motorista aceitar a corrida.'}
               </Text>
               <TouchableOpacity
                 style={styles.changeBtn}

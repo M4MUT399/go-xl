@@ -1,86 +1,40 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Go XL — Peça sua corrida</title>
-
-  <!--
-    Smart App Banner (iOS):
-    - Se o app já estiver instalado, abre direto pelo app-argument.
-    - O script abaixo atualiza o content para incluir o driver code ANTES de
-      o Safari criar o banner, então o toque no banner já abre no contexto certo.
-    - Para novos usuários: o banner mostra "Obter" → loja, mas o code se perde
-      (iOS não suporta deferred deep link via app-argument). Por isso o botão
-      "Baixar" do card abaixo é o caminho principal — ele grava o code na área
-      de transferência antes de ir para a loja.
-  -->
-  <meta id="iosAppMeta" name="apple-itunes-app"
-        content="app-id=6781716394, app-argument=https://goxl.app/qr" />
-
-  <!-- Atualiza o app-argument com o driver code o mais cedo possível (head inline),
-       para que o Safari leia o meta tag correto ao criar o Smart App Banner. -->
-  <script>
-    (function () {
-      var p = new URLSearchParams(location.search);
-      var raw = (p.get('driver') || '').trim().toUpperCase();
-      if (/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(raw)) {
-        var m = document.getElementById('iosAppMeta');
-        if (m) m.setAttribute('content',
-          'app-id=6781716394, app-argument=goxl://ride?driver=' + raw);
-      }
-    })();
-  </script>
-
+  <title>Go XL — Request your ride</title>
+  <!-- Smart App Banner (iOS): oferece abrir/baixar o app na App Store. -->
+  <meta name="apple-itunes-app" content="app-id=6781716394, app-argument=https://goxl.app/qr" />
   <style>
     * { box-sizing: border-box; }
     :root { --accent: #C9A84C; --navy: #0A0D1C; }
-    html, body {
-      height: 100%; margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--navy); color: #fff;
-    }
-    .wrap {
-      min-height: 100%; display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      text-align: center; padding: 32px 24px;
-    }
+    html, body { height: 100%; margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--navy); color: #fff; }
+    .wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 32px 24px; }
     .logo { color: var(--accent); font-weight: 900; letter-spacing: 6px; font-size: 26px; margin-bottom: 6px; }
-    .sub { color: #9CA3AF; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 28px; }
-    .card {
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 20px; padding: 28px 22px; width: 100%; max-width: 380px;
-    }
+    .sub { color: #9CA3AF; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 20px; }
+    /* Seletor de idioma — EN por padrão, com PT/ES. */
+    .langs { display: flex; gap: 8px; margin-bottom: 24px; }
+    .lang { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); color: #9CA3AF;
+      font-weight: 700; font-size: 13px; padding: 7px 14px; border-radius: 999px; cursor: pointer;
+      display: flex; align-items: center; gap: 6px; transition: all .15s; }
+    .lang.active { background: rgba(201,168,76,0.14); border-color: var(--accent); color: var(--accent); }
+    .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 20px;
+      padding: 28px 22px; width: 100%; max-width: 380px; }
     h1 { font-size: 21px; margin: 0 0 8px; }
     p { color: #9CA3AF; font-size: 15px; line-height: 1.5; margin: 0 0 22px; }
-    .code {
-      display: inline-block; background: rgba(201,168,76,0.12); color: var(--accent);
-      font-weight: 800; letter-spacing: 4px; font-size: 18px;
-      padding: 8px 16px; border-radius: 10px; margin-bottom: 22px;
-    }
-    .btn {
-      display: block; text-decoration: none; font-weight: 800; font-size: 16px;
-      padding: 16px 20px; border-radius: 14px; width: 100%;
-      border: none; cursor: pointer; font-family: inherit;
-    }
+    .code { display: inline-block; background: rgba(201,168,76,0.12); color: var(--accent);
+      font-weight: 800; letter-spacing: 4px; font-size: 18px; padding: 8px 16px; border-radius: 10px; margin-bottom: 22px; }
+    .btn { display: block; text-decoration: none; font-weight: 800; font-size: 16px; padding: 16px 20px;
+      border-radius: 14px; width: 100%; border: none; cursor: pointer; }
     .btn-primary { background: var(--accent); color: var(--navy); margin-bottom: 12px; }
-    .btn-ghost   { background: rgba(255,255,255,0.08); color: #fff; }
-    .tip {
-      color: #6B7280; font-size: 12px; margin-top: 18px; line-height: 1.5;
-      text-align: left; background: rgba(255,255,255,0.03);
-      border-radius: 10px; padding: 12px 14px;
-    }
-    .tip strong { color: #9CA3AF; }
+    .btn-ghost { background: rgba(255,255,255,0.08); color: #fff; }
     .note { color: #6B7280; font-size: 12px; margin-top: 18px; line-height: 1.5; }
-
-    .toast {
-      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
-      background: rgba(255,255,255,0.95); color: var(--navy);
-      font-weight: 700; font-size: 13px;
-      padding: 10px 16px; border-radius: 12px;
-      opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap;
-    }
+    .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+      background: rgba(255,255,255,0.95); color: var(--navy); font-weight: 700; font-size: 13px;
+      padding: 10px 16px; border-radius: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
     .toast.show { opacity: 1; }
   </style>
 </head>
@@ -89,130 +43,226 @@
     <div class="logo">GO XL</div>
     <div class="sub">Executive XL</div>
 
+    <!-- Seletor de idioma (EN padrão) -->
+    <div class="langs" role="group" aria-label="Language">
+      <button type="button" class="lang" data-lang="en">🇺🇸 EN</button>
+      <button type="button" class="lang" data-lang="pt">🇧🇷 PT</button>
+      <button type="button" class="lang" data-lang="es">🇪🇸 ES</button>
+    </div>
+
     <div class="card">
-      <h1>Peça sua corrida</h1>
-      <p>Você escaneou o QR de um motorista Go XL. Baixe o app e sua primeira
-        corrida já vem vinculada a ele — sem digitar código.</p>
+      <h1 data-i18n="h1">Request your ride</h1>
+      <p data-i18n="p">You scanned a Go XL driver's QR code. Download the app and your
+        first ride comes already linked to this driver — no code to type.</p>
 
       <div id="codeBox" class="code" style="display:none"></div>
 
-      <button id="downloadBtn" class="btn btn-primary">⬇️&nbsp; Baixar o Go XL</button>
-      <button id="openBtn"     class="btn btn-ghost"   >Já tenho o app</button>
+      <button id="downloadBtn" class="btn btn-primary" data-i18n="download">Download Go XL</button>
+      <a id="openBtn" class="btn btn-ghost" href="#" data-i18n="haveApp">I already have the app</a>
 
-      <div class="tip" id="iosTip" style="display:none">
-        <strong>📋 Dica iOS:</strong> Após instalar, o app vai pedir permissão para
-        colar da área de transferência. Toque em <strong>"Permitir"</strong> para
-        vincular a corrida ao motorista automaticamente.
-      </div>
+      <div class="note" data-i18n="note">Once installed, the app recognizes the driver automatically.
+        Your ride stays linked to this driver for this trip only.</div>
 
-      <div class="note">Ao instalar, o app reconhece o motorista automaticamente.
-        Sua corrida fica vinculada só a ele nesta viagem.</div>
+      <div id="redirecting" class="note" data-i18n="redirect" style="display:none">Taking you to the store…</div>
     </div>
   </div>
 
-  <div id="toast" class="toast">Motorista vinculado ✓</div>
+  <div id="toast" class="toast" data-i18n="toast">Driver linked ✓</div>
 
   <script>
-    var PLAY_URL     = 'https://play.google.com/store/apps/details?id=com.goxl.app';
+    var PLAY_URL = 'https://play.google.com/store/apps/details?id=com.goxl.app';
     var APPSTORE_URL = 'https://apps.apple.com/app/go-xl/id6781716394';
 
-    /* Charset/validação idênticos ao codeFromId do app (sem I/O/0/1). */
+    // ── i18n: inglês por padrão, com português e espanhol. ───────────────────
+    var I18N = {
+      en: {
+        title: 'Go XL — Request your ride',
+        h1: 'Request your ride',
+        p: "You scanned a Go XL driver's QR code. Download the app and your first ride comes already linked to this driver — no code to type.",
+        download: 'Download Go XL',
+        haveApp: 'I already have the app',
+        note: 'Once installed, the app recognizes the driver automatically. Your ride stays linked to this driver for this trip only.',
+        toast: 'Driver linked ✓',
+        redirect: 'Taking you to the store…'
+      },
+      pt: {
+        title: 'Go XL — Peça sua corrida',
+        h1: 'Peça sua corrida',
+        p: 'Você escaneou o QR de um motorista Go XL. Baixe o app e sua primeira corrida já vem vinculada a ele — sem digitar código.',
+        download: 'Baixar o Go XL',
+        haveApp: 'Já tenho o app',
+        note: 'Ao instalar, o app reconhece o motorista automaticamente. Sua corrida fica vinculada só a ele nesta viagem.',
+        toast: 'Motorista vinculado ✓',
+        redirect: 'Levando você para a loja…'
+      },
+      es: {
+        title: 'Go XL — Pide tu viaje',
+        h1: 'Pide tu viaje',
+        p: 'Escaneaste el código QR de un conductor Go XL. Descarga la app y tu primer viaje ya queda vinculado a él — sin escribir ningún código.',
+        download: 'Descargar Go XL',
+        haveApp: 'Ya tengo la app',
+        note: 'Al instalar, la app reconoce al conductor automáticamente. Tu viaje queda vinculado solo a él en este trayecto.',
+        toast: 'Conductor vinculado ✓',
+        redirect: 'Llevándote a la tienda…'
+      }
+    };
+
+    var STORAGE_KEY = 'goxl-qr-lang';
+    // Padrão: inglês. Respeita apenas escolha explícita anterior (PT/ES/EN).
+    var saved = null;
+    try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+    var currentLang = (saved && I18N[saved]) ? saved : 'en';
+
+    function applyLang(lang) {
+      if (!I18N[lang]) lang = 'en';
+      currentLang = lang;
+      try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) {}
+      document.documentElement.setAttribute('lang', lang);
+      var dict = I18N[lang];
+      document.title = dict.title;
+      var nodes = document.querySelectorAll('[data-i18n]');
+      for (var i = 0; i < nodes.length; i++) {
+        var key = nodes[i].getAttribute('data-i18n');
+        if (dict[key] != null) nodes[i].textContent = dict[key];
+      }
+      var btns = document.querySelectorAll('.lang');
+      for (var j = 0; j < btns.length; j++) {
+        btns[j].classList.toggle('active', btns[j].getAttribute('data-lang') === lang);
+      }
+    }
+
+    var langBtns = document.querySelectorAll('.lang');
+    for (var k = 0; k < langBtns.length; k++) {
+      langBtns[k].addEventListener('click', function () {
+        applyLang(this.getAttribute('data-lang'));
+      });
+    }
+    applyLang(currentLang);
+
+    // Charset/validação idênticos ao codeFromId do app (sem I/O/0/1).
     var CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
-    var params  = new URLSearchParams(window.location.search);
-    var raw     = (params.get('driver') || '').trim().toUpperCase();
-    var CODE    = CODE_RE.test(raw) ? raw : '';
+    var params = new URLSearchParams(window.location.search);
+    var raw = (params.get('driver') || '').trim().toUpperCase();
+    var CODE = CODE_RE.test(raw) ? raw : '';
 
-    var ua    = navigator.userAgent || '';
-    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+    var ua = navigator.userAgent || '';
+    // iPadOS 13+ se apresenta como "Macintosh" no user-agent; sem o teste de
+    // toque, o iPad cairia na Play Store por engano. maxTouchPoints > 1 num
+    // "Macintosh" = iPad rodando Safari desktop-mode.
+    var isIOS = /iPhone|iPad|iPod/i.test(ua) ||
+      (/Macintosh/.test(ua) && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1);
+    var storeUrl = isIOS ? APPSTORE_URL : PLAY_URL;
 
-    /* URL da loja: Android inclui referrer com o driver code para o futuro
-       uso via react-native-play-install-referrer (já tem o parser no app).
-       iOS: App Store não suporta referrer UTM — depende do clipboard. */
-    var storeUrl = isIOS
-      ? APPSTORE_URL
-      : PLAY_URL + (CODE
-          ? '&referrer=' + encodeURIComponent('utm_source=goxl_qr&goxl_driver=' + CODE)
-          : '');
-
-    /* Exibe o código legível se houver */
     if (CODE) {
       var cb = document.getElementById('codeBox');
       cb.textContent = CODE;
       cb.style.display = 'inline-block';
     }
 
-    /* Mostra dica de paste permission só no iOS */
-    if (isIOS && CODE) {
-      document.getElementById('iosTip').style.display = 'block';
-    }
-
-    function showToast(msg) {
+    function showToast() {
       var el = document.getElementById('toast');
-      el.textContent = msg || 'Motorista vinculado ✓';
       el.classList.add('show');
-      setTimeout(function () { el.classList.remove('show'); }, 1800);
+      setTimeout(function () { el.classList.remove('show'); }, 1400);
     }
 
-    /**
-     * Deferred deep link: grava goxl-ride:CODE na área de transferência ANTES de
-     * ir para a loja. No 1º open do app, ele lê o clipboard uma vez e trava a
-     * corrida no motorista dono do QR (src/lib/deferredDeepLink.ts).
-     *
-     * Regras do browser:
-     *  - Clipboard API moderna (navigator.clipboard): requer user gesture no iOS.
-     *    No Android não requer gesture em HTTPS — tentamos logo no carregamento.
-     *  - Fallback execCommand('copy'): funciona em alguns browsers antigos.
-     */
-    function writeClipboard() {
+    // Deferred deep link: grava goxl-ride:CODE na área de transferência ANTES de
+    // ir para a loja. No 1º open, o app lê o clipboard uma vez e trava a corrida
+    // no motorista dono do QR (ver src/lib/deferredDeepLink.ts). Best-effort:
+    // fora de um gesto do usuário o navegador pode bloquear a escrita — nesse
+    // caso apenas seguimos pra loja (o passageiro digita o código do motorista).
+    // A escrita SÍNCRONA, que é a que sobrevive no Safari. `execCommand` é
+    // obsoleto, mas continua sendo o único caminho que funciona dentro de um
+    // gesto sem pedir permissão — e é justamente o iOS que bloqueia o caminho
+    // moderno. Fica como reserva, não como principal.
+    function copiaSincrona(texto) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = texto;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, texto.length);   // iOS ignora select() sozinho
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return !!ok;
+      } catch (e) { return false; }
+    }
+
+    // Grava goxl-ride:CODE na área de transferência. TEM DE SER CHAMADA DE
+    // DENTRO DE UM GESTO do usuário: o Safari exige ativação transitória para
+    // `navigator.clipboard.writeText`, e uma chamada vinda de setTimeout não a
+    // tem. Era esse o furo — a escrita falhava calada (o .catch engolia), o
+    // passageiro ia para a App Store e a 1ª corrida não ficava vinculada.
+    function writeDeferred() {
       if (!CODE) return Promise.resolve(false);
       var payload = 'goxl-ride:' + CODE;
+
+      // A síncrona vai PRIMEIRO, ainda dentro do gesto: se a assíncrona for
+      // negada, já garantimos a cópia. Se ambas funcionarem, o conteúdo é o
+      // mesmo e não há prejuízo.
+      var sincrona = copiaSincrona(payload);
+
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           return navigator.clipboard.writeText(payload)
             .then(function () { return true; })
-            .catch(function () { return legacyCopy(payload); });
+            .catch(function () { return sincrona; });
         }
-      } catch (e) { /* cai no fallback */ }
-      return Promise.resolve(legacyCopy(payload));
+      } catch (e) { /* cai na síncrona */ }
+      return Promise.resolve(sincrona);
     }
 
-    function legacyCopy(text) {
-      try {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.cssText = 'position:fixed;opacity:0;top:-999px';
-        document.body.appendChild(ta);
-        ta.focus(); ta.select();
-        var ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        return ok;
-      } catch (e) { return false; }
-    }
-
-    /* Tentativa silenciosa sem gesto (funciona no Android Chrome/WebView). */
-    writeClipboard();
-
-    /* ─── Botão "Baixar o Go XL" ─────────────────────────────────────── */
-    document.getElementById('downloadBtn').addEventListener('click', function () {
-      /* Tenta novamente com gesto do usuário (necessário no iOS Safari). */
-      writeClipboard().then(function (ok) {
-        if (ok && CODE) showToast('Motorista salvo ✓  Pode instalar!');
-        setTimeout(function () { window.location.href = storeUrl; }, ok ? 900 : 200);
-      });
-    });
-
-    /* ─── Botão "Já tenho o app" ─────────────────────────────────────── */
-    document.getElementById('openBtn').addEventListener('click', function () {
-      if (!CODE) { window.location.href = storeUrl; return; }
-
-      /* Tenta abrir via custom scheme; se o app não abrir em 1,2 s → loja. */
+    // Bounce para o app JÁ instalado via custom scheme; se não abrir em ~1,2s,
+    // cai na loja. Usado pelo botão "Já tenho o app".
+    function openAppThenStore() {
+      if (!CODE) { window.location.replace(storeUrl); return; }
       var deep = 'goxl://ride?driver=' + encodeURIComponent(CODE);
       var t = Date.now();
       window.location.href = deep;
       setTimeout(function () {
-        if (Date.now() - t < 1600) window.location.href = storeUrl;
+        if (Date.now() - t < 1600) window.location.replace(storeUrl);
       }, 1200);
+    }
+
+    // O caminho PRINCIPAL quando há código de motorista. A escrita acontece na
+    // primeira instrução do handler, ainda dentro do gesto — qualquer coisa
+    // antes dela (um setTimeout, um await) pode custar a ativação no iOS.
+    document.getElementById('downloadBtn').addEventListener('click', function () {
+      var p = writeDeferred();          // <- dentro do gesto, primeiro de tudo
+      showToast();
+      // Não esperamos indefinidamente: se o clipboard travar, o passageiro
+      // ainda tem que chegar à loja.
+      var foi = false;
+      function segue() { if (!foi) { foi = true; window.location.replace(storeUrl); } }
+      p.then(segue);
+      setTimeout(segue, 900);
     });
+    document.getElementById('openBtn').addEventListener('click', function (e) {
+      e.preventDefault();
+      openAppThenStore();
+    });
+
+    // ── AUTO-REDIRECT: SÓ quando não há código a preservar. ─────────────────
+    //
+    // Quem já tem o app é interceptado pelo Universal Link (iOS) / App Link
+    // (Android) antes desta página carregar, então quem chega aqui não tem o
+    // app e precisa da loja.
+    //
+    // Mas redirecionar sozinho custa o vínculo com o motorista: a escrita no
+    // clipboard feita fora de um gesto é bloqueada pelo Safari, falha calada, e
+    // o passageiro instala o app sem o código. Levar alguém à loja um segundo
+    // mais rápido não paga perder a primeira corrida do motorista dono do QR.
+    //
+    // Então: SEM código, redireciona na hora (não há o que preservar). COM
+    // código, a página espera o toque — que é o que torna a cópia confiável.
+    if (!CODE) {
+      var rd = document.getElementById('redirecting');
+      if (rd) rd.style.display = 'block';
+      setTimeout(function () { window.location.replace(storeUrl); }, 350);
+    }
   </script>
 </body>
 </html>

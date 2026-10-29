@@ -15,6 +15,7 @@ export interface Payout {
 export function usePayouts(driverId: string | undefined) {
   const [payouts, setPayouts] = useState<Payout[]>([]);
   const [pendingBalance, setPendingBalance] = useState(0);
+  const [pendingTips, setPendingTips] = useState(0);
   const [pendingRidesCount, setPendingRidesCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -22,7 +23,10 @@ export function usePayouts(driverId: string | undefined) {
     if (!driverId) return;
     setLoading(true);
 
-    const [{ data: payoutRows }, { data: unpaidRides }] = await Promise.all([
+    // A gorjeta é consultada SEPARADO da tarifa porque tem reserva própria
+    // (tip_payout_id, migração 0064): uma corrida já repassada pode continuar
+    // devendo gorjeta, e uma gorjeta dada hoje pode entrar num repasse futuro.
+    const [{ data: payoutRows }, { data: unpaidRides }, { data: unpaidTips }] = await Promise.all([
       supabase
         .from('payouts')
         .select('*')
@@ -35,15 +39,27 @@ export function usePayouts(driverId: string | undefined) {
         .eq('paid', true)
         .is('payout_id', null)
         .not('driver_amount', 'is', null),
+      supabase
+        .from('rides')
+        .select('tip_amount')
+        .eq('driver_id', driverId)
+        .eq('paid', true)
+        .is('tip_payout_id', null)
+        .gt('tip_amount', 0),
     ]);
 
     setPayouts((payoutRows as Payout[]) ?? []);
 
     const rows = (unpaidRides as { driver_amount: number }[]) ?? [];
+    const tipRows = (unpaidTips as { tip_amount: number }[]) ?? [];
+
+    const fare = Math.round(rows.reduce((s, r) => s + Number(r.driver_amount), 0) * 100) / 100;
+    const tips = Math.round(tipRows.reduce((s, r) => s + Number(r.tip_amount), 0) * 100) / 100;
+
     setPendingRidesCount(rows.length);
-    setPendingBalance(
-      Math.round(rows.reduce((s, r) => s + Number(r.driver_amount), 0) * 100) / 100
-    );
+    setPendingTips(tips);
+    // Saldo = tarifa + gorjeta. A gorjeta vai INTEIRA ao motorista (sem comissão).
+    setPendingBalance(Math.round((fare + tips) * 100) / 100);
 
     setLoading(false);
   }, [driverId]);
@@ -76,5 +92,5 @@ export function usePayouts(driverId: string | undefined) {
     }
   }, [driverId, pendingBalance, refresh]);
 
-  return { payouts, pendingBalance, pendingRidesCount, loading, refresh, requestPayout };
+  return { payouts, pendingBalance, pendingTips, pendingRidesCount, loading, refresh, requestPayout };
 }

@@ -10,17 +10,17 @@ import { RootStackParamList, RideRecord, Ride } from '../../types';
 import { useTheme } from '../../hooks/useTheme';
 import { AppTheme } from '../../constants/theme';
 import { useAuth } from '../../hooks/useAuth';
-import { useScheduledRides } from '../../hooks/useRide';
+import { useScheduledRides, cancelScheduledRideWithPolicy } from '../../hooks/useRide';
 import { formatCurrency, formatDistance } from '../../lib/format';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from '../../i18n';
+// A regra de cancelamento saiu daqui para src/lib/cancellation.ts: ela vale
+// igual nesta tela e na de detalhes da viagem, e enquanto morou inline aqui a
+// outra tela ficou sem cancelamento nenhum.
+import { cancellationPolicy } from '../../lib/cancellation';
+import { FlightInfoLine } from '../../components/common/FlightInfoLine';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'ScheduledRides'> };
-
-function isCancellationFree(scheduledFor?: string): boolean {
-  if (!scheduledFor) return true;
-  return new Date(scheduledFor).getTime() - Date.now() > 60 * 60 * 1000;
-}
 
 interface DriverInfo {
   name: string;
@@ -34,8 +34,21 @@ export function ScheduledRidesScreen({ navigation }: Props) {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const { rides, loading, refresh, activate, cancel } = useScheduledRides(profile?.id, profile?.jurisdiction);
+  // `activate` NÃO é desestruturado de propósito: o passageiro não começa a
+  // viagem (ver a nota abaixo e a migration 0082). Deixá-lo no escopo sem uso
+  // seria convite para religarem o botão sem ler o motivo.
+  // `cancel` NÃO é desestruturado: ele é o cancelamento CRU, sem política. Quem
+  // cancela aqui é `cancelScheduledRideWithPolicy`, a mesma chamada da tela de
+  // detalhes — duas portas do passageiro para o mesmo agendamento não podem
+  // cobrar diferente.
+  const { rides, loading, loadFailed, refresh } = useScheduledRides(profile?.id, profile?.jurisdiction);
   const [driverInfoMap, setDriverInfoMap] = useState<Record<string, DriverInfo>>({});
+  // Id do agendamento com uma ação em voo. `activate` COBRA O CARTÃO e `cancel`
+  // pode cobrar a multa da janela de 60 min — as duas passam bem dos 400 ms e
+  // antes não davam nenhum retorno visual: o card ficava exatamente igual, com
+  // os botões ativos, convidando o passageiro a tocar de novo (e a cobrar duas
+  // vezes). Guardamos o id, e não um booleano, para travar só o card em questão.
+  const [busyRideId, setBusyRideId] = useState<string | null>(null);
 
   const styles = makeStyles(colors);
 
@@ -137,42 +150,88 @@ export function ScheduledRidesScreen({ navigation }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [profile?.id, refresh, t]);
 
-  async function handleActivate(ride: RideRecord) {
-    const activated = await activate(ride.id);
-    // Cartão recusado na cobrança da tarifa: a corrida NÃO começa (mesma regra
-    // do aceite imediato). Sem este ramo, 'payment_error' seria truthy e a tela
-    // navegaria para a corrida ativa com uma string no lugar do objeto.
-    if (activated === 'payment_error') {
-      Alert.alert(t('scheduled.oops'), t('scheduled.paymentError'));
+  /*
+   * ── O PASSAGEIRO NÃO COMEÇA A VIAGEM ──────────────────────────────────
+   *
+   * Aqui existia `handleActivate`, ligado a um botão neste card. Ele chamava
+   * `activate(ride.id)`, que COBRAVA O CARTÃO e virava o status de
+   * 'scheduled' para 'accepted' — no primeiro toque, sem confirmação alguma,
+   * enquanto o botão de cancelar ao lado pedia confirmação em duas variantes.
+   *
+   * Em 04/09/2026 um passageiro encostou nele sem querer. A corrida agendada
+   * para a noite seguinte foi cobrada e sumiu da lista dele. Ele escreveu ao
+   * motorista: "I accidentally hit start trip lol and it looks like it
+   * canceled the trip for tonight. It looks like it already will probably
+   * bill it. I'm not sure what to do."
+   *
+   * Quem começa a corrida é o MOTORISTA — `confirmScheduledRide` /
+   * `confirmQrScheduledRide` e o banner `scheduledBanner.startRoute`, em
+   * DriverHomeScreen. Agendamento sem motorista continua no leque pelas
+   * políticas do servidor (0041, 0074). Nada ficou sem caminho: o que sumiu
+   * foi um atalho que só existia no lado errado do balcão.
+   *
+   * ⚠️ TIRAR O BOTÃO DAQUI NÃO BASTA, e é por isso que existe a migration
+   * 0082: todo app já instalado continua com ele. A proibição de verdade mora
+   * no servidor.
+   *
+   * `activate` continua exportado por useRide.ts (arquivo travado) — esta tela
+   * simplesmente parou de chamá-lo.
+   */
+
+  /**
+   * Antes: `onPress: () => cancel(ride.id)` — dispara e esquece. O `cancel` não
+   * olhava o erro do UPDATE e não devolvia nada, então, quando o servidor
+   * recusava, o card continuava na lista sem uma palavra de explicação. Num
+   * cancelamento que pode custar a tarifa cheia (janela de 60 min), "não sei se
+   * cancelou" é o pior estado possível. Agora esperamos a confirmação, travamos
+   * o card enquanto ela não chega e dizemos quando falha.
+   */
+  async function runCancel(ride: RideRecord) {
+    if (busyRideId) return;
+    setBusyRideId(ride.id);
+    // Aplica a POLÍTICA (grátis até 1h antes; tarifa integral depois) em vez do
+    // cancelamento cru — a mesma chamada que a tela de detalhes usa, para as
+    // duas portas do passageiro cobrarem igual.
+    const r = await cancelScheduledRideWithPolicy(ride);
+    await refresh();
+    setBusyRideId(null);
+    if (r.ok && r.charged) {
+      Alert.alert(
+        t('scheduled.cancelChargedTitle'),
+        `${t('scheduled.policyChargedBody2')} ${formatCurrency(r.amountDollars)} ${t('scheduled.policyChargedBody3')}`,
+      );
       return;
     }
-    if (!activated) {
+    if (r.ok && 'chargeError' in r) {
+      Alert.alert(t('scheduled.oops'), r.chargeError);
+      return;
+    }
+    const ok = r.ok;
+    if (!ok) {
+      // PENDÊNCIA DE PRODUTO: falta uma chave `scheduled.cancelError` = "Não foi
+      // possível cancelar seu agendamento. Ele continua ativo — verifique sua
+      // conexão e tente de novo." Reusamos `scheduled.activateError`, o texto
+      // genérico de falha desta mesma tela, porque src/i18n/translations.ts está
+      // sob edição do dono e não pode receber chaves novas.
       Alert.alert(t('scheduled.oops'), t('scheduled.activateError'));
-      return;
-    }
-    if ((activated as Ride).driver_id) {
-      // Motorista já confirmado → vai direto para corrida ativa
-      navigation.navigate('ActiveRide', { ride: activated as Ride });
-    } else {
-      navigation.navigate('FindingDriver', { ride: activated as Ride });
     }
   }
 
   function handleCancel(ride: RideRecord) {
-    if (!isCancellationFree(ride.scheduled_for)) {
+    if (!cancellationPolicy(ride, Date.now()).free) {
       Alert.alert(
         t('scheduled.cancelChargedTitle'),
         t('scheduled.cancelChargedMessage'),
         [
           { text: t('scheduled.noKeep'), style: 'cancel' },
-          { text: t('scheduled.cancelAnyway'), style: 'destructive', onPress: () => cancel(ride.id) },
+          { text: t('scheduled.cancelAnyway'), style: 'destructive', onPress: () => { runCancel(ride); } },
         ]
       );
       return;
     }
     Alert.alert(t('scheduled.cancelScheduleTitle'), t('scheduled.cancelScheduleMessage'), [
       { text: t('scheduled.no'), style: 'cancel' },
-      { text: t('scheduled.yesCancel'), style: 'destructive', onPress: () => cancel(ride.id) },
+      { text: t('scheduled.yesCancel'), style: 'destructive', onPress: () => { runCancel(ride); } },
     ]);
   }
 
@@ -190,6 +249,14 @@ export function ScheduledRidesScreen({ navigation }: Props) {
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <Text style={styles.title}>{t('scheduled.headerTitle')}</Text>
+        {/* Agendar daqui mesmo (29/10/2026) — antes a agenda só listava. */}
+        <TouchableOpacity
+          style={styles.newBtn}
+          onPress={() => navigation.navigate('RequestRide', { scheduleOnly: true })}
+          accessibilityLabel={t('scheduled.newRide', 'Schedule a ride')}
+        >
+          <Text style={styles.newBtnText}>＋ {t('scheduled.newRide', 'Schedule a ride')}</Text>
+        </TouchableOpacity>
       </View>
 
       {loading && rides.length === 0 ? (
@@ -201,10 +268,30 @@ export function ScheduledRidesScreen({ navigation }: Props) {
           contentContainerStyle={[styles.list, Platform.OS === 'android' && { paddingBottom: 24 + insets.bottom }]}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.accent} />}
           ListEmptyComponent={
+            // Com a leitura falhando, "Você não tem agendamentos" é mentira: pode
+            // haver viagens marcadas que o app não conseguiu ler. Trocamos o
+            // texto para dizer que foi falha de carregamento — o RefreshControl
+            // acima já é o caminho de tentar de novo.
+            // PENDÊNCIA DE PRODUTO: o ideal seria `scheduled.loadError` = "Não
+            // foi possível carregar seus agendamentos. Puxe para atualizar."
+            // Reusamos `scheduled.activateError` (texto genérico de falha desta
+            // tela) porque translations.ts está sob edição do dono.
             <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>🗓️</Text>
-              <Text style={styles.emptyTitle}>{t('scheduled.emptyTitle')}</Text>
-              <Text style={styles.emptyText}>{t('scheduled.emptyText')}</Text>
+              <Text style={styles.emptyEmoji}>{loadFailed ? '⚠️' : '🗓️'}</Text>
+              <Text style={styles.emptyTitle}>
+                {loadFailed ? t('scheduled.oops') : t('scheduled.emptyTitle')}
+              </Text>
+              <Text style={styles.emptyText}>
+                {loadFailed ? t('scheduled.activateError') : t('scheduled.emptyText')}
+              </Text>
+              {!loadFailed && (
+                <TouchableOpacity
+                  style={[styles.newBtn, styles.newBtnBig]}
+                  onPress={() => navigation.navigate('RequestRide', { scheduleOnly: true })}
+                >
+                  <Text style={styles.newBtnText}>🗓️ {t('scheduled.newRide', 'Schedule a ride')}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           }
           renderItem={({ item }) => {
@@ -213,8 +300,8 @@ export function ScheduledRidesScreen({ navigation }: Props) {
               <ScheduledCard
                 ride={item}
                 driverInfo={driverInfo}
-                onActivate={handleActivate}
                 onCancel={handleCancel}
+                busy={busyRideId === item.id}
                 onChat={item.driver_id ? () => handleChat(item, driverInfo) : undefined}
                 styles={styles}
                 colors={colors}
@@ -228,13 +315,14 @@ export function ScheduledRidesScreen({ navigation }: Props) {
 }
 
 function ScheduledCard({
-  ride, driverInfo, onActivate, onCancel, onChat, styles, colors,
+  ride, driverInfo, onCancel, onChat, busy, styles, colors,
 }: {
   ride: RideRecord;
   driverInfo?: DriverInfo;
-  onActivate: (r: RideRecord) => void;
   onCancel: (r: RideRecord) => void;
   onChat?: () => void;
+  /** true enquanto ativar/cancelar deste card está em voo — ver `busyRideId`. */
+  busy: boolean;
   styles: ReturnType<typeof makeStyles>;
   colors: AppTheme;
 }) {
@@ -250,7 +338,9 @@ function ScheduledCard({
   const when = ride.scheduled_for ? new Date(ride.scheduled_for) : null;
   const hasDriver = !!ride.driver_id;
   const minsLeft = when ? Math.floor((when.getTime() - now) / 60_000) : null;
-  const canCancel = minsLeft === null || minsLeft > 60;
+  // Mesma regra do handleCancel e da tela de detalhes — `now` do relógio interno
+  // do card para o aviso virar sozinho ao cruzar a janela, sem sair e voltar.
+  const canCancel = cancellationPolicy(ride, now).free;
 
   return (
     <View style={[styles.card, hasDriver && styles.cardConfirmed, !canCancel && styles.cardWarning]}>
@@ -302,6 +392,7 @@ function ScheduledCard({
           <Text style={[styles.addr, { marginTop: 14 }]} numberOfLines={1}>{ride.destination_address}</Text>
         </View>
       </View>
+      <FlightInfoLine ride={ride} style={{ marginTop: 8 }} />
 
       {/* ── Motorista confirmado ── */}
       {hasDriver && (
@@ -342,19 +433,24 @@ function ScheduledCard({
       )}
 
       {/* ── Ações ── */}
+      {/*
+        Só CANCELAR. O botão de ativar/começar saiu — ver a nota no topo do
+        arquivo. Ele ficava aqui, à direita, colado neste; era o vizinho errado
+        para uma ação que cobra o cartão sem perguntar.
+      */}
       <View style={styles.cardActions}>
         <TouchableOpacity
-          style={[styles.cancelBtn, !canCancel && styles.cancelBtnCharged]}
+          style={[styles.cancelBtn, styles.cancelBtnUnico, !canCancel && styles.cancelBtnCharged, busy && styles.btnBusy]}
           onPress={() => onCancel(ride)}
+          disabled={busy}
         >
-          <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
-            {canCancel ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.activateBtn} onPress={() => onActivate(ride)}>
-          <Text style={styles.activateBtnText}>
-            {hasDriver ? t('scheduled.startRide') : t('scheduled.requestNow')}
-          </Text>
+          {busy ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={[styles.cancelBtnText, !canCancel && styles.cancelBtnTextCharged]}>
+              {canCancel ? t('scheduled.cancel') : t('scheduled.cancelCharged')}
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -365,10 +461,18 @@ function ScheduledCard({
 function makeStyles(colors: AppTheme) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
+    // Cancelar era metade da linha porque dividia espaço com o botão de
+    // ativar. Sozinho, ocupa a linha inteira.
+    cancelBtnUnico: { flex: 1 },
     header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 },
     back: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     backText: { fontSize: 24, color: colors.text },
-    title: { fontSize: 22, fontWeight: '800', color: colors.text, marginLeft: 4 },
+    title: { fontSize: 22, fontWeight: '800', color: colors.text, marginLeft: 4, flex: 1 },
+    newBtn: {
+      backgroundColor: colors.accent, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8,
+    },
+    newBtnBig: { marginTop: 20, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 24 },
+    newBtnText: { color: '#1A1A2E', fontWeight: '800', fontSize: 14 },
     list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
     card: { backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 12 },
     cardConfirmed: { borderLeftWidth: 4, borderLeftColor: colors.success },
@@ -474,8 +578,9 @@ function makeStyles(colors: AppTheme) {
     cancelBtnText: { color: colors.gray[600], fontSize: 14, fontWeight: '700' },
     cancelBtnCharged: { borderColor: 'rgba(239,68,68,0.4)', backgroundColor: 'rgba(239,68,68,0.06)' },
     cancelBtnTextCharged: { color: '#ef4444', fontSize: 13 },
-    activateBtn: { flex: 2, height: 44, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-    activateBtnText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
+    // Opacidade é o sinal de "está desabilitado" — sem ela o botão travado
+    // ficava idêntico ao ativo e o toque simplesmente não fazia nada.
+    btnBusy: { opacity: 0.5 },
     empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
     emptyEmoji: { fontSize: 48, marginBottom: 16 },
     emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 6 },

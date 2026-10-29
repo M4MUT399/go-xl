@@ -21,3 +21,12 @@ verify_jwt = false
 # token + expiração com service_role e devolve só campos whitelistados.
 [functions.track-trip]
 verify_jwt = false
+
+# resolve-driver-code traduz o código do QR em `{ id, full_name }` para o
+# Cadastro Expresso, que roda ANTES de a conta existir (não há JWT para
+# validar). Substitui o SELECT anônimo na view `profiles_public`, revogado na
+# migration 0067 — ver o cabeçalho da função. Superfície mínima: lookup de 1
+# código por vez, 2 colunas, só perfis `type = 'driver'`, com rate limit por
+# IP em duas janelas.
+[functions.resolve-driver-code]
+verify_jwt = false

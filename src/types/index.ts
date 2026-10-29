@@ -44,6 +44,12 @@ export interface Profile {
   stripe_payment_method_id?: string;
   card_last4?: string;
   card_brand?: string;
+  // Migration 0078. Os dois campos acima ficam NULOS quando o método salvo não
+  // é cartão (Link, por exemplo), e o perfil ficava com forma de pagamento
+  // válida e invisível na tela. Estes dizem o que ela é. Nulos em perfil
+  // anterior à 0078 — ver src/lib/paymentMethod.ts, que trata os dois casos.
+  payment_method_type?: string | null;
+  payment_method_label?: string | null;
   // Stripe Connect (motorista parceiro)
   stripe_account_id?: string;
   stripe_onboarding_complete?: boolean;
@@ -121,7 +127,22 @@ export interface Ride {
   duration_min?: number;
   toll_amount?: number;
   airport_port_fee?: number;
+  /** Corrida para aeroporto: voo e terminal informados pelo passageiro (migration 0088). */
+  flight_number?: string | null;
+  airport_terminal?: string | null;
   scheduled_for?: string;
+  // Posição ao vivo do PASSAGEIRO até o embarque (migration 0090) — o motorista
+  // a vê no mapa para achá-lo na calçada. Publicada só em accepted/driver_en_route.
+  passenger_lat?: number | null;
+  passenger_lng?: number | null;
+  passenger_location_at?: string | null;
+  // Espera no embarque e mudança de rota em curso (migration 0091).
+  driver_arrived_at?: string | null;
+  wait_fee_minutes?: number | null;
+  wait_fee_amount?: number | null;
+  stops?: { lat: number; lng: number; address?: string; done_at?: string | null }[] | null;
+  route_change_count?: number | null;
+  fare_adjustment_amount?: number | null;
   // Telemetria ao vivo do motorista (posição + ETA até o alvo atual)
   driver_lat?: number;
   driver_lng?: number;
@@ -174,9 +195,16 @@ export interface RideRecord {
   destination_address: string;
   status: RideStatus;
   price?: number;
+  // Gorjeta — cobrada num PaymentIntent SEPARADO da tarifa (ver 0064 e
+  // tip-ride/index.ts), então `price` NÃO a inclui. Quem exibe "total" ao
+  // passageiro precisa somar as duas, senão a tela contradiz a fatura do
+  // cartão. `useRideHistory` faz `select('*')`, então a coluna já vem.
+  tip_amount?: number;
   distance_km?: number;
   duration_min?: number;
   scheduled_for?: string;
+  flight_number?: string | null;
+  airport_terminal?: string | null;
   paid?: boolean;
   created_at: string;
   accepted_at?: string;
@@ -208,10 +236,11 @@ export type RootStackParamList = {
   CompleteRegistration: undefined;
   PassengerTabs: undefined;
   DriverTabs: undefined;
-  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string; express?: boolean };
+  RequestRide: { destination?: Location; lockedDriverId?: string; lockedDriverName?: string; express?: boolean; scheduleOnly?: boolean };
   QRCode: undefined;
   FindingDriver: { ride: Ride };
   ActiveRide: { ride: Ride };
+  EditRoute: { ride: Ride };
   RateRide: { ride: Ride };
   DriverRequest: { ride: Ride };
   DriverNavigate: { ride: Ride; initialDriverLocation?: { lat: number; lng: number } };

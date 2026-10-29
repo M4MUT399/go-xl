@@ -76,3 +76,44 @@ export async function callEdgeFunction<T>(
   }
   return json;
 }
+
+/**
+ * Variante SEM sessão, para as Edge Functions publicadas com
+ * `verify_jwt = false` no config.toml (hoje: `resolve-driver-code`, que o
+ * Cadastro Expresso chama ANTES de existir conta).
+ *
+ * Diferença única em relação a `callEdgeFunction`: não lê nem exige
+ * `getSession()`, e portanto não manda `Authorization`. Não é um atalho para
+ * pular autenticação — só as funções que fazem a própria validação interna (ou
+ * que, como esta, são deliberadamente públicas e minimizadas + rate-limited no
+ * servidor) devem ser chamadas por aqui.
+ *
+ * Se houver sessão, ela simplesmente não é usada: a função não muda de
+ * comportamento com ou sem JWT, o que mantém o caminho de cold start (deep
+ * link chegando antes da sessão assentar) livre de condição de corrida.
+ */
+export async function callPublicEdgeFunction<T>(
+  name: string,
+  body: Record<string, unknown> = {},
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const res = await withTimeout(
+    fetch(functionUrl(name), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    timeoutMs,
+    'Não foi possível conectar. Verifique sua conexão e tente novamente.',
+  );
+
+  const json = (await res.json()) as T & { error?: string; code?: string };
+  if (!res.ok || json.error) {
+    throw new EdgeFunctionError(
+      json.error ?? 'Algo deu errado. Tente novamente.',
+      json.code,
+      res.status,
+    );
+  }
+  return json;
+}

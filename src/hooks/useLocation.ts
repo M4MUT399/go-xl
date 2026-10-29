@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as ExpoLocation from 'expo-location';
 import type { Coordinates } from '../types';
+import { startTiming } from '../lib/fieldMetrics';
 
 export type LocationStatus = 'loading' | 'ready' | 'denied' | 'error';
 
@@ -26,6 +27,16 @@ export function useLocation(options?: UseLocationOptions) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [status, setStatus] = useState<LocationStatus>('loading');
   const watchRef = useRef<ExpoLocation.LocationSubscription | null>(null);
+  /**
+   * Fecha o intervalo até o próximo fix de GPS.
+   *
+   * Mede a CADÊNCIA de entrega do SO ao app — não é a latência de rastreamento
+   * ponta a ponta que a régua de 2 s cobra. Falta desta amostra tudo depois do
+   * fix: publicação, realtime do Supabase e render no aparelho do passageiro.
+   * E o piso é configuração, não física: com `timeInterval: 5000` abaixo, um
+   * carro parado entrega um fix a cada 5 s por definição.
+   */
+  const desdeUltimoFix = useRef<ReturnType<typeof startTiming> | null>(null);
 
   const load = useCallback(async () => {
     setStatus('loading');
@@ -107,6 +118,10 @@ export function useLocation(options?: UseLocationOptions) {
           timeInterval: 5000,     // ou a cada 5 s (o que vier primeiro)
         },
         (pos) => {
+          // Intervalo entre dois fixes CONSECUTIVOS. O primeiro só abre o
+          // cronômetro: não existe anterior de onde medir.
+          desdeUltimoFix.current?.({ accuracy: pos.coords.accuracy ?? undefined });
+          desdeUltimoFix.current = startTiming('location_fix_interval');
           setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, heading: validHeading(pos.coords.heading), speed: validSpeed(pos.coords.speed) });
           setStatus('ready');
         }
@@ -123,6 +138,9 @@ export function useLocation(options?: UseLocationOptions) {
       active = false;
       watchRef.current?.remove();
       watchRef.current = null;
+      // Sem isso, a primeira leitura depois de religar o watch sairia como um
+      // intervalo gigante que inclui o tempo com o rastreamento DESLIGADO.
+      desdeUltimoFix.current = null;
     };
   }, [watchEnabled]);
 

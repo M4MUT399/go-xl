@@ -36,6 +36,23 @@ interface SavedCard {
   expMonth: number | null;
   expYear: number | null;
   isDefault: boolean;
+  // A `list-cards` filtrava por `type: 'card'` e devolvia `cards: []` para quem
+  // paga com Link — indistinguível de "não tem forma de pagamento". Ela parou
+  // de filtrar e passou a mandar estes dois. Opcionais porque uma resposta
+  // antiga (função ainda não republicada) não os traz.
+  type?: string;
+  label?: string;
+}
+
+/**
+ * O texto da linha. Prefere o rótulo pronto do servidor — é o único que sabe o
+ * e-mail da conta Link — e só recompõe `marca •••• 1234` quando ele não veio.
+ * Nunca devolve `•••• ` com o fim vazio, que era o que aparecia para Link.
+ */
+function rotuloDoMetodo(card: SavedCard): string {
+  if (card.label?.trim()) return card.label;
+  if (card.last4) return `${BRAND_LABEL[card.brand] ?? card.brand.toUpperCase()} •••• ${card.last4}`;
+  return card.type === 'link' ? 'Link' : (card.type || card.brand || 'Forma de pagamento');
 }
 
 export function PaymentScreen({ navigation }: Props) {
@@ -139,7 +156,7 @@ export function PaymentScreen({ navigation }: Props) {
   }
 
   function confirmRemoveCard(card: SavedCard) {
-    const cardLabel = `${BRAND_LABEL[card.brand] ?? card.brand} •••• ${card.last4}`;
+    const cardLabel = rotuloDoMetodo(card);
     Alert.alert(
       t('payment.removeTitle'),
       t('payment.removeConfirm').replace('{card}', cardLabel),
@@ -168,7 +185,14 @@ export function PaymentScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container}>
       {/* ── Cabeçalho ── */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
+        <TouchableOpacity
+          testID="backButton"
+          onPress={() => navigation.goBack()}
+          style={styles.back}
+          hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.back')}
+        >
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <Text style={styles.title}>{t('payment.title')}</Text>
@@ -243,7 +267,8 @@ function CardRow({
   colors: ReturnType<typeof useTheme>['colors'];
 }) {
   const { t } = useTranslation();
-  const brandLabel = BRAND_LABEL[card.brand] ?? card.brand.toUpperCase();
+  const rotulo = rotuloDoMetodo(card);
+  // Só cartão tem validade; numa carteira a linha ficava com o rótulo vazio.
   const expiry = card.expMonth && card.expYear
     ? `${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}`
     : null;
@@ -256,9 +281,9 @@ function CardRow({
       activeOpacity={0.8}
     >
       <View style={styles.cardRowLeft}>
-        <Text style={styles.cardRowEmoji}>💳</Text>
+        <Text style={styles.cardRowEmoji}>{card.last4 ? '💳' : '🔗'}</Text>
         <View>
-          <Text style={styles.cardRowBrand}>{brandLabel} •••• {card.last4}</Text>
+          <Text style={styles.cardRowBrand}>{rotulo}</Text>
           <Text style={styles.cardRowMeta}>
             {expiry ? `${t('payment.expires')} ${expiry}` : ''}
             {card.isDefault ? (expiry ? `  •  ${t('payment.default')}` : t('payment.default')) : ''}
@@ -282,11 +307,18 @@ function makeStyles(colors: ReturnType<typeof useTheme>['colors']) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center',
-      paddingHorizontal: 16, paddingVertical: 12,
+      // `paddingTop` maior que o de baixo é o "um pouco mais para baixo" do
+      // pedido: a barra encosta na área segura, e em aparelho com recorte de
+      // câmera a seta ficava perto demais da borda de cima.
+      paddingHorizontal: 16, paddingTop: 20, paddingBottom: 12,
       backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.gray[100],
     },
-    back:          { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-    backText:      { fontSize: 24, color: colors.primary },
+    // 40 → 60 e 24 → 36: os mesmos 50% pedidos para as demais telas. Aqui o
+    // alvo já vinha dimensionado (era a única das seis com padding de verdade),
+    // então cresce a caixa, não só a fonte. As outras cinco usam
+    // components/common/BackButton.
+    back:          { width: 60, height: 60, alignItems: 'center', justifyContent: 'center' },
+    backText:      { fontSize: 36, color: colors.primary },
     title:         { fontSize: 18, fontWeight: '700', color: colors.text, marginLeft: 4 },
     centered:      { flex: 1, alignItems: 'center', justifyContent: 'center' },
     content:       { padding: 20, flexGrow: 1 },

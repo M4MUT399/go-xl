@@ -35,6 +35,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { checkAdminRateLimit } from '../_shared/adminRateLimit.ts';
 import { isConfigFlagEnabled } from '../_shared/adminConfigFlag.ts';
 import { resolveExportMonth, buildDailyMileageCsv, type DailyMileageRow } from '../_shared/telematicsExport.ts';
+import { isServiceRoleCaller } from '../_shared/serviceAuth.ts';
 
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')              ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -53,23 +54,6 @@ function json(body: unknown, status = 200) {
   });
 }
 
-/**
- * Confirma que o token do header Authorization é a service-role key olhando
- * o claim `role` do JWT (mesma técnica de run-weekly-payouts/index.ts) — a
- * assinatura já foi validada pelo gateway do Supabase antes de chegar aqui.
- */
-function isServiceRole(token: string): boolean {
-  try {
-    const payload = token.split('.')[1];
-    if (!payload) return false;
-    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const decoded = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')));
-    return decoded?.role === 'service_role';
-  } catch {
-    return false;
-  }
-}
-
 interface Body {
   month?: string;
   jurisdiction?: string;
@@ -81,7 +65,6 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization') ?? '';
-    const token = authHeader.replace(/^Bearer\s+/i, '');
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     const body = (req.headers.get('content-type')?.includes('application/json')
@@ -114,7 +97,13 @@ Deno.serve(async (req) => {
 
       triggeredBy = 'admin';
       adminId = user.id;
-    } else if (isServiceRole(token)) {
+    // Via cron: NÃO decodifica o claim `role` do JWT (`atob` não verifica
+    // assinatura nenhuma, e com `--no-verify-jwt` no deploy o gateway também
+    // não verifica). Pergunta o que de fato importa — "o chamador apresentou a
+    // service_role key?" — via comparação em tempo constante. Ver o cabeçalho
+    // de _shared/serviceAuth.ts; mesmo caminho já adotado por dispatch-engine
+    // e sweep-stale-requesting.
+    } else if (isServiceRoleCaller(authHeader, SUPABASE_SERVICE_KEY)) {
       triggeredBy = 'cron';
     } else {
       return json({ error: 'Não autorizado' }, 401);

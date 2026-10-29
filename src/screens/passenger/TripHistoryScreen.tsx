@@ -155,7 +155,21 @@ function TripCard({ ride, styles, colors, onPress }: { ride: RideRecord; styles:
                 {ride.paid ? t('history.paid') : t('history.unpaid')}
               </Text>
             )}
-            <Text style={styles.price}>{formatCurrency(ride.price)}</Text>
+            {/* Mesmo critério da TripDetailsScreen. A gorjeta é um PaymentIntent
+                separado (0064) e não está em `price`, então o card soma as duas
+                parcelas — mas só as que o cartão realmente reteve: com
+                `paid = false` a tarifa nunca foi capturada ou foi estornada
+                (refund-ride grava `paid = false`), e somá-la afirmaria uma
+                cobrança desfeita bem ao lado do selo "Não pago". Corrida ainda
+                não concluída não tem selo e continua exibindo o preço da
+                corrida. */}
+            <Text style={styles.price}>
+              {formatCurrency(
+                ride.status === 'completed'
+                  ? (ride.paid ? (Number(ride.price) || 0) : 0) + Math.max(0, Number(ride.tip_amount) || 0)
+                  : (Number(ride.price) || 0)
+              )}
+            </Text>
           </View>
         </View>
       )}

@@ -34,6 +34,9 @@ import {
 } from '../../lib/nav/courseUp';
 import { zoomForSpeed } from '../../lib/nav/follow';
 import { supabase } from '../../lib/supabase';
+import * as ExpoLocation from 'expo-location';
+import { startDriverOnlineBackgroundLocation } from '../../lib/nav/backgroundLocationTask';
+import { statusBannerText } from '../../lib/driverOnlineStatus';
 
 type Props = { navigation: NativeStackNavigationProp<RootStackParamList, 'DriverTabs'> };
 
@@ -48,7 +51,7 @@ export function DriverHomeScreen({ navigation }: Props) {
   const {
     isOnline, setIsOnline, location, pendingRide, pendingScheduledRide, setPendingScheduledRide,
     confirmScheduledRide, confirmQrScheduledRide, rejectScheduledRide, dutyIdleSegments,
-    dutyMovementEnabled, dutyMovementMinutes,
+    dutyMovementEnabled, dutyMovementMinutes, statusSyncFailed, statusSyncReason,
   } = useDriverRideContext();
   // Agendamento travado por QR (o passageiro escolheu este motorista pelo
   // código dele): diferente do pool aberto, aqui `driver_id` já vem preenchido
@@ -92,6 +95,8 @@ export function DriverHomeScreen({ navigation }: Props) {
   // caminhos); aqui só usamos os motivos que ainda não têm um `if` próprio.
   const onboardingGate = useDriverOnboardingGate();
   const [confirming, setConfirming] = useState(false);
+  /** Recusa de agendamento QR em voo — trava os dois botões do banner. */
+  const [rejecting, setRejecting] = useState(false);
   const mapRef = useRef<MapView>(null);
   // Bloco 1: toda câmera passa pelo CameraController (valida coord + clampa zoom).
   const cam = useCameraController(mapRef, 'DriverHome');
@@ -292,6 +297,47 @@ export function DriverHomeScreen({ navigation }: Props) {
     // Abre/fecha a sessão de serviço que alimenta o cálculo do limite (P3).
     if (val) duty.startSession();
     else duty.endSession();
+    if (val) askOnlineBackgroundLocation();
+  }
+
+  // iOS: sem "Permitir Sempre", o motorista ocioso com o app em segundo plano
+  // para de publicar a posição e deixa de receber chamadas. Pede no gesto de
+  // ficar online, uma vez por sessão; o DriverRideContext liga a task quando a
+  // permissão existir. (Android usa o foreground service — não precisa disto.)
+  const bgOnlineAskedRef = useRef(false);
+  async function askOnlineBackgroundLocation() {
+    if (Platform.OS !== 'ios' || bgOnlineAskedRef.current || !profile?.id) return;
+    try {
+      const current = await ExpoLocation.getBackgroundPermissionsAsync();
+      if (current.status === 'granted' || !current.canAskAgain) return;
+    } catch {
+      return;
+    }
+    bgOnlineAskedRef.current = true;
+    const driverId = profile.id;
+    Alert.alert(
+      t('driverHome.bgOnlineTitle'),
+      t('driverHome.bgOnlineMessage'),
+      [
+        { text: t('driverHome.bgOnlineDeny'), style: 'cancel' },
+        {
+          text: t('driverHome.bgOnlineAllow'),
+          onPress: async () => {
+            try {
+              const { status } = await ExpoLocation.requestBackgroundPermissionsAsync();
+              if (status !== 'granted') return;
+              await startDriverOnlineBackgroundLocation({
+                driverId,
+                notifTitle: 'Go XL',
+                notifBody: t('driverHome.bgOnlineNotifBody'),
+              });
+            } catch {
+              // best-effort
+            }
+          },
+        },
+      ],
+    );
   }
 
   async function handleConfirmScheduled() {
@@ -321,9 +367,26 @@ export function DriverHomeScreen({ navigation }: Props) {
   // a corrida de volta (rejectScheduledRide) para que outro motorista possa
   // recebê-la, e avisar o passageiro que este motorista não confirmou.
   async function handleRejectScheduled() {
-    if (!pendingScheduledRide) return;
+    if (!pendingScheduledRide || rejecting) return;
     if (isQrLockedSchedule) {
-      await rejectScheduledRide(pendingScheduledRide.id);
+      // `rejectScheduledRide` faz um UPDATE que pode ser recusado (rede, RLS, ou
+      // o agendamento já ter mudado de estado) e devolve `false` nesse caso. O
+      // resultado era DESCARTADO e o banner fechava do mesmo jeito: o motorista
+      // acreditava ter recusado, mas `driver_id` continuava apontando para ele —
+      // a corrida seguia travada no nome dele, sem voltar ao pool, e o passageiro
+      // esperava um motorista que não ia aparecer. Agora o banner só some quando
+      // a liberação é confirmada.
+      setRejecting(true);
+      const ok = await rejectScheduledRide(pendingScheduledRide.id);
+      setRejecting(false);
+      if (!ok) {
+        // PENDÊNCIA DE PRODUTO: falta uma chave `driverHome.qrRejectFailed` =
+        // "Não foi possível recusar este agendamento. Tente de novo."
+        // Reusamos `driverHome.qrConfirmFailed`, o par simétrico já existente em
+        // en/es/pt — src/i18n/translations.ts está sob edição do dono.
+        Alert.alert(t('driverScheduled.oops'), t('driverHome.qrConfirmFailed'));
+        return;
+      }
     }
     setPendingScheduledRide(null);
   }
@@ -404,6 +467,12 @@ export function DriverHomeScreen({ navigation }: Props) {
         )}
       </MapView>
 
+      {/* Se este mapa aparecer BRANCO no Android, o roteiro de investigação está
+          em docs/mapa-branco-android.md. Não há aviso na tela de propósito:
+          nenhuma das causas é observável de dentro do app, e o aviso que existia
+          aqui acusava "chave ausente" em 100% dos aparelhos Android, inclusive
+          nos que estavam com o mapa desenhando ruas. */}
+
       {location && (
         <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
           <CrosshairIcon size={27.5} color={colors.primary} />
@@ -428,6 +497,32 @@ export function DriverHomeScreen({ navigation }: Props) {
             />
           </View>
         </View>
+
+        {/*
+          A chave online↔offline é otimista: ela vira na hora e só depois a
+          transição é escrita em `driver_locations`. Quando o servidor RECUSA a
+          escrita (o trigger que exige a conta Stripe Connect habilitada, RLS, ou
+          simplesmente rede caída), o DriverRideContext reverte o estado local —
+          e antes disso a chave voltava sozinha, sem uma palavra. O motorista via
+          "Online" virar "Offline" do nada e não tinha como saber se era bug do
+          app ou recusa do servidor. Este banner é o "por quê" que faltava.
+
+          O QUE MUDOU: o texto era `driverNav.statusUpdateFailed` — "não foi
+          possível atualizar o status DA CORRIDA". Ele MENTIA sobre o que
+          falhou: aqui não há corrida nenhuma, o que não foi gravado é o
+          ONLINE/OFFLINE do motorista. O dono leu o banner na tela inicial, sem
+          corrida em andamento, e foi procurar uma corrida que não existia.
+          `translations.ts` continua travado, então o texto certo é COMPOSTO de
+          chaves que já existem nos três idiomas — ver `statusBannerText` em
+          src/lib/driverOnlineStatus.ts, que é onde isso é testado.
+        */}
+        {statusSyncFailed && (
+          <View style={styles.statusFailBanner}>
+            <Text style={styles.statusFailBannerText}>
+              {statusBannerText(statusSyncReason, t)}
+            </Text>
+          </View>
+        )}
 
         {!isOnline && (
           <View style={styles.offlineBanner}>
@@ -520,16 +615,23 @@ export function DriverHomeScreen({ navigation }: Props) {
           </View>
 
           <View style={styles.requestActions}>
+            {/*
+              Os dois botões travam enquanto QUALQUER das duas ações está em voo.
+              Antes o "recusar" seguia ativo durante a confirmação (e vice-versa):
+              dava para confirmar e recusar o mesmo agendamento em sequência, e o
+              recusar não mostrava nada durante o UPDATE que libera o driver_id.
+            */}
             <TouchableOpacity
-              style={styles.declineBtn}
+              style={[styles.declineBtn, (rejecting || confirming) && { opacity: 0.7 }]}
               onPress={handleRejectScheduled}
+              disabled={rejecting || confirming}
             >
               <Text style={styles.declineText}>{t('driverHome.declineBtn')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.acceptBtn, confirming && { opacity: 0.7 }]}
+              style={[styles.acceptBtn, (confirming || rejecting) && { opacity: 0.7 }]}
               onPress={handleConfirmScheduled}
-              disabled={confirming}
+              disabled={confirming || rejecting}
             >
               <Text style={styles.acceptText}>{confirming ? t('driverHome.confirming') : t('driverScheduled.confirm')}</Text>
             </TouchableOpacity>
@@ -597,6 +699,20 @@ function makeStyles(colors: AppTheme) {
       alignItems: 'center',
     },
     offlineBannerText: { color: colors.gray[300], fontSize: 13, textAlign: 'center' },
+    // Mesma caixa do banner offline, mas com a borda de erro: a chave ter voltado
+    // sozinha é uma informação que o motorista PRECISA ver, não pode se confundir
+    // com o aviso rotineiro de "ative para receber corridas".
+    statusFailBanner: {
+      marginHorizontal: 16,
+      marginBottom: 8,
+      backgroundColor: 'rgba(26,26,46,0.9)',
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.error,
+      padding: 12,
+      alignItems: 'center',
+    },
+    statusFailBannerText: { color: colors.error, fontSize: 13, textAlign: 'center' },
     scheduledBtn: {
       marginHorizontal: 16,
       marginTop: 10,
