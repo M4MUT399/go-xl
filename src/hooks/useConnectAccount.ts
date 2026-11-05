@@ -74,5 +74,25 @@ export function useConnectAccount(driverId: string | undefined) {
     }
   }, [refresh]);
 
-  return { status, loading, error, onboarding, refresh, startOnboarding };
+  /**
+   * "Conferir meus dados de recebimento": com o cadastro concluído, abre o painel
+   * da Stripe (dados e conta bancária). Se houver pendência, o servidor devolve o
+   * cadastro no lugar — o motorista sempre cai onde dá para resolver.
+   */
+  const openPayoutInfo = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    setOnboarding(true);
+    try {
+      const json = await callEdgeFunction<{ url?: string }>('connect-onboard-driver', { mode: 'manage' });
+      if (!json.url) throw new Error('Não foi possível abrir seus dados de recebimento.');
+      await WebBrowser.openAuthSessionAsync(json.url, 'goxl://payout-return');
+      await refresh();
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message ?? 'Não foi possível abrir seus dados de recebimento.' };
+    } finally {
+      setOnboarding(false);
+    }
+  }, [refresh]);
+
+  return { status, loading, error, onboarding, refresh, startOnboarding, openPayoutInfo };
 }

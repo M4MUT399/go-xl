@@ -10,11 +10,13 @@
 // Fluxo no app (EarningsScreen):
 //   POST → { url } → WebBrowser.openBrowserAsync(url) → volta → connect-account-status
 //
-// Deploy:  npx supabase functions deploy connect-onboard-driver
+// Deploy:  npx supabase functions deploy connect-onboard-driver --no-verify-jwt
+// (a página de retorno, GET, é aberta pelo navegador da Stripe, sem JWT)
 // Segredos: STRIPE_SECRET_KEY + (SUPABASE_URL / SERVICE_ROLE_KEY / ANON_KEY automáticos)
 
 import Stripe from 'npm:stripe@17';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { canOpenDashboard, isOrphanAccountError, keyCanJudgeOrphans } from '../_shared/connectOrphan.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
@@ -165,12 +167,13 @@ Deno.serve(async (req) => {
 
     const { data: profile } = await admin
       .from('profiles')
-      .select('stripe_account_id, type, full_name, email')
+      .select('stripe_account_id, stripe_pending_account_id, type, full_name, email')
       .eq('id', user.id)
       .single();
 
     const p = profile as {
-      stripe_account_id?: string; type?: string; full_name?: string; email?: string;
+      stripe_account_id?: string; stripe_pending_account_id?: string | null;
+      type?: string; full_name?: string; email?: string;
     } | null;
 
     // Só motoristas recebem repasse — evita passageiro criar conta conectada à toa.
@@ -178,19 +181,67 @@ Deno.serve(async (req) => {
       return json({ error: 'Apenas motoristas podem configurar repasse' }, 403);
     }
 
+    const corpo = await req.json().catch(() => ({}));
+    const quer_painel = corpo?.mode === 'manage';
+
+    const criarConta = (idempotencyKey?: string) => stripe.accounts.create({
+      type: 'express',
+      country: 'US',
+      email: p?.email ?? user.email ?? undefined,
+      business_type: 'individual',
+      capabilities: { transfers: { requested: true } },
+      metadata: { supabase_user_id: user.id },
+    }, idempotencyKey ? { idempotencyKey } : undefined);
+
     // ── Cria a conta Express se ainda não existe ──────────────────────────────
     let accountId = p?.stripe_account_id ?? '';
     if (!accountId) {
-      const account = await stripe.accounts.create({
-        type: 'express',
-        country: 'US',
-        email: p?.email ?? user.email ?? undefined,
-        business_type: 'individual',
-        capabilities: { transfers: { requested: true } },
-        metadata: { supabase_user_id: user.id },
-      });
+      const account = await criarConta();
       accountId = account.id;
       await admin.from('profiles').update({ stripe_account_id: accountId }).eq('id', user.id);
+    } else {
+      // ── A conta gravada ainda é alcançável? (0094) ──────────────────────────
+      // Se não for, o cadastro continua numa conta EM ESPERA. stripe_account_id
+      // e as flags ficam como estão até a Stripe aprovar a nova, para o motorista
+      // não sair do ar. Ver o cabeçalho da migration.
+      try {
+        const atual = await stripe.accounts.retrieve(accountId);
+        // Cadastro já concluído: abre o painel da Stripe, onde ele confere os
+        // dados e a conta bancária. Sem pendência, um Account Link não serve.
+        if (quer_painel && canOpenDashboard(atual)) {
+          const login = await stripe.accounts.createLoginLink(accountId);
+          return json({ url: login.url, account_id: accountId, kind: 'dashboard' });
+        }
+      } catch (e) {
+        if (!isOrphanAccountError(e)) throw e;
+        const podeJulgar = await keyCanJudgeOrphans(
+          Deno.env.get('STRIPE_SECRET_KEY') ?? '',
+          () => stripe.accounts.list({ limit: 1 }),
+        );
+        if (!podeJulgar) throw e;
+
+        let espera = p?.stripe_pending_account_id ?? '';
+        if (espera) {
+          try {
+            await stripe.accounts.retrieve(espera);
+          } catch (ePendente) {
+            if (!isOrphanAccountError(ePendente)) throw ePendente;
+            espera = '';
+          }
+        }
+        if (!espera) {
+          // A chave torna o toque duplo inofensivo: não nascem duas contas.
+          const nova = await criarConta(`connect_replace_${user.id}_${accountId}`);
+          espera = nova.id;
+          const { error: erroEspera } = await admin
+            .from('profiles').update({ stripe_pending_account_id: espera }).eq('id', user.id);
+          if (erroEspera) throw new Error(`Falha ao guardar a conta nova: ${erroEspera.message}`);
+          console.warn('connect-onboard-driver: conta inalcançável, cadastro segue em conta nova', {
+            driverId: user.id, orfa: accountId, nova: espera,
+          });
+        }
+        accountId = espera;
+      }
     }
 
     // ── Account Link de onboarding ────────────────────────────────────────────

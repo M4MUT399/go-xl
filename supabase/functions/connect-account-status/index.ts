@@ -15,6 +15,7 @@
 
 import Stripe from 'npm:stripe@17';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { canPromote, isOrphanAccountError, keyCanJudgeOrphans } from '../_shared/connectOrphan.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
   apiVersion: '2025-01-27.acacia',
@@ -53,15 +54,16 @@ Deno.serve(async (req) => {
 
     const { data: profile } = await admin
       .from('profiles')
-      .select('stripe_account_id, driver_share_percent')
+      .select('stripe_account_id, stripe_pending_account_id, driver_share_percent')
       .eq('id', user.id)
       .single();
 
     const p = profile as {
       stripe_account_id?: string;
+      stripe_pending_account_id?: string | null;
       driver_share_percent?: number | null;
     } | null;
-    const accountId = p?.stripe_account_id ?? '';
+    let accountId = p?.stripe_account_id ?? '';
 
     // Sem conta ainda — motorista nunca iniciou o onboarding.
     if (!accountId) {
@@ -75,7 +77,44 @@ Deno.serve(async (req) => {
       });
     }
 
-    const account = await stripe.accounts.retrieve(accountId);
+    let account: Stripe.Account;
+    let promover = false;
+    try {
+      account = await stripe.accounts.retrieve(accountId);
+    } catch (e) {
+      // ── Conta inalcançável (0094) ───────────────────────────────────────────
+      // Aqui o perfil NÃO é tocado: as flags seguem como estão, senão o motorista
+      // sai do ar. Enquanto a conta em espera não é aprovada, a tela só mostra o
+      // botão de cadastro; aprovada, ela é promovida no fluxo normal abaixo.
+      if (!isOrphanAccountError(e)) throw e;
+      const podeJulgar = await keyCanJudgeOrphans(
+        Deno.env.get('STRIPE_SECRET_KEY') ?? '',
+        () => stripe.accounts.list({ limit: 1 }),
+      );
+      if (!podeJulgar) throw e;
+
+      const espera = p?.stripe_pending_account_id ?? '';
+      if (!espera) {
+        return json({
+          hasAccount: false, onboardingComplete: false, payoutsEnabled: false,
+          chargesEnabled: false, needsAttention: true, disabledReason: null,
+          code: 'account_unreachable',
+        });
+      }
+      const nova = await stripe.accounts.retrieve(espera);
+      if (!canPromote(nova)) {
+        const enviado = !!nova.details_submitted;
+        return json({
+          hasAccount: true, onboardingComplete: enviado, payoutsEnabled: false,
+          chargesEnabled: false, needsAttention: enviado,
+          disabledReason: nova.requirements?.disabled_reason ?? null,
+          code: 'replacement_pending',
+        });
+      }
+      account = nova;
+      accountId = espera;
+      promover = true;
+    }
 
     const onboardingComplete = !!account.details_submitted;
     const payoutsEnabled = !!account.payouts_enabled;
@@ -145,6 +184,7 @@ Deno.serve(async (req) => {
       stripe_onboarding_complete: onboardingComplete,
       stripe_payouts_enabled: payoutsEnabled,
       stripe_charges_enabled: chargesEnabled,
+      ...(promover ? { stripe_account_id: accountId, stripe_pending_account_id: null } : {}),
     }).eq('id', user.id);
 
     return json({
