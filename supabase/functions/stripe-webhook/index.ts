@@ -24,7 +24,8 @@
 //   transfer.created / payout.paid           → log de reconciliação financeira
 //   charge.dispute.created                   → alerta de disputa (chargeback)
 //
-// Deploy:  npx supabase functions deploy stripe-webhook
+// Deploy:  npx supabase functions deploy stripe-webhook --no-verify-jwt
+// (a Stripe não envia JWT: sem a flag o gateway recusa todo evento; a autenticação aqui é a assinatura)
 // Segredo: npx supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
 //   (obtido no Stripe Dashboard → Developers → Webhooks → seu endpoint)
 //   Se não estiver configurado, a assinatura não é verificada (só usar em dev).
