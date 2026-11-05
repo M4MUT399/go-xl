@@ -30,6 +30,7 @@ import {
   detectAirport, guessTerminal, isValidFlightNumber, formatFlightNumber,
 } from '../../lib/airportTrip';
 import { hasPaymentCard, isProfileComplete } from '../../lib/onboarding';
+import { driverAvailableNear } from '../../lib/driverAvailability';
 import { useTranslation } from '../../i18n';
 
 type Props = {
@@ -402,6 +403,27 @@ export function RequestRideScreen({ navigation, route: screenRoute }: Props) {
       navigation.navigate('CompleteRegistration');
       return;
     }
+    // Sem motorista disponível, avisa ANTES de criar a corrida e oferece agendar.
+    // Corrida por QR vai direto ao motorista escolhido, então não passa por aqui.
+    // Em 01/11/2026 um passageiro ficou 34 min na busca sem ninguém em serviço.
+    if (!lockedDriverId) {
+      setLoading(true);
+      const disponivel = await driverAvailableNear(effectiveOrigin);
+      setLoading(false);
+      if (disponivel === false) {
+        Alert.alert(t('requestRide.noDriverTitle'), t('requestRide.noDriverMessage'), [
+          { text: t('requestRide.noDriverSchedule'), onPress: openScheduler },
+          { text: t('requestRide.noDriverTryAnyway'), onPress: () => { void submitRequest(); } },
+          { text: t('common.cancel'), style: 'cancel' },
+        ]);
+        return;
+      }
+    }
+    await submitRequest();
+  }
+
+  async function submitRequest() {
+    if (!selectedDest || !effectiveOrigin) return;
     setLoading(true);
     const origin: Location = effectiveOrigin;
     const ride = await requestRide(
