@@ -31,6 +31,7 @@
 
 import Stripe from 'npm:stripe@17';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { canPromote } from '../_shared/connectOrphan.ts';
 import {
   verifyChargeCollected,
   type ChargeVerdict,
@@ -591,6 +592,28 @@ Deno.serve(async (req) => {
       .single();
     const p = prof as { id: string; driver_share_percent?: number | null } | null;
     const driverId = p?.id;
+
+    // Conta EM ESPERA (0094): evento dela não pode derrubar o motorista, que
+    // segue no ar pela conta antiga. Só importa quando a Stripe aprova: aí ela é
+    // promovida. Sem faixa atribuída, quem promove é connect-account-status, que
+    // atribui a faixa antes de habilitar.
+    if (!driverId) {
+      const { data: espera } = await admin
+        .from('profiles')
+        .select('id, driver_share_percent')
+        .eq('stripe_pending_account_id', account.id)
+        .maybeSingle();
+      const e = espera as { id: string; driver_share_percent?: number | null } | null;
+      if (e && canPromote(account) && e.driver_share_percent != null) {
+        await admin.from('profiles').update({
+          stripe_account_id:          account.id,
+          stripe_pending_account_id:  null,
+          stripe_onboarding_complete: onboardingDone,
+          stripe_payouts_enabled:     payoutsEnabled,
+          stripe_charges_enabled:     chargesEnabled,
+        }).eq('id', e.id).eq('stripe_pending_account_id', account.id);
+      }
+    }
 
     if (driverId) {
       // ═══════════════════════════════════════════════════════════════════════

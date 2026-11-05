@@ -44,7 +44,7 @@ export function EarningsScreen() {
   const insets = useSafeAreaInsets();
   const { rides, loading, refresh } = useDriverStats(profile?.id);
   const { payouts, pendingBalance, pendingTips, pendingRidesCount, loading: payoutsLoading, refresh: refreshPayouts, requestPayout } = usePayouts(profile?.id);
-  const { status: connect, loading: connectLoading, onboarding, refresh: refreshConnect, startOnboarding } = useConnectAccount(profile?.id);
+  const { status: connect, loading: connectLoading, onboarding, refresh: refreshConnect, startOnboarding, openPayoutInfo } = useConnectAccount(profile?.id);
   const waybill = useWaybillConfig();
   const [period, setPeriod] = useState<Period>('week');
   const [requestingPayout, setRequestingPayout] = useState(false);
@@ -57,6 +57,13 @@ export function EarningsScreen() {
 
   async function handleOnboard() {
     const result = await startOnboarding();
+    if (!result.ok) {
+      Alert.alert(t('earnings.errorTitle'), result.error ?? t('earnings.onboardError'));
+    }
+  }
+
+  async function handleReviewPayoutInfo() {
+    const result = await openPayoutInfo();
     if (!result.ok) {
       Alert.alert(t('earnings.errorTitle'), result.error ?? t('earnings.onboardError'));
     }
@@ -268,6 +275,21 @@ export function EarningsScreen() {
           </Text>
         )}
 
+        {/* Sempre há como conferir os dados: o banner acima só existe enquanto a
+            conta não recebe, e depois disso o motorista ficava sem caminho. */}
+        {!connectLoading && connect.payoutsEnabled && (
+          <TouchableOpacity
+            style={styles.reviewPayoutBtn}
+            onPress={handleReviewPayoutInfo}
+            disabled={onboarding}
+            accessibilityRole="button"
+          >
+            {onboarding
+              ? <ActivityIndicator size="small" color={colors.accent} />
+              : <Text style={styles.reviewPayoutText}>{t('earnings.reviewPayoutInfo')}</Text>}
+          </TouchableOpacity>
+        )}
+
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{formatCurrency(stats.avg)}</Text>
@@ -471,6 +493,12 @@ function makeStyles(colors: AppTheme) {
     connectInfo: { flex: 1, paddingRight: 12 },
     connectTitle: { fontSize: 15, fontWeight: '800', color: colors.white, marginBottom: 4 },
     connectSub: { fontSize: 12, color: colors.gray[400], lineHeight: 16 },
+    reviewPayoutBtn: {
+      minHeight: 44, alignItems: 'center', justifyContent: 'center',
+      borderWidth: 1, borderColor: colors.accent, borderRadius: 12,
+      marginBottom: 14, paddingHorizontal: 12,
+    },
+    reviewPayoutText: { color: colors.text, fontSize: 14, fontWeight: '700' },
     connectBtn: {
       backgroundColor: colors.accent,
       borderRadius: 12,
